@@ -1,0 +1,88 @@
+{
+  "creation": "2025-01-01 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "service",
+    "technician",
+    "notes",
+    "status",
+    "pricing_section",
+    "rate",
+    "auto_rate",
+    "price_manually_set"
+  ],
+  "fields": [
+    {
+      "fieldname": "repair_item_key",
+      "fieldtype": "Data",
+      "label": "Repair Item Key",
+      "hidden": 1
+    },
+    {
+      "fieldname": "service",
+      "fieldtype": "Link",
+      "label": "Task / Service",
+      "options": "DW Task Template",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "technician",
+      "fieldtype": "Link",
+      "label": "Technician",
+      "options": "DW Technician"
+    },
+    {
+      "fieldname": "notes",
+      "fieldtype": "Text",
+      "label": "Notes"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Task Status",
+      "options": "\nPending\nIn Progress\nCompleted",
+      "default": "Pending",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "pricing_section",
+      "fieldtype": "Section Break",
+      "label": "Pricing"
+    },
+    {
+      "fieldname": "rate",
+      "fieldtype": "Currency",
+      "label": "Rate",
+      "description": "Manual rate override. Leave empty to use auto-rate from task template.",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "auto_rate",
+      "fieldtype": "Currency",
+      "label": "Auto Rate",
+      "description": "Auto-fetched rate from task template",
+      "read_only": 1,
+      "fetch_from": "service.default_rate"
+    },
+    {
+      "fieldname": "price_manually_set",
+      "fieldtype": "Check",
+      "label": "Price Manually Set",
+      "description": "Indicates if the price was manually overridden",
+      "default": "0",
+      "read_only": 1
+    }
+  ],
+  "istable": 1,
+  "modified": "2025-01-01 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Repair Management",
+  "name": "DW Repair Task",
+  "owner": "Administrator",
+  "permissions": [],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": []
+}

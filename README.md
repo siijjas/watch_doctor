@@ -1,33 +1,15 @@
-### Repair Management
+# Watch Doctor (ERPNext v15)
 
-Repair Management
+Custom watch repair management app. Frontend is a React/Vite SPA that proxies to ERPNext when `window.frappe` is available, and falls back to mock data when used standalone.
 
-### Installation
+## Frontend (React)
+- `cd frontend`
+- `npm install`
+- `npm run dev` (proxies `/app|/api|/assets|/files|/private` to `http://127.0.0.1:8000`)
+- `npm run build` (outputs to `watch_doctor/public/frontend` so Bench can serve `/assets/watch_doctor/frontend/...`)
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+Open the app at `/repair` on your site once built.
 
-```bash
-cd $PATH_TO_YOUR_BENCH
-bench get-app $URL_OF_THIS_REPO --branch develop
-bench install-app watch_doctor
-```
-
-### Contributing
-
-This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
-
-```bash
-cd apps/watch_doctor
-pre-commit install
-```
-
-Pre-commit is configured to use the following tools for checking and formatting your code:
-
-- ruff
-- eslint
-- prettier
-- pyupgrade
-
-### License
-
-mit
+## Backend
+- Doctypes are prefixed with `DW`: `DW Repair Order` (parent) with children `DW Repair Item`, `DW Repair Task`, and `DW Repair Part Used`.
+- Install on your site as usual: `bench --site <yoursite> install-app watch_doctor` then `bench --site <yoursite> migrate`.

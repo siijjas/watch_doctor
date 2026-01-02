@@ -1,0 +1,5 @@
+{
+  "name": "Watch Repair Management ERP",
+  "description": "A custom app to manage watch repair operations, including customer requests, repair services, spare parts usage, technician assignments, and billing.",
+  "requestFramePermissions": []
+}

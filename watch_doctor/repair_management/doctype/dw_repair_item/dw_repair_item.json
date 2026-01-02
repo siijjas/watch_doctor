@@ -1,0 +1,80 @@
+{
+    "creation": "2025-01-01 00:00:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "watch_brand",
+        "watch_model",
+        "serial_number",
+        "issues",
+        "issue_description",
+        "technician",
+        "status",
+        "intake_checklist",
+        "tasks",
+        "parts_used"
+    ],
+    "fields": [
+        {
+            "fieldname": "watch_brand",
+            "fieldtype": "Link",
+            "label": "Watch Brand",
+            "options": "DW Watch Brand",
+            "reqd": 1,
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "watch_model",
+            "fieldtype": "Link",
+            "label": "Watch Model",
+            "options": "DW Watch Model",
+            "reqd": 1,
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "serial_number",
+            "fieldtype": "Data",
+            "label": "Serial Number"
+        },
+        {
+            "fieldname": "issues",
+            "fieldtype": "Table",
+            "label": "Issues",
+            "options": "DW Repair Item Issue"
+        },
+        {
+            "fieldname": "issue_description",
+            "fieldtype": "Text",
+            "label": "Issue Description (Auto-generated)"
+        },
+        {
+            "fieldname": "technician",
+            "fieldtype": "Link",
+            "label": "Technician",
+            "options": "DW Technician"
+        },
+        {
+            "fieldname": "status",
+            "fieldtype": "Select",
+            "label": "Watch Status",
+            "options": "\nPending\nIn Repair\nAwaiting Parts\nOn Hold\nRepaired\nDelivered",
+            "default": "Pending",
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "intake_checklist",
+            "fieldtype": "JSON",
+            "label": "Intake Checklist"
+        }
+    ],
+    "istable": 1,
+    "modified": "2025-01-01 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Repair Management",
+    "name": "DW Repair Item",
+    "owner": "Administrator",
+    "permissions": [],
+    "sort_field": "modified",
+    "sort_order": "DESC",
+    "states": []
+}

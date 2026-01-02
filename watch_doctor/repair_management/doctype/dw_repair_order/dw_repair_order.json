@@ -1,0 +1,196 @@
+{
+    "actions": [],
+    "allow_rename": 1,
+    "autoname": "format:DW-RO-{YYYY}-{#####}",
+    "creation": "2025-01-01 00:00:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "customer",
+        "contact_person",
+        "status",
+        "priority",
+        "received_date",
+        "promised_delivery_date",
+        "delivery_date",
+        "items_section",
+        "items",
+        "links_section",
+        "quotation",
+        "quotation_type",
+        "quotation_amount",
+        "sales_invoice",
+        "invoiced_amount",
+        "paid_amount",
+        "balance_amount",
+        "all_tasks",
+        "all_parts",
+        "all_issues"
+    ],
+    "fields": [
+        {
+            "fieldname": "customer",
+            "fieldtype": "Link",
+            "label": "Customer",
+            "options": "Customer",
+            "reqd": 1
+        },
+        {
+            "fieldname": "contact_person",
+            "fieldtype": "Link",
+            "label": "Contact Person",
+            "options": "Contact",
+            "read_only": 1
+        },
+        {
+            "fieldname": "status",
+            "fieldtype": "Select",
+            "label": "Status",
+            "options": "\nPending\nIn Progress\nAwaiting Parts\nRepaired\nDelivered",
+            "default": "Pending",
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "priority",
+            "fieldtype": "Select",
+            "label": "Priority",
+            "options": "\nNormal\nUrgent\nVIP",
+            "default": "Normal",
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "received_date",
+            "fieldtype": "Date",
+            "label": "Received Date",
+            "reqd": 1,
+            "default": "Today",
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "promised_delivery_date",
+            "fieldtype": "Date",
+            "label": "Promised Delivery Date",
+            "reqd": 1
+        },
+        {
+            "fieldname": "delivery_date",
+            "fieldtype": "Date",
+            "label": "Delivery Date"
+        },
+        {
+            "fieldname": "items_section",
+            "fieldtype": "Section Break",
+            "label": "Repair Items"
+        },
+        {
+            "fieldname": "items",
+            "fieldtype": "Table",
+            "label": "Items",
+            "options": "DW Repair Item",
+            "reqd": 1
+        },
+        {
+            "fieldname": "links_section",
+            "fieldtype": "Section Break",
+            "label": "Document Links"
+        },
+        {
+            "fieldname": "quotation",
+            "fieldtype": "Link",
+            "label": "Quotation",
+            "options": "Quotation"
+        },
+        {
+            "fieldname": "quotation_type",
+            "fieldtype": "Select",
+            "label": "Quotation Type",
+            "options": "\nEstimate\nFinal",
+            "read_only": 1,
+            "depends_on": "quotation"
+        },
+        {
+            "fieldname": "quotation_amount",
+            "fieldtype": "Currency",
+            "label": "Quotation Amount",
+            "read_only": 1,
+            "depends_on": "quotation"
+        },
+        {
+            "fieldname": "sales_invoice",
+            "fieldtype": "Link",
+            "label": "Sales Invoice",
+            "options": "Sales Invoice"
+        },
+        {
+            "fieldname": "invoiced_amount",
+            "fieldtype": "Currency",
+            "label": "Invoiced Amount",
+            "read_only": 1,
+            "depends_on": "sales_invoice"
+        },
+        {
+            "fieldname": "paid_amount",
+            "fieldtype": "Currency",
+            "label": "Paid Amount",
+            "read_only": 1,
+            "depends_on": "sales_invoice"
+        },
+        {
+            "fieldname": "balance_amount",
+            "fieldtype": "Currency",
+            "label": "Balance Amount",
+            "read_only": 1,
+            "depends_on": "sales_invoice"
+        },
+        {
+            "fieldname": "all_tasks",
+            "fieldtype": "Table",
+            "label": "All Tasks",
+            "options": "DW Repair Task",
+            "hidden": 1
+        },
+        {
+            "fieldname": "all_parts",
+            "fieldtype": "Table",
+            "label": "All Parts",
+            "options": "DW Repair Part Used",
+            "hidden": 1
+        },
+        {
+            "fieldname": "all_issues",
+            "fieldtype": "Table",
+            "label": "All Issues",
+            "options": "DW Repair Item Issue",
+            "hidden": 1
+        }
+    ],
+    "index_web_pages_for_search": 1,
+    "is_submittable": 1,
+    "links": [],
+    "modified": "2025-01-01 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Repair Management",
+    "name": "DW Repair Order",
+    "naming_rule": "Expression (AUTONAME)",
+    "owner": "Administrator",
+    "permissions": [
+        {
+            "create": 1,
+            "delete": 1,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "System Manager",
+            "share": 1,
+            "submit": 1,
+            "cancel": 1,
+            "write": 1
+        }
+    ],
+    "sort_field": "modified",
+    "sort_order": "DESC",
+    "states": [],
+    "track_changes": 1
+}

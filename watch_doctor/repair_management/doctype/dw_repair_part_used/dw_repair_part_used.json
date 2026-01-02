@@ -1,0 +1,124 @@
+{
+  "creation": "2025-01-01 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "part",
+    "item_name",
+    "item_code",
+    "description",
+    "quantity",
+    "uom",
+    "task",
+    "pricing_section",
+    "rate",
+    "auto_rate",
+    "amount",
+    "price_manually_set"
+  ],
+  "fields": [
+    {
+      "fieldname": "repair_item_key",
+      "fieldtype": "Data",
+      "label": "Repair Item Key",
+      "hidden": 1
+    },
+    {
+      "fieldname": "part",
+      "fieldtype": "Link",
+      "label": "Part",
+      "options": "Item",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "quantity",
+      "fieldtype": "Float",
+      "label": "Quantity",
+      "default": "1",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "item_name",
+      "fieldtype": "Data",
+      "label": "Item Name",
+      "read_only": 1,
+      "fetch_from": "part.item_name",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "item_code",
+      "fieldtype": "Data",
+      "label": "Item Code",
+      "read_only": 1,
+      "fetch_from": "part.item_code"
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Text",
+      "label": "Description",
+      "read_only": 1,
+      "fetch_from": "part.description"
+    },
+    {
+      "fieldname": "uom",
+      "fieldtype": "Link",
+      "label": "UoM",
+      "options": "UOM",
+      "read_only": 1,
+      "fetch_from": "part.stock_uom"
+    },
+    {
+      "fieldname": "task",
+      "fieldtype": "Data",
+      "label": "Related Task",
+      "description": "Optional: Link this part to a specific repair task"
+    },
+    {
+      "fieldname": "pricing_section",
+      "fieldtype": "Section Break",
+      "label": "Pricing"
+    },
+    {
+      "fieldname": "rate",
+      "fieldtype": "Currency",
+      "label": "Rate",
+      "description": "Manual rate override per unit. Leave empty to use auto-rate from item.",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "auto_rate",
+      "fieldtype": "Currency",
+      "label": "Auto Rate",
+      "description": "Auto-fetched rate from item master",
+      "read_only": 1,
+      "fetch_from": "part.standard_rate"
+    },
+    {
+      "fieldname": "amount",
+      "fieldtype": "Currency",
+      "label": "Amount",
+      "description": "Calculated as quantity × rate",
+      "read_only": 1
+    },
+    {
+      "fieldname": "price_manually_set",
+      "fieldtype": "Check",
+      "label": "Price Manually Set",
+      "description": "Indicates if the price was manually overridden",
+      "default": "0",
+      "read_only": 1
+    }
+  ],
+  "istable": 1,
+  "modified": "2025-01-01 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Repair Management",
+  "name": "DW Repair Part Used",
+  "owner": "Administrator",
+  "permissions": [],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": []
+}

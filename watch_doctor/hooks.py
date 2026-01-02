@@ -247,3 +247,14 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+# Run doc reload on migrate to ensure DW doctypes are registered
+after_migrate = ["watch_doctor.patches.reload_dw_doctypes.execute"]
+
+
+# Fixtures
+fixtures = [
+    {
+        "doctype": "DocType",
+        "filters": [["name", "in", ["DW Technician", "DW Repair Order", "DW Repair Item", "DW Repair Task", "DW Repair Part Used", "DW Task Template", "DW Test"]]],
+    }
+]
