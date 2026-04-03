@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { RepairOrder, RepairItem, RepairPartUsed, RepairTask, Employee, Item, RepairTaskTemplate, WatchModel } from '../types';
+import type { RepairOrder, RepairItem, RepairPartUsed, RepairTask, Employee, Item, RepairTaskTemplate, WatchModel, IssueTemplate } from '../types';
 import { TaskStatus } from '../types';
 import * as apiService from '../services/apiService';
 import { isErpNext } from '../services/apiService';
@@ -23,6 +23,9 @@ import { CreateQuotationModal } from './CreateQuotationModal';
 import PaymentModal from './PaymentModal';
 import { AssignTechnicianModal } from './AssignTechnicianModal';
 import { ActionsDropdown } from './ui/ActionsDropdown';
+import { ViewQuotationModal } from './ViewQuotationModal';
+import { ViewInvoiceModal } from './ViewInvoiceModal';
+import { AddIssueModal } from './AddIssueModal';
 
 interface RepairOrderDetailProps {
   order: RepairOrder;
@@ -38,13 +41,15 @@ const WatchCard: React.FC<{
   employees: Employee[];
   allItems: Item[];
   taskTemplates: RepairTaskTemplate[];
+  issueTemplates: IssueTemplate[];
   watchModels: WatchModel[];
   onAddPart: (itemIndex: number, taskIndex: number) => void;
   onChangeTaskStatus: (itemIndex: number, taskIndex: number) => void;
   onUpdatePrices: (itemIndex: number) => void;
   onAssignTechnician: (itemIndex: number) => void;
+  onAddIssue: (itemIndex: number) => void;
   defaultExpanded?: boolean;
-}> = ({ item, itemIndex, employees, allItems, taskTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, defaultExpanded = true }) => {
+}> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, defaultExpanded = true }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const technician = employees.find(e => e.name === item.technician);
 
@@ -80,7 +85,7 @@ const WatchCard: React.FC<{
               {item.watch_brand} {watchModel?.model_name || item.watch_model}
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              S/N: {item.serial_number || 'N/A'} • {technician?.employee_name || 'Unassigned'}
+              S/N: {item.serial_number || 'N/A'}
             </p>
           </div>
         </div>
@@ -109,45 +114,87 @@ const WatchCard: React.FC<{
       {/* Card Body - Collapsible */}
       {isExpanded && (
         <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-700">
-          {/* Quick Actions Row */}
-          <div className="flex gap-2 py-4 border-b border-gray-100 dark:border-gray-700">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={(e) => { e.stopPropagation(); onAssignTechnician(itemIndex); }}
-              className="text-xs rounded-lg"
-            >
-              👤 {technician ? 'Change Tech' : 'Assign Tech'}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={(e) => { e.stopPropagation(); onUpdatePrices(itemIndex); }}
-              className="text-xs rounded-lg"
-            >
-              💰 Update Prices
-            </Button>
+          {/* Technician Row */}
+          <div className="flex items-center justify-between py-4 border-b border-gray-100 dark:border-gray-700">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                technician
+                  ? 'bg-indigo-100 dark:bg-indigo-900/40'
+                  : 'bg-amber-100 dark:bg-amber-900/40'
+              }`}>
+                <span className="text-lg">{technician ? '👤' : '❓'}</span>
+              </div>
+              <div>
+                <p className="text-xs text-gray-400 dark:text-gray-500 uppercase tracking-wide font-medium">Technician</p>
+                <p className={`font-semibold text-base ${
+                  technician
+                    ? 'text-gray-900 dark:text-white'
+                    : 'text-amber-600 dark:text-amber-400'
+                }`}>
+                  {technician?.employee_name || 'Not Assigned'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant={technician ? 'outline' : 'primary'}
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); onAssignTechnician(itemIndex); }}
+                className="text-xs rounded-lg"
+              >
+                👤 {technician ? 'Change Tech' : 'Assign Tech'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); onUpdatePrices(itemIndex); }}
+                className="text-xs rounded-lg"
+              >
+                💰 Update Prices
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-4">
             {/* Left Column: Issues */}
             <div>
-              <h4 className="font-semibold text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Issues</h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide">Issues</h4>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); onAddIssue(itemIndex); }}
+                  className="text-xs rounded-lg h-7 px-2"
+                >
+                  ➕ Add Issue
+                </Button>
+              </div>
               {(item.issues || []).length > 0 ? (
                 <div className="space-y-2">
-                  {(item.issues || []).map((issue, idx) => (
-                    <div key={idx} className="flex items-center p-3 rounded-lg border bg-orange-50 dark:bg-orange-900/10 border-orange-100 dark:border-orange-800/50 min-h-[3.5rem]">
-                      <span className="w-5 h-5 rounded-full bg-orange-100 dark:bg-orange-900/50 flex items-center justify-center text-xs text-orange-600 dark:text-orange-400 mr-3 shrink-0">
-                        !
-                      </span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {issue.issue}
-                      </span>
-                    </div>
-                  ))}
+                  {(item.issues || []).map((issue, idx) => {
+                    const template = issueTemplates.find(t => t.name === issue.issue);
+                    return (
+                      <div key={idx} className="flex items-center p-3 rounded-lg border bg-orange-50 dark:bg-orange-900/10 border-orange-100 dark:border-orange-800/50 min-h-[3.5rem]">
+                        <span className="w-6 h-6 rounded-full bg-orange-200 dark:bg-orange-900/60 flex items-center justify-center text-sm text-orange-700 dark:text-orange-300 mr-3 shrink-0 font-bold">
+                          !
+                        </span>
+                        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                          {template?.issue_name || issue.issue}
+                          {issue.is_other && issue.other_description && (
+                            <span className="block text-xs font-normal text-gray-500 dark:text-gray-400 mt-0.5">{issue.other_description}</span>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
-                <p className="text-sm text-gray-400 italic">No issues reported</p>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onAddIssue(itemIndex); }}
+                  className="w-full text-sm text-amber-500 dark:text-amber-400 italic border-2 border-dashed border-amber-200 dark:border-amber-800 rounded-lg py-3 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+                >
+                  No issues reported — click to add
+                </button>
               )}
               {item.issue_description && (
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
@@ -246,6 +293,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [allItems, setAllItems] = useState<Item[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<RepairTaskTemplate[]>([]);
+  const [issueTemplates, setIssueTemplates] = useState<IssueTemplate[]>([]);
   const [watchModels, setWatchModels] = useState<WatchModel[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -272,7 +320,14 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     watchIndex: number | null;
   }>({ isOpen: false, watchIndex: null });
 
+  const [addIssueModal, setAddIssueModal] = useState<{
+    isOpen: boolean;
+    watchIndex: number | null;
+  }>({ isOpen: false, watchIndex: null });
+
   const [createQuotationModal, setCreateQuotationModal] = useState(false);
+  const [viewQuotationModal, setViewQuotationModal] = useState(false);
+  const [viewInvoiceModal, setViewInvoiceModal] = useState(false);
   const [paymentModal, setPaymentModal] = useState<{
     isOpen: boolean;
     invoiceName: string;
@@ -341,6 +396,43 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     if (onRefresh) {
       await onRefresh(order.name);
     }
+  };
+
+  const handleAddIssue = async (watchIndex: number, selectedIssueNames: string[]) => {
+    const updatedOrder = JSON.parse(JSON.stringify(order)) as RepairOrder;
+    const currentIssues = updatedOrder.items[watchIndex].issues || [];
+    const existingNames = new Set(currentIssues.map((i: any) => i.issue));
+
+    const newIssues = selectedIssueNames
+      .filter(n => !existingNames.has(n))
+      .map(n => ({ issue: n, is_other: false, other_description: '' }));
+
+    updatedOrder.items[watchIndex].issues = [...currentIssues, ...newIssues];
+
+    // Auto-add suggested tasks for newly added issues
+    const currentTasks = updatedOrder.items[watchIndex].tasks || [];
+    const existingServices = new Set(currentTasks.map((t: any) => t.service));
+    const tasksToAdd: any[] = [];
+
+    for (const issueName of selectedIssueNames.filter(n => !existingNames.has(n))) {
+      const template = issueTemplates.find(t => t.name === issueName);
+      if (template?.suggested_task && !existingServices.has(template.suggested_task)) {
+        tasksToAdd.push({
+          service: template.suggested_task,
+          technician: updatedOrder.items[watchIndex].technician || '',
+          notes: '',
+          status: 'Pending',
+        });
+        existingServices.add(template.suggested_task); // prevent duplicates if two issues share a task
+      }
+    }
+
+    if (tasksToAdd.length > 0) {
+      updatedOrder.items[watchIndex].tasks = [...currentTasks, ...tasksToAdd];
+    }
+
+    await apiService.saveRepairOrder(updatedOrder);
+    if (onRefresh) await onRefresh(order.name);
   };
 
   const handleAssignTechnician = async (watchIndex: number, technicianId: string) => {
@@ -430,14 +522,16 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     const fetchData = async () => {
       setIsLoading(true);
       if (isErpNext) {
-        const [emps, templates, models] = await Promise.all([
+        const [emps, templates, models, issues] = await Promise.all([
           apiService.getEmployees(),
           apiService.getTaskTemplates(),
-          apiService.getWatchModels('') // Fetch all models
+          apiService.getWatchModels(''), // Fetch all models
+          apiService.getIssueTemplates(),
         ]);
         setEmployees(emps);
         setTaskTemplates(templates);
         setWatchModels(models);
+        setIssueTemplates(issues);
 
         // Load specific items used in parts
         const partIds = Array.from(new Set(
@@ -520,13 +614,13 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
             {
               label: 'View Quotation',
               icon: '👁️',
-              onClick: () => window.location.href = `/app/quotation/${order.quotation}`,
+              onClick: () => setViewQuotationModal(true),
               hidden: !order.quotation,
             },
             {
               label: 'View Invoice',
               icon: '🧾',
-              onClick: () => window.location.href = `/app/sales-invoice/${order.sales_invoice}`,
+              onClick: () => setViewInvoiceModal(true),
               hidden: !order.sales_invoice,
             },
             // Edit action (only for draft)
@@ -649,6 +743,8 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           onChangeTaskStatus={(itemIndex, taskIndex) => setChangeTaskStatusModal({ isOpen: true, watchIndex: itemIndex, taskIndex })}
           onUpdatePrices={(itemIndex) => setUpdatePriceModal({ isOpen: true, watchIndex: itemIndex })}
           onAssignTechnician={(itemIndex) => setAssignTechnicianModal({ isOpen: true, watchIndex: itemIndex })}
+          onAddIssue={(itemIndex) => setAddIssueModal({ isOpen: true, watchIndex: itemIndex })}
+          issueTemplates={issueTemplates}
           defaultExpanded={idx === 0}
         />
       ))}
@@ -666,7 +762,10 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
         <AddPartModal
           isOpen={addPartModal.isOpen}
           onClose={() => setAddPartModal({ isOpen: false, watchIndex: null, taskIndex: null })}
-          onSave={(part, markCompleted) => handleAddPart(addPartModal.watchIndex!, addPartModal.taskIndex!, part, markCompleted)}
+          onSave={async (part, markCompleted) => {
+            await handleAddPart(addPartModal.watchIndex!, addPartModal.taskIndex!, part, markCompleted);
+            setAddPartModal({ isOpen: false, watchIndex: null, taskIndex: null });
+          }}
           watchItem={order.items[addPartModal.watchIndex]}
           allItems={allItems}
           taskTemplates={taskTemplates}
@@ -716,6 +815,45 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           currentTechnician={order.items[assignTechnicianModal.watchIndex].technician}
           employees={employees}
           watchItem={order.items[assignTechnicianModal.watchIndex]}
+        />
+      )}
+
+      {/* Add Issue Modal */}
+      {addIssueModal.isOpen && addIssueModal.watchIndex !== null && (() => {
+        const watchIndex = addIssueModal.watchIndex;
+        const currentIssueNames = new Set((order.items[watchIndex]?.issues || []).map((i: any) => i.issue));
+        return (
+          <AddIssueModal
+            isOpen={addIssueModal.isOpen}
+            onClose={() => setAddIssueModal({ isOpen: false, watchIndex: null })}
+            issueTemplates={issueTemplates}
+            taskTemplates={taskTemplates}
+            currentIssueNames={currentIssueNames}
+            onSave={async (selected) => {
+              await handleAddIssue(watchIndex, selected);
+              setAddIssueModal({ isOpen: false, watchIndex: null });
+            }}
+          />
+        );
+      })()}
+
+      {/* View Quotation Modal */}
+      {order.quotation && (
+        <ViewQuotationModal
+          isOpen={viewQuotationModal}
+          onClose={() => setViewQuotationModal(false)}
+          quotationName={order.quotation}
+          onUpdated={() => onRefresh?.(order.name)}
+        />
+      )}
+
+      {/* View Invoice Modal */}
+      {order.sales_invoice && (
+        <ViewInvoiceModal
+          isOpen={viewInvoiceModal}
+          onClose={() => setViewInvoiceModal(false)}
+          invoiceName={order.sales_invoice}
+          onUpdated={() => onRefresh?.(order.name)}
         />
       )}
 

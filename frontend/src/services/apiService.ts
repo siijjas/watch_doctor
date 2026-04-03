@@ -24,6 +24,9 @@ const apiFetch = async (path: string, init: RequestInit = {}) => {
     return data;
 };
 
+// Public wrapper for raw API calls (e.g. email sending)
+export const apiFetchRaw = apiFetch;
+
 // Fetch a list of documents
 export const getList = async (doctype: string, fields: string[], filters: any[] = [], limit: number = 20): Promise<any[]> => {
     const res = await apiFetch('/api/method/frappe.client.get_list', {
@@ -303,7 +306,8 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
         method: 'POST',
         body: JSON.stringify({ doc_json: JSON.stringify(docToSave) }),
     });
-    return res.message;
+    // Unflatten so callers get items with nested issues/tasks/parts
+    return unflattenRepairOrder(res.message);
 };
 
 export const deleteRepairOrder = (name: string): Promise<any> => {

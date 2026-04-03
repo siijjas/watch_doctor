@@ -8,12 +8,13 @@ import RepairOrderDetail from './components/RepairOrderDetail';
 import { RepairOrderForm } from './components/RepairOrderForm';
 import Dashboard from './components/Dashboard';
 import POS from './components/POS';
+import DailyReport from './components/DailyReport';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LoginPage } from './components/LoginPage';
 
-type ViewType = 'dashboard' | 'orders' | 'pos';
+type ViewType = 'dashboard' | 'orders' | 'pos' | 'daily-report';
 
 // Main app content (shown when authenticated)
 const AppContent: React.FC = () => {
@@ -177,7 +178,7 @@ const AppContent: React.FC = () => {
 
       <div className="flex-1 flex flex-col overflow-hidden ml-64">
         <Header
-          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'pos' ? 'POS' : 'Repair Orders'}
+          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'pos' ? 'POS' : currentView === 'daily-report' ? 'Reports' : 'Repair Orders'}
         />
 
         <main className="flex-1 overflow-y-auto p-6">
@@ -199,6 +200,8 @@ const AppContent: React.FC = () => {
             />
           ) : currentView === 'pos' ? (
             <POS onBack={() => setCurrentView('dashboard')} />
+          ) : currentView === 'daily-report' ? (
+            <DailyReport onSelectOrder={handleSelectOrderById} />
           ) : selectedOrder ? (
             <RepairOrderDetail order={selectedOrder} onBack={handleBackToList} onEdit={handleOpenForm} onDelete={handleDeleteOrder} onRefresh={handleRefreshOrder} />
           ) : (

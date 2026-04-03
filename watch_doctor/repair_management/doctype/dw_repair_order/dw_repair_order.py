@@ -260,13 +260,14 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	service_item_code = get_or_create_service_item()
 	
 	for item in selected_items:
-		watch_label = f"{item.watch_brand} {item.watch_model} (S/N: {item.serial_number})"
-		
 		# Get tasks for this item (using repair_item_key matching)
 		item_key = str(item.idx)
 		item_tasks = [task for task in repair_order.all_tasks if task.repair_item_key == item_key]
 		item_parts = [part for part in repair_order.all_parts if part.repair_item_key == item_key]
-		
+
+		model_name = frappe.db.get_value("DW Watch Model", item.watch_model, "model_name") or item.watch_model
+		watch_label = f"{item.watch_brand} {model_name} (S/N: {item.serial_number})"
+
 		# Add tasks as quotation items
 		for task in item_tasks:
 			# Fetch task template for default rate
@@ -424,7 +425,8 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 		service_item_code = get_or_create_service_item()
 		
 		for item in repair_order.items:
-			watch_label = f"{item.watch_brand} {item.watch_model} (S/N: {item.serial_number})"
+			model_name = frappe.db.get_value("DW Watch Model", item.watch_model, "model_name") or item.watch_model
+			watch_label = f"{item.watch_brand} {model_name} (S/N: {item.serial_number})"
 			
 			# Get tasks and parts for this item
 			item_key = str(item.idx)

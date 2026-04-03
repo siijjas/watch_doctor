@@ -88,6 +88,8 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
                 task: ''
             });
             setMarkTaskCompleted(false);
+            setShowConfirm(false);
+            onClose();
         } catch (error) {
             alert('Failed to add part: ' + error);
         } finally {

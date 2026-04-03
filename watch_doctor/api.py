@@ -935,3 +935,265 @@ def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_per
 		"grand_total": invoice.grand_total,
 		"customer": invoice.customer
 	}
+
+
+
+
+# ==================== Daily Report API ====================
+
+@frappe.whitelist()
+def get_daily_report(report_date=None):
+	"""Get a comprehensive daily report for repair works and POS."""
+	import datetime
+	if not report_date:
+		report_date = datetime.date.today().isoformat()
+
+	# ---- REPAIR SECTION ----
+
+	# Orders received on report_date
+	received_orders = frappe.db.sql("""
+		SELECT name, customer, status, priority, received_date,
+			promised_delivery_date, invoiced_amount
+		FROM `tabDW Repair Order`
+		WHERE received_date = %s
+		ORDER BY creation ASC
+	""", (report_date,), as_dict=True)
+	for o in received_orders:
+		o["customer_name"] = frappe.db.get_value("Customer", o["customer"], "customer_name") or o["customer"]
+
+	# Orders completed on report_date (status=Completed, modified on that date)
+	completed_orders = frappe.db.sql("""
+		SELECT name, customer, status, received_date, invoiced_amount,
+			DATE(modified) as completed_date
+		FROM `tabDW Repair Order`
+		WHERE status = 'Completed' AND DATE(modified) = %s
+		ORDER BY modified DESC
+	""", (report_date,), as_dict=True)
+	for o in completed_orders:
+		o["customer_name"] = frappe.db.get_value("Customer", o["customer"], "customer_name") or o["customer"]
+
+	# Pending / In Progress counts (current snapshot)
+	pending_count = frappe.db.count("DW Repair Order", {"status": "Pending"})
+	inprogress_count = frappe.db.count("DW Repair Order", {"status": "In Progress"})
+
+	# Repair revenue: submitted Sales Invoices posted on report_date linked to a repair order
+	repair_revenue_rows = frappe.db.sql("""
+		SELECT si.name, si.grand_total, si.customer
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
+		WHERE si.docstatus = 1 AND si.posting_date = %s
+	""", (report_date,), as_dict=True)
+	repair_revenue = sum(r["grand_total"] for r in repair_revenue_rows)
+	repair_invoice_count = len(repair_revenue_rows)
+
+	# Repair invoice payment mode breakdown
+	repair_payment_breakdown = []
+	if repair_revenue_rows:
+		ri_names = [r["name"] for r in repair_revenue_rows]
+		ri_placeholders = ", ".join(["%s"] * len(ri_names))
+		repair_payment_breakdown = frappe.db.sql(
+			f"SELECT mode_of_payment, SUM(amount) as total "
+			f"FROM `tabSales Invoice Payment` "
+			f"WHERE parent IN ({ri_placeholders}) "
+			f"GROUP BY mode_of_payment ORDER BY total DESC",
+			tuple(ri_names), as_dict=True
+		)
+
+	# Tasks completed per technician on report_date
+	technician_tasks = frappe.db.sql("""
+		SELECT
+			t.technician,
+			tech.technician_name,
+			COUNT(*) as tasks_completed
+		FROM `tabDW Repair Task` t
+		LEFT JOIN `tabDW Technician` tech ON t.technician = tech.name
+		WHERE t.status = 'Completed' AND DATE(t.modified) = %s
+			AND t.technician IS NOT NULL AND t.technician != ''
+		GROUP BY t.technician, tech.technician_name
+		ORDER BY tasks_completed DESC
+	""", (report_date,), as_dict=True)
+
+	# Top issues from orders received on report_date
+	top_issues = frappe.db.sql("""
+		SELECT
+			COALESCE(it.issue_name, ri.issue) as issue_name,
+			COUNT(*) as count
+		FROM `tabDW Repair Item Issue` ri
+		INNER JOIN `tabDW Repair Order` ro ON ri.parent = ro.name
+		LEFT JOIN `tabDW Issue Template` it ON ri.issue = it.name
+		WHERE ro.received_date = %s
+		GROUP BY ri.issue, it.issue_name
+		ORDER BY count DESC
+		LIMIT 10
+	""", (report_date,), as_dict=True)
+
+	# Parts used in orders received on report_date
+	parts_used = frappe.db.sql("""
+		SELECT
+			rp.part,
+			COALESCE(rp.item_name, i.item_name, rp.part) as item_name,
+			SUM(rp.quantity) as total_qty,
+			SUM(rp.quantity * COALESCE(rp.rate, rp.auto_rate, 0)) as total_amount
+		FROM `tabDW Repair Part Used` rp
+		INNER JOIN `tabDW Repair Order` ro ON rp.parent = ro.name
+		LEFT JOIN `tabItem` i ON rp.part = i.name
+		WHERE ro.received_date = %s
+		GROUP BY rp.part, item_name
+		ORDER BY total_qty DESC
+	""", (report_date,), as_dict=True)
+
+	# ---- FINANCIAL / EXPENSES SECTION ----
+
+	# Get active payment modes configured in scope
+	active_modes = frappe.db.sql("""
+		SELECT payment_mode
+		FROM `tabDW Payment Mode Config`
+		WHERE is_active = 1
+	""", as_dict=True)
+	active_mode_names = [m["payment_mode"] for m in active_modes]
+
+	expense_entries = []
+
+	if active_mode_names:
+		pm_placeholders = ", ".join(["%s"] * len(active_mode_names))
+
+		# 1) Payment Entry expenses — outgoing payments on configured modes
+		pe_rows = frappe.db.sql(
+			f"""SELECT
+				pe.name,
+				pe.mode_of_payment,
+				pe.party_type,
+				pe.party,
+				pe.paid_amount AS amount,
+				COALESCE(pe.remarks, '') AS remarks,
+				pe.paid_to AS debit_account
+			FROM `tabPayment Entry` pe
+			WHERE pe.payment_type = 'Pay'
+				AND pe.docstatus = 1
+				AND pe.posting_date = %s
+				AND pe.mode_of_payment IN ({pm_placeholders})
+			ORDER BY pe.creation ASC""",
+			tuple([report_date] + active_mode_names),
+			as_dict=True
+		)
+		expense_entries.extend(pe_rows)
+
+		# 2) Journal Entry debits — credit on payment-mode accounts = cash out
+		default_company = frappe.defaults.get_defaults().get("company")
+		mode_account_rows = frappe.db.sql(
+			f"""SELECT mopa.default_account, mop.name AS mode_of_payment
+			FROM `tabMode of Payment Account` mopa
+			INNER JOIN `tabMode of Payment` mop ON mopa.parent = mop.name
+			WHERE mop.name IN ({pm_placeholders})
+				AND (mopa.company = %s OR mopa.company IS NULL OR mopa.company = '')""",
+			tuple(active_mode_names + [default_company or ""]),
+			as_dict=True
+		)
+		account_to_mode = {r["default_account"]: r["mode_of_payment"] for r in mode_account_rows}
+		payment_accounts = list(account_to_mode.keys())
+
+		if payment_accounts:
+			pa_placeholders = ", ".join(["%s"] * len(payment_accounts))
+			je_rows = frappe.db.sql(
+				f"""SELECT
+					je.name,
+					jea.account,
+					jea.credit_in_account_currency AS amount,
+					COALESCE(jea.user_remark, je.user_remark, '') AS remarks,
+					jea_debit.account AS debit_account
+				FROM `tabJournal Entry Account` jea
+				INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
+				LEFT JOIN `tabJournal Entry Account` jea_debit
+					ON jea_debit.parent = je.name
+					AND jea_debit.debit_in_account_currency > 0
+				WHERE je.docstatus = 1
+					AND je.posting_date = %s
+					AND jea.account IN ({pa_placeholders})
+					AND jea.credit_in_account_currency > 0
+				ORDER BY je.creation ASC""",
+				tuple([report_date] + payment_accounts),
+				as_dict=True
+			)
+			for row in je_rows:
+				row["mode_of_payment"] = account_to_mode.get(row["account"], row["account"])
+			expense_entries.extend(je_rows)
+
+	# Aggregate by payment mode
+	mode_expense_map = {}
+	for e in expense_entries:
+		mode = e.get("mode_of_payment", "Other")
+		if mode not in mode_expense_map:
+			mode_expense_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
+		mode_expense_map[mode]["total"] += float(e.get("amount") or 0)
+		mode_expense_map[mode]["count"] += 1
+
+	expense_breakdown = sorted(mode_expense_map.values(), key=lambda x: x["total"], reverse=True)
+	total_expenses = sum(b["total"] for b in expense_breakdown)
+
+	# ---- POS SECTION ----
+
+	# Submitted POS invoices on report_date
+	pos_invoices = frappe.db.sql("""
+		SELECT name, grand_total, customer
+		FROM `tabSales Invoice`
+		WHERE is_pos = 1 AND docstatus = 1 AND posting_date = %s
+	""", (report_date,), as_dict=True)
+
+	pos_total = sum(inv["grand_total"] for inv in pos_invoices)
+	pos_count = len(pos_invoices)
+	pos_invoice_names = [inv["name"] for inv in pos_invoices]
+
+	# Payment method breakdown
+	payment_breakdown = []
+	if pos_invoice_names:
+		placeholders = ", ".join(["%s"] * len(pos_invoice_names))
+		payment_rows = frappe.db.sql(
+			f"SELECT mode_of_payment, SUM(amount) as total, COUNT(DISTINCT parent) as txn_count "
+			f"FROM `tabSales Invoice Payment` "
+			f"WHERE parent IN ({placeholders}) "
+			f"GROUP BY mode_of_payment ORDER BY total DESC",
+			tuple(pos_invoice_names), as_dict=True
+		)
+		payment_breakdown = payment_rows
+
+	# Items sold
+	items_sold = []
+	if pos_invoice_names:
+		placeholders = ", ".join(["%s"] * len(pos_invoice_names))
+		item_rows = frappe.db.sql(
+			f"SELECT item_code, item_name, SUM(qty) as total_qty, SUM(amount) as total_amount "
+			f"FROM `tabSales Invoice Item` "
+			f"WHERE parent IN ({placeholders}) "
+			f"GROUP BY item_code, item_name ORDER BY total_qty DESC",
+			tuple(pos_invoice_names), as_dict=True
+		)
+		items_sold = item_rows
+
+	return {
+		"date": report_date,
+		"repair": {
+			"received_count": len(received_orders),
+			"received_orders": received_orders,
+			"completed_count": len(completed_orders),
+			"completed_orders": completed_orders,
+			"pending_count": pending_count,
+			"inprogress_count": inprogress_count,
+			"revenue": repair_revenue,
+			"invoice_count": repair_invoice_count,
+			"technician_tasks": technician_tasks,
+			"top_issues": top_issues,
+			"parts_used": parts_used,
+		},
+		"pos": {
+			"total_sales": pos_total,
+			"transaction_count": pos_count,
+			"payment_breakdown": payment_breakdown,
+			"items_sold": items_sold,
+		},
+		"financial": {
+			"total_expenses": total_expenses,
+			"expense_breakdown": expense_breakdown,
+			"expense_entries": expense_entries,
+			"repair_payment_breakdown": repair_payment_breakdown,
+		}
+	}
