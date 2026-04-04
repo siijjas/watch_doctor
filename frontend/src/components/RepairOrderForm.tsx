@@ -15,6 +15,7 @@ import { Select } from './ui/Select';
 import { PlusIcon } from './icons/PlusIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { Autocomplete } from './ui/Autocomplete';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface RepairOrderFormProps {
     isOpen: boolean;
@@ -22,6 +23,35 @@ interface RepairOrderFormProps {
     onSave: (order: RepairOrder) => void;
     order?: RepairOrder | null;
 }
+
+const toDisplayDate = (isoDate?: string): string => {
+    if (!isoDate) return '';
+    const m = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return isoDate;
+    return `${m[3]}/${m[2]}/${m[1]}`;
+};
+
+const toIsoDate = (displayDate?: string): string | null => {
+    if (!displayDate) return null;
+    const value = displayDate.trim();
+
+    const withDash = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (withDash) {
+        return `${withDash[3]}-${withDash[2]}-${withDash[1]}`;
+    }
+
+    const withSlash = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (withSlash) {
+        return `${withSlash[3]}-${withSlash[2]}-${withSlash[1]}`;
+    }
+
+    const compact = value.match(/^(\d{2})(\d{2})(\d{4})$/);
+    if (compact) {
+        return `${compact[3]}-${compact[2]}-${compact[1]}`;
+    }
+
+    return null;
+};
 
 const newRepairItem = (): Omit<RepairItem, 'name'> => ({
     watch_brand: '',
@@ -38,6 +68,7 @@ const newRepairItem = (): Omit<RepairItem, 'name'> => ({
 
 
 export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClose, onSave, order }) => {
+    const { formatCurrency } = useAppConfig();
     const [formData, setFormData] = useState<RepairOrder | null>(null);
     const [dependencies, setDependencies] = useState<{
         customers: Customer[];
@@ -66,6 +97,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
     // Add Part Modal State
     const [isAddPartModalOpen, setIsAddPartModalOpen] = useState(false);
     const [activePartItemIndex, setActivePartItemIndex] = useState<number | null>(null);
+    const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
 
     const loadDependencies = useCallback(async () => {
@@ -105,6 +137,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
     useEffect(() => {
         if (isOpen) {
             loadDependencies();
+            setValidationErrors([]);
         }
     }, [isOpen, loadDependencies]);
 
@@ -112,7 +145,10 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         if (!isOpen) return;
 
         if (order) {
-            setFormData(JSON.parse(JSON.stringify(order))); // Deep copy
+            const normalizedOrder = JSON.parse(JSON.stringify(order)) as RepairOrder;
+            normalizedOrder.received_date = toDisplayDate(normalizedOrder.received_date);
+            normalizedOrder.promised_delivery_date = toDisplayDate(normalizedOrder.promised_delivery_date);
+            setFormData(normalizedOrder); // Deep copy
 
             // Pre-load models for existing items
             if (isErpNext) {
@@ -141,11 +177,11 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         } else {
             const newOrder: RepairOrder = {
                 name: '', // Will be set by ERPNext on creation
-                customer: dependencies.customers[0]?.name || '',
+                customer: '',
                 contact_person: '',
                 status: OrderStatus.Pending,
-                received_date: new Date().toISOString().split('T')[0],
-                promised_delivery_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                received_date: toDisplayDate(new Date().toISOString().split('T')[0]),
+                promised_delivery_date: toDisplayDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),
                 priority: Priority.Normal,
                 items: [newRepairItem()],
             };
@@ -334,17 +370,59 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         });
 
         if (missingFields.length > 0) {
-            alert(`Please fill in the following required fields:\n${missingFields.join('\n')}`);
+            setValidationErrors(missingFields);
             return;
         }
 
-        onSave(formData);
+        const receivedDateIso = toIsoDate(formData.received_date);
+        const promisedDateIso = toIsoDate(formData.promised_delivery_date);
+        if (!receivedDateIso) missingFields.push('Received Date must be in DD/MM/YYYY format');
+        if (!promisedDateIso) missingFields.push('Promised Delivery must be in DD/MM/YYYY format');
+
+        if (missingFields.length > 0) {
+            setValidationErrors(missingFields);
+            return;
+        }
+
+        const sanitizedItems = formData.items.map((item) => ({
+            ...item,
+            issues: (item.issues || []).map((issue) => {
+                if (issue.is_other) {
+                    return { ...issue, issue: 'Other' };
+                }
+                return issue;
+            })
+        }));
+
+        setValidationErrors([]);
+        onSave({
+            ...formData,
+            received_date: receivedDateIso!,
+            promised_delivery_date: promisedDateIso!,
+            items: sanitizedItems
+        });
     };
 
     return (
         <>
-            <Modal isOpen={isOpen} onClose={onClose} title={order ? 'Edit Repair Order' : 'New Repair Order'}>
-                <form onSubmit={handleSubmit} className="space-y-6">
+            <Modal
+                isOpen={isOpen}
+                onClose={onClose}
+                title={order ? 'Edit Repair Order' : 'New Repair Order'}
+                maxWidthClass="max-w-5xl"
+            >
+                <form onSubmit={handleSubmit} className="space-y-6 pb-24">
+                    {validationErrors.length > 0 && (
+                        <div className="rounded-xl border px-4 py-3" style={{ borderColor: '#F3D2D2', backgroundColor: '#FFF6F6' }}>
+                            <p className="text-sm font-semibold text-red-700 mb-1">Required fields are missing:</p>
+                            <ul className="text-sm text-red-700 list-disc ml-5">
+                                {validationErrors.map((error) => (
+                                    <li key={error}>{error}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="md:col-span-2">
                             <Autocomplete
@@ -371,19 +449,35 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
                         </div>
                         {/* Status field removed (defaults to Pending) */}
-                        <Input label="Received Date" type="date" value={formData.received_date} onChange={(e) => handleFieldChange('received_date', e.target.value)} />
-                        <Input label="Promised Delivery" type="date" value={formData.promised_delivery_date} onChange={(e) => handleFieldChange('promised_delivery_date', e.target.value)} />
+                        <Input
+                            label="Received Date"
+                            type="text"
+                            placeholder="DD/MM/YYYY"
+                            value={formData.received_date}
+                            onChange={(e) => handleFieldChange('received_date', e.target.value)}
+                        />
+                        <Input
+                            label="Promised Delivery"
+                            type="text"
+                            placeholder="DD/MM/YYYY"
+                            value={formData.promised_delivery_date}
+                            onChange={(e) => handleFieldChange('promised_delivery_date', e.target.value)}
+                        />
                         <Select label="Priority" value={formData.priority} onChange={(e) => handleFieldChange('priority', e.target.value as Priority)}>
                             {Object.values(Priority).map(p => <option key={p} value={p}>{p}</option>)}
                         </Select>
                     </div>
 
                     <div className="space-y-4">
-                        <h3 className="text-lg font-semibold border-b pb-2">Repair Items</h3>
+                        <h3 className="text-lg font-semibold pb-2 text-gray-900" style={{ borderBottom: '1px solid #F0EEEB' }}>Repair Items</h3>
                         {formData.items.map((item, itemIndex) => (
-                            <div key={item.name || itemIndex} className="p-4 border rounded-lg bg-gray-50 dark:bg-gray-800 space-y-4">
+                            <div
+                                key={item.name || itemIndex}
+                                className="p-4 rounded-2xl space-y-4 bg-[#F9F7F4]"
+                                style={{ border: '1px solid #F0EEEB' }}
+                            >
                                 <div className="flex justify-between items-center">
-                                    <h4 className="font-semibold">Watch #{itemIndex + 1}</h4>
+                                    <h4 className="font-semibold text-gray-900">Watch #{itemIndex + 1}</h4>
                                     {formData.items.length > 1 && (
                                         <Button type="button" variant="destructive" size="sm" onClick={() => handleRemoveItem(itemIndex)}>
                                             <TrashIcon className="h-4 w-4" />
@@ -447,7 +541,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                     <Input label="Serial Number" value={item.serial_number} onChange={e => handleItemChange(itemIndex, 'serial_number', e.target.value)} />
                                 </div>
                                 <div className="space-y-3">
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Complaint</label>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">Complaint</label>
                                     <div className="space-y-2">
                                         {dependencies.issueTemplates.map(template => (
                                             <label key={template.name} className="flex items-center space-x-2 cursor-pointer">
@@ -455,9 +549,9 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                     type="checkbox"
                                                     checked={item.issues.some(i => i.issue === template.name)}
                                                     onChange={(e) => handleIssueToggle(itemIndex, template, e.target.checked)}
-                                                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                                    className="w-4 h-4 rounded border-[#D8D8D8] text-[#648DDA] focus:ring-[#648DDA]"
                                                 />
-                                                <span className="text-sm text-gray-700 dark:text-gray-300">{template.issue_name}</span>
+                                                <span className="text-sm text-gray-700">{template.issue_name}</span>
 
                                             </label>
                                         ))}
@@ -466,17 +560,18 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                 type="checkbox"
                                                 checked={item.issues.some(i => i.is_other)}
                                                 onChange={(e) => handleOtherIssueToggle(itemIndex, e.target.checked)}
-                                                className="w-4 h-4 mt-1 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                                    className="w-4 h-4 mt-1 rounded border-[#D8D8D8] text-[#648DDA] focus:ring-[#648DDA]"
                                             />
                                             <div className="flex-1">
-                                                <span className="text-sm text-gray-700 dark:text-gray-300">Other (please specify)</span>
+                                                <span className="text-sm text-gray-700">Other (please specify)</span>
                                                 {item.issues.some(i => i.is_other) && (
                                                     <textarea
                                                         value={item.issues.find(i => i.is_other)?.other_description || ''}
                                                         onChange={(e) => handleOtherDescriptionChange(itemIndex, e.target.value)}
                                                         rows={2}
                                                         placeholder="Describe the issue..."
-                                                        className="mt-2 w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                                        className="mt-2 w-full p-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white"
+                                                        style={{ borderColor: '#E8E8E8' }}
                                                     />
                                                 )}
                                             </div>
@@ -485,7 +580,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
                                     {/* Issue Description */}
                                     <div className="mt-4">
-                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
                                             Issue Description
                                         </label>
                                         <textarea
@@ -493,7 +588,8 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                             onChange={(e) => handleItemChange(itemIndex, 'issue_description', e.target.value)}
                                             rows={3}
                                             placeholder="Describe the customer's complaint or issue in detail..."
-                                            className="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                            className="w-full p-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white"
+                                            style={{ borderColor: '#E8E8E8' }}
                                         />
                                     </div>
                                 </div>
@@ -509,12 +605,12 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
                                 {/* Tasks */}
                                 <div>
-                                    <h5 className="font-semibold">Tasks</h5>
+                                    <h5 className="font-semibold text-gray-900">Tasks</h5>
                                     {item.tasks.map((task, taskIndex) => {
                                         const selectedService = dependencies.services.find(s => s.name === task.service);
                                         const autoRate = selectedService?.default_rate || 0;
                                         return (
-                                            <div key={task.name || taskIndex} className="space-y-2 p-3 border rounded bg-white dark:bg-gray-700 my-2">
+                                            <div key={task.name || taskIndex} className="space-y-2 p-3 border rounded-xl bg-white my-2" style={{ borderColor: '#ECE8E3' }}>
                                                 <div className="flex items-center space-x-2">
                                                     <Select value={task.service} onChange={e => {
                                                         handleTaskChange(itemIndex, taskIndex, 'service', e.target.value);
@@ -534,13 +630,13 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                 {/* Pricing row */}
                                                 <div className="flex items-center space-x-2 text-sm">
                                                     <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Auto Rate</label>
-                                                        <div className="px-3 py-1.5 bg-gray-100 dark:bg-gray-600 rounded text-gray-600 dark:text-gray-300">
-                                                            ${autoRate.toFixed(2)}
+                                                        <label className="block text-xs text-gray-500 mb-1">Auto Rate</label>
+                                                        <div className="px-3 py-1.5 bg-[#F5F1EC] rounded text-gray-600">
+                                                            {formatCurrency(autoRate)}
                                                         </div>
                                                     </div>
                                                     <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Manual Rate Override</label>
+                                                        <label className="block text-xs text-gray-500 mb-1">Manual Rate Override</label>
                                                         <div className="flex space-x-1">
                                                             <Input
                                                                 type="number"
@@ -555,7 +651,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => handleTaskChange(itemIndex, taskIndex, 'rate', undefined)}
-                                                                    className="px-2 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                                                                    className="px-2 text-xs text-[#648DDA] hover:text-[#527cc7]"
                                                                     title="Reset to auto rate"
                                                                 >
                                                                     Reset
@@ -564,9 +660,9 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                         </div>
                                                     </div>
                                                     <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Effective Rate</label>
-                                                        <div className="px-3 py-1.5 bg-green-50 dark:bg-green-900/20 rounded font-medium text-green-700 dark:text-green-400">
-                                                            ${(task.rate || autoRate).toFixed(2)}
+                                                        <label className="block text-xs text-gray-500 mb-1">Effective Rate</label>
+                                                        <div className="px-3 py-1.5 bg-[#EBF5F0] rounded font-medium text-[#2E7B5B]">
+                                                            {formatCurrency(task.rate || autoRate)}
                                                             {task.rate && <span className="ml-1 text-xs">(manual)</span>}
                                                         </div>
                                                     </div>
@@ -579,18 +675,18 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
                                 {/* Parts */}
                                 <div>
-                                    <h5 className="font-semibold">Parts Used</h5>
+                                    <h5 className="font-semibold text-gray-900">Parts Used</h5>
                                     {item.parts_used.map((part, partIndex) => {
                                         const selectedPart = dependencies.parts.find(p => p.name === part.part);
                                         return (
-                                            <div key={part.name || partIndex} className="space-y-2 p-3 border rounded bg-white dark:bg-gray-700 my-2">
+                                            <div key={part.name || partIndex} className="space-y-2 p-3 border rounded-xl bg-white my-2" style={{ borderColor: '#ECE8E3' }}>
                                                 <div className="flex items-center space-x-2">
                                                     <Autocomplete
                                                         placeholder="Search by code, name, or description..."
                                                         options={dependencies.parts.map(p => ({
                                                             value: p.name,
                                                             label: `${p.item_code || p.name} - ${p.item_name}`,
-                                                            subtitle: p.description || `Rate: $${p.standard_rate || 0}`
+                                                            subtitle: p.description || `Rate: ${formatCurrency(p.standard_rate || 0)}`
                                                         }))}
                                                         value={part.part}
                                                         onChange={(value) => {
@@ -644,13 +740,13 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                 {/* Pricing row */}
                                                 <div className="flex items-center space-x-2 text-sm">
                                                     <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Auto Rate</label>
-                                                        <div className="px-3 py-1.5 bg-gray-100 dark:bg-gray-600 rounded text-gray-600 dark:text-gray-300">
-                                                            ${(selectedPart?.standard_rate || 0).toFixed(2)}
+                                                        <label className="block text-xs text-gray-500 mb-1">Auto Rate</label>
+                                                        <div className="px-3 py-1.5 bg-[#F5F1EC] rounded text-gray-600">
+                                                            {formatCurrency(selectedPart?.standard_rate || 0)}
                                                         </div>
                                                     </div>
                                                     <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Manual Rate Override</label>
+                                                        <label className="block text-xs text-gray-500 mb-1">Manual Rate Override</label>
                                                         <div className="flex space-x-1">
                                                             <Input
                                                                 type="number"
@@ -671,7 +767,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => handlePartChange(itemIndex, partIndex, 'rate', undefined)}
-                                                                    className="px-2 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                                                                    className="px-2 text-xs text-[#648DDA] hover:text-[#527cc7]"
                                                                     title="Reset to auto rate"
                                                                 >
                                                                     Reset
@@ -680,9 +776,9 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                         </div>
                                                     </div>
                                                     <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Amount</label>
-                                                        <div className="px-3 py-1.5 bg-green-50 dark:bg-green-900/20 rounded font-medium text-green-700 dark:text-green-400">
-                                                            ${((part.rate || selectedPart?.standard_rate || 0) * part.quantity).toFixed(2)}
+                                                        <label className="block text-xs text-gray-500 mb-1">Amount</label>
+                                                        <div className="px-3 py-1.5 bg-[#EBF5F0] rounded font-medium text-[#2E7B5B]">
+                                                            {formatCurrency((part.rate || selectedPart?.standard_rate || 0) * part.quantity)}
                                                             {part.rate && <span className="ml-1 text-xs">(manual)</span>}
                                                         </div>
                                                     </div>
@@ -690,7 +786,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
                                                 {/* Show item details */}
                                                 {selectedPart && selectedPart.description && (
-                                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                    <div className="text-xs text-gray-500">
                                                         <p className="italic">{selectedPart.description}</p>
                                                     </div>
                                                 )}
@@ -707,7 +803,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                         </Button>
                     </div>
 
-                    <div className="flex justify-end space-x-4 pt-4 border-t">
+                    <div className="sticky bottom-0 left-0 right-0 pt-3 border-t bg-white/95 backdrop-blur-sm flex justify-end space-x-3" style={{ borderColor: '#F0EEEB' }}>
                         <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
                         <Button type="submit">Save Order</Button>
                     </div>

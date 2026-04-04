@@ -3,6 +3,7 @@ import type { RepairItem, RepairTask, RepairPartUsed, RepairTaskTemplate, Item }
 import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface UpdatePriceModalProps {
     isOpen: boolean;
@@ -40,6 +41,7 @@ export const UpdatePriceModal: React.FC<UpdatePriceModalProps> = ({
     taskTemplates,
     allItems
 }) => {
+    const { formatCurrency, config } = useAppConfig();
     // Initialize task prices
     const [taskPrices, setTaskPrices] = useState<TaskPriceUpdate[]>(() => {
         return (watchItem.tasks || []).map((task, index) => {
@@ -179,19 +181,19 @@ export const UpdatePriceModal: React.FC<UpdatePriceModalProps> = ({
                                                     {template?.task_name || task.service}
                                                 </p>
                                                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                                                    Auto Rate: ${task.autoRate.toFixed(2)}
+                                                    Auto Rate: {formatCurrency(task.autoRate)}
                                                 </p>
                                             </div>
                                             <div className="text-right">
                                                 <p className="font-semibold text-green-600 dark:text-green-400">
-                                                    ${effectiveRate.toFixed(2)}
+                                                    {formatCurrency(effectiveRate)}
                                                 </p>
                                             </div>
                                         </div>
                                         <div className="flex gap-2">
                                             <Input
                                                 type="number"
-                                                placeholder={`Auto: $${task.autoRate.toFixed(2)}`}
+                                                placeholder={`Auto: ${config.currencySymbol}${task.autoRate.toFixed(config.decimalPlaces)}`}
                                                 value={task.newRate !== null ? task.newRate : ''}
                                                 onChange={(e) => handleTaskPriceChange(index, e.target.value)}
                                                 step="0.01"
@@ -233,22 +235,22 @@ export const UpdatePriceModal: React.FC<UpdatePriceModalProps> = ({
                                                     {item?.item_name || part.part}
                                                 </p>
                                                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                                                    Qty: {part.quantity} × Auto Rate: ${part.autoRate.toFixed(2)}
+                                                    Qty: {part.quantity} × Auto Rate: {formatCurrency(part.autoRate)}
                                                 </p>
                                             </div>
                                             <div className="text-right">
                                                 <p className="font-semibold text-green-600 dark:text-green-400">
-                                                    ${totalAmount.toFixed(2)}
+                                                    {formatCurrency(totalAmount)}
                                                 </p>
                                                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                    ${effectiveRate.toFixed(2)} each
+                                                    {formatCurrency(effectiveRate)} each
                                                 </p>
                                             </div>
                                         </div>
                                         <div className="flex gap-2">
                                             <Input
                                                 type="number"
-                                                placeholder={`Auto: $${part.autoRate.toFixed(2)}`}
+                                                placeholder={`Auto: ${config.currencySymbol}${part.autoRate.toFixed(config.decimalPlaces)}`}
                                                 value={part.newRate !== null ? part.newRate : ''}
                                                 onChange={(e) => handlePartPriceChange(index, e.target.value)}
                                                 step="0.01"
@@ -285,7 +287,7 @@ export const UpdatePriceModal: React.FC<UpdatePriceModalProps> = ({
                         <div className="flex justify-between items-center">
                             <span className="text-lg font-semibold text-gray-900 dark:text-gray-100">Total Estimated Cost:</span>
                             <span className="text-2xl font-bold text-green-600 dark:text-green-400">
-                                ${totalCost.toFixed(2)}
+                                {formatCurrency(totalCost)}
                             </span>
                         </div>
                     </div>

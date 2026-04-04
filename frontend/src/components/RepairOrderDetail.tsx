@@ -26,6 +26,8 @@ import { ActionsDropdown } from './ui/ActionsDropdown';
 import { ViewQuotationModal } from './ViewQuotationModal';
 import { ViewInvoiceModal } from './ViewInvoiceModal';
 import { AddIssueModal } from './AddIssueModal';
+import { AddTaskModal } from './AddTaskModal';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface RepairOrderDetailProps {
   order: RepairOrder;
@@ -48,9 +50,11 @@ const WatchCard: React.FC<{
   onUpdatePrices: (itemIndex: number) => void;
   onAssignTechnician: (itemIndex: number) => void;
   onAddIssue: (itemIndex: number) => void;
+  onAddTask: (itemIndex: number) => void;
   defaultExpanded?: boolean;
-}> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, defaultExpanded = true }) => {
+}> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, onAddTask, defaultExpanded = true }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const { formatCurrency } = useAppConfig();
   const technician = employees.find(e => e.name === item.technician);
 
   const totalCost = (item.tasks || []).reduce((sum, task) => {
@@ -69,36 +73,36 @@ const WatchCard: React.FC<{
   const completedTasks = (item.tasks || []).filter(t => t.status === 'Completed').length;
 
   return (
-    <div className="mb-4 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden transition-all duration-200 hover:shadow-md">
+    <div className="mb-4 bg-white rounded-2xl shadow-sm overflow-hidden transition-all duration-200 hover:shadow-md" style={{ border: '1px solid #F0EEEB' }}>
       {/* Card Header - Always visible */}
       <div
-        className="p-5 cursor-pointer flex justify-between items-center"
+        className="p-3 sm:p-5 cursor-pointer flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3"
         onClick={() => setIsExpanded(!isExpanded)}
       >
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3 sm:space-x-4">
           {/* Watch Icon */}
-          <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center">
-            <span className="text-white text-xl">⌚</span>
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center" style={{ backgroundColor: '#648DDA' }}>
+            <span className="text-white text-lg sm:text-xl">⌚</span>
           </div>
           <div>
-            <h3 className="font-bold text-xl text-gray-900 dark:text-white">
+            <h3 className="font-bold text-base sm:text-xl text-gray-900">
               {item.watch_brand} {watchModel?.model_name || item.watch_model}
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">
               S/N: {item.serial_number || 'N/A'}
             </p>
           </div>
         </div>
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center flex-wrap gap-2 sm:space-x-3 pl-13 sm:pl-0">
           {/* Task Progress Pill */}
           {taskCount > 0 && (
-            <span className="text-xs px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-gray-600 dark:text-gray-300">
+            <span className="text-xs px-3 py-1 rounded-full text-gray-600" style={{ backgroundColor: '#F3EFEA' }}>
               {completedTasks}/{taskCount} tasks
             </span>
           )}
           {/* Cost Badge */}
-          <span className="font-bold text-green-600 dark:text-green-400">
-            ${totalCost.toFixed(2)}
+          <span className="font-bold text-green-600">
+            {formatCurrency(totalCost)}
           </span>
           {/* Status Badge */}
           <Badge className={`${STATUS_COLORS[item.status]} px-3 py-1`}>
@@ -113,34 +117,34 @@ const WatchCard: React.FC<{
 
       {/* Card Body - Collapsible */}
       {isExpanded && (
-        <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-700">
+        <div className="px-3 pb-3 sm:px-5 sm:pb-5 border-t" style={{ borderColor: '#F0EEEB' }}>
           {/* Technician Row */}
-          <div className="flex items-center justify-between py-4 border-b border-gray-100 dark:border-gray-700">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4 border-b" style={{ borderColor: '#F0EEEB' }}>
             <div className="flex items-center gap-3">
               <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                 technician
-                  ? 'bg-indigo-100 dark:bg-indigo-900/40'
-                  : 'bg-amber-100 dark:bg-amber-900/40'
+                  ? 'bg-indigo-100'
+                  : 'bg-amber-100'
               }`}>
                 <span className="text-lg">{technician ? '👤' : '❓'}</span>
               </div>
               <div>
-                <p className="text-xs text-gray-400 dark:text-gray-500 uppercase tracking-wide font-medium">Technician</p>
+                <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Technician</p>
                 <p className={`font-semibold text-base ${
                   technician
-                    ? 'text-gray-900 dark:text-white'
-                    : 'text-amber-600 dark:text-amber-400'
+                    ? 'text-gray-900'
+                    : 'text-amber-600'
                 }`}>
                   {technician?.employee_name || 'Not Assigned'}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Button
                 variant={technician ? 'outline' : 'primary'}
                 size="sm"
                 onClick={(e) => { e.stopPropagation(); onAssignTechnician(itemIndex); }}
-                className="text-xs rounded-lg"
+                className="text-xs"
               >
                 👤 {technician ? 'Change Tech' : 'Assign Tech'}
               </Button>
@@ -148,23 +152,23 @@ const WatchCard: React.FC<{
                 variant="outline"
                 size="sm"
                 onClick={(e) => { e.stopPropagation(); onUpdatePrices(itemIndex); }}
-                className="text-xs rounded-lg"
+                className="text-xs"
               >
                 💰 Update Prices
               </Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 pt-4">
             {/* Left Column: Issues */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h4 className="font-semibold text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide">Issues</h4>
+                <h4 className="font-semibold text-sm text-gray-500 uppercase tracking-wide">Issues</h4>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={(e) => { e.stopPropagation(); onAddIssue(itemIndex); }}
-                  className="text-xs rounded-lg h-7 px-2"
+                  className="text-xs h-7 px-2"
                 >
                   ➕ Add Issue
                 </Button>
@@ -174,14 +178,14 @@ const WatchCard: React.FC<{
                   {(item.issues || []).map((issue, idx) => {
                     const template = issueTemplates.find(t => t.name === issue.issue);
                     return (
-                      <div key={idx} className="flex items-center p-3 rounded-lg border bg-orange-50 dark:bg-orange-900/10 border-orange-100 dark:border-orange-800/50 min-h-[3.5rem]">
-                        <span className="w-6 h-6 rounded-full bg-orange-200 dark:bg-orange-900/60 flex items-center justify-center text-sm text-orange-700 dark:text-orange-300 mr-3 shrink-0 font-bold">
+                      <div key={idx} className="flex items-center p-3 rounded-lg border bg-orange-50 border-orange-100 min-h-[3.5rem]">
+                        <span className="w-6 h-6 rounded-full bg-orange-200 flex items-center justify-center text-sm text-orange-700 mr-3 shrink-0 font-bold">
                           !
                         </span>
-                        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                        <span className="text-sm font-semibold text-gray-900">
                           {template?.issue_name || issue.issue}
                           {issue.is_other && issue.other_description && (
-                            <span className="block text-xs font-normal text-gray-500 dark:text-gray-400 mt-0.5">{issue.other_description}</span>
+                            <span className="block text-xs font-normal text-gray-500 mt-0.5">{issue.other_description}</span>
                           )}
                         </span>
                       </div>
@@ -191,13 +195,13 @@ const WatchCard: React.FC<{
               ) : (
                 <button
                   onClick={(e) => { e.stopPropagation(); onAddIssue(itemIndex); }}
-                  className="w-full text-sm text-amber-500 dark:text-amber-400 italic border-2 border-dashed border-amber-200 dark:border-amber-800 rounded-lg py-3 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+                  className="w-full text-sm text-amber-500 italic border-2 border-dashed border-amber-200 rounded-lg py-3 hover:bg-amber-50 transition-colors"
                 >
                   No issues reported — click to add
                 </button>
               )}
               {item.issue_description && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                <p className="text-sm text-gray-600 mt-3 p-3 bg-gray-50 rounded-lg">
                   {item.issue_description}
                 </p>
               )}
@@ -205,7 +209,17 @@ const WatchCard: React.FC<{
 
             {/* Right Column: Tasks */}
             <div>
-              <h4 className="font-semibold text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Repair Tasks</h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-sm text-gray-500 uppercase tracking-wide">Repair Tasks</h4>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); onAddTask(itemIndex); }}
+                  className="text-xs h-7 px-2"
+                >
+                  ➕ Add Task
+                </Button>
+              </div>
               {(item.tasks || []).length > 0 ? (
                 <div className="space-y-2">
                   {(item.tasks || []).map((task, taskIdx) => {
@@ -214,24 +228,24 @@ const WatchCard: React.FC<{
                     return (
                       <div
                         key={task.name || taskIdx}
-                        className={`flex items-center justify-between p-3 rounded-lg border ${isCompleted ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600'}`}
+                        className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border gap-2 ${isCompleted ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}
                       >
                         <div className="flex items-center space-x-3">
-                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${isCompleted ? 'bg-green-500 text-white' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${isCompleted ? 'bg-green-500 text-white' : 'bg-gray-300'}`}>
                             {isCompleted ? '✓' : ''}
                           </span>
                           <div>
-                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            <span className="text-sm font-medium text-gray-900">
                               {template?.task_name || task.service}
                             </span>
-                            <span className="ml-2 text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-600 rounded">
+                            <span className="ml-2 text-xs px-2 py-0.5 bg-gray-200 rounded">
                               {task.status}
                             </span>
                           </div>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-medium text-green-600 dark:text-green-400">
-                            ${(task.rate || template?.default_rate || 0).toFixed(2)}
+                        <div className="flex items-center space-x-2 flex-wrap">
+                          <span className="font-medium text-green-600">
+                            {formatCurrency(task.rate || template?.default_rate || 0)}
                           </span>
                           <Button
                             variant="ghost"
@@ -262,18 +276,18 @@ const WatchCard: React.FC<{
 
           {/* Parts Section */}
           {(item.parts_used || []).length > 0 && (
-            <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
-              <h4 className="font-semibold text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Parts Used</h4>
+            <div className="mt-6 pt-4 border-t" style={{ borderColor: '#F0EEEB' }}>
+              <h4 className="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-3">Parts Used</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {(item.parts_used || []).map((part, idx) => {
                   const sparePart = allItems.find(i => i.name === part.part);
                   return (
-                    <div key={part.name || idx} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                      <span className="text-sm text-gray-700 dark:text-gray-300">
+                    <div key={part.name || idx} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                      <span className="text-sm text-gray-700">
                         {sparePart?.item_name || part.part} <span className="text-gray-400">×{part.quantity}</span>
                       </span>
-                      <span className="font-medium text-green-600 dark:text-green-400">
-                        ${((part.rate || sparePart?.standard_rate || 0) * part.quantity).toFixed(2)}
+                      <span className="font-medium text-green-600">
+                        {formatCurrency((part.rate || sparePart?.standard_rate || 0) * part.quantity)}
                       </span>
                     </div>
                   );
@@ -290,6 +304,7 @@ const WatchCard: React.FC<{
 
 
 const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, onEdit, onDelete, onRefresh }) => {
+  const { formatCurrency } = useAppConfig();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [allItems, setAllItems] = useState<Item[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<RepairTaskTemplate[]>([]);
@@ -321,6 +336,11 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   }>({ isOpen: false, watchIndex: null });
 
   const [addIssueModal, setAddIssueModal] = useState<{
+    isOpen: boolean;
+    watchIndex: number | null;
+  }>({ isOpen: false, watchIndex: null });
+
+  const [addTaskModal, setAddTaskModal] = useState<{
     isOpen: boolean;
     watchIndex: number | null;
   }>({ isOpen: false, watchIndex: null });
@@ -429,6 +449,31 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
 
     if (tasksToAdd.length > 0) {
       updatedOrder.items[watchIndex].tasks = [...currentTasks, ...tasksToAdd];
+    }
+
+    await apiService.saveRepairOrder(updatedOrder);
+    if (onRefresh) await onRefresh(order.name);
+  };
+
+  const handleAddTask = async (watchIndex: number, selectedTaskNames: string[]) => {
+    if (!taskTemplates.length || selectedTaskNames.length === 0) {
+      return;
+    }
+
+    const updatedOrder = JSON.parse(JSON.stringify(order)) as RepairOrder;
+    const item = updatedOrder.items[watchIndex];
+    if (!item.tasks) item.tasks = [];
+
+    const existingServices = new Set((item.tasks || []).map(t => t.service));
+    for (const taskName of selectedTaskNames) {
+      if (existingServices.has(taskName)) continue;
+      item.tasks.push({
+        service: taskName,
+        technician: item.technician || '',
+        notes: '',
+        status: TaskStatus.Pending,
+      });
+      existingServices.add(taskName);
     }
 
     await apiService.saveRepairOrder(updatedOrder);
@@ -573,16 +618,16 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+        <div className="animate-spin rounded-full h-12 w-12" style={{ borderTop: '3px solid #8B7E74', borderBottom: '3px solid #8B7E74', borderLeft: '3px solid transparent', borderRight: '3px solid transparent' }}></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
-      <div className="mb-6 flex justify-between items-center">
+    <div className="min-h-screen p-0">
+      <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div className="flex items-center space-x-2">
-          <Button variant="ghost" onClick={onBack} className="flex items-center">
+          <Button variant="ghost" onClick={onBack} className="flex items-center text-slate-700 hover:bg-stone-100">
             <ArrowLeftIcon className="h-5 w-5 mr-2" />
             Back to List
           </Button>
@@ -590,6 +635,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
             variant="outline"
             onClick={() => onRefresh?.(order.name)}
             className="flex items-center"
+            style={{ borderColor: '#E8E8E8' }}
             title="Refresh order data"
           >
             <RefreshIcon className="h-4 w-4" />
@@ -635,22 +681,22 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
       </div>
 
       {/* Order Info Card */}
-      <div className="mb-6 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-        <div className="p-6">
-          <div className="flex justify-between items-start">
+      <div className="mb-4 sm:mb-6 bg-white rounded-2xl shadow-sm overflow-hidden" style={{ border: '1px solid #F0EEEB' }}>
+        <div className="p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start gap-3">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">{order.name}</h1>
-              <p className="text-gray-500 dark:text-gray-400">Watch Repair Order</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1">{order.name}</h1>
+              <p className="text-gray-500">Watch Repair Order</p>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center flex-wrap gap-2">
               {order.docstatus === 0 && (
-                <Badge className="bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300">Draft</Badge>
+                <Badge className="bg-gray-200 text-gray-700">Draft</Badge>
               )}
               {order.docstatus === 1 && (
-                <Badge className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">Submitted</Badge>
+                <Badge className="bg-green-100 text-green-700">Submitted</Badge>
               )}
               {order.docstatus === 2 && (
-                <Badge className="bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">Cancelled</Badge>
+                <Badge className="bg-red-100 text-red-700">Cancelled</Badge>
               )}
               <Badge className={`${STATUS_COLORS[order.status]} px-4 py-1 text-sm`}>{order.status}</Badge>
               <Badge className={`${PRIORITY_COLORS[order.priority]} px-3 py-1 text-xs`}>{order.priority}</Badge>
@@ -658,37 +704,37 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           </div>
 
           {/* Info Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-            <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mt-4 sm:mt-6">
+            <div className="p-4 bg-gray-50 rounded-xl" style={{ border: '1px solid #F3EFEA' }}>
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/50 rounded-lg flex items-center justify-center">
-                  <UserIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#E8EEF9' }}>
+                  <UserIcon className="h-5 w-5" style={{ color: '#648DDA' }} />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Customer</p>
-                  <p className="font-semibold text-gray-900 dark:text-white">{order.customer_name || order.customer}</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Customer</p>
+                  <p className="font-semibold text-gray-900">{order.customer_name || order.customer}</p>
                 </div>
               </div>
             </div>
-            <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+            <div className="p-4 bg-gray-50 rounded-xl" style={{ border: '1px solid #F3EFEA' }}>
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-green-100 dark:bg-green-900/50 rounded-lg flex items-center justify-center">
-                  <CalendarIcon className="h-5 w-5 text-green-600 dark:text-green-400" />
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#E9F7EE' }}>
+                  <CalendarIcon className="h-5 w-5 text-green-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Received</p>
-                  <p className="font-semibold text-gray-900 dark:text-white">{order.received_date}</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Received</p>
+                  <p className="font-semibold text-gray-900">{order.received_date}</p>
                 </div>
               </div>
             </div>
-            <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+            <div className="p-4 bg-gray-50 rounded-xl" style={{ border: '1px solid #F3EFEA' }}>
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-orange-100 dark:bg-orange-900/50 rounded-lg flex items-center justify-center">
-                  <ClockIcon className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#FBEFDF' }}>
+                  <ClockIcon className="h-5 w-5 text-orange-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Promised Delivery</p>
-                  <p className="font-semibold text-gray-900 dark:text-white">{order.promised_delivery_date}</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Promised Delivery</p>
+                  <p className="font-semibold text-gray-900">{order.promised_delivery_date}</p>
                 </div>
               </div>
             </div>
@@ -698,30 +744,30 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
 
       {/* Billing Summary */}
       {(order.quotation || order.sales_invoice) && (
-        <div className="mb-6 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-          <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-4">💳 Billing Summary</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="mb-4 sm:mb-6 bg-white rounded-2xl shadow-sm p-4 sm:p-6" style={{ border: '1px solid #F0EEEB' }}>
+          <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-4">Billing Summary</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
             {order.quotation && (
               <>
-                <div className="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-xl">
-                  <p className="text-xs text-purple-600 dark:text-purple-400 uppercase tracking-wide mb-1">Quotation Type</p>
-                  <p className="text-xl font-bold text-purple-700 dark:text-purple-300">{order.quotation_type || 'N/A'}</p>
+                <div className="p-4 rounded-xl" style={{ backgroundColor: '#F6F1FA' }}>
+                  <p className="text-xs text-purple-600 uppercase tracking-wide mb-1">Quotation Type</p>
+                  <p className="text-xl font-bold text-purple-700">{order.quotation_type || 'N/A'}</p>
                 </div>
-                <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-xl">
-                  <p className="text-xs text-green-600 dark:text-green-400 uppercase tracking-wide mb-1">Quotation Amount</p>
-                  <p className="text-xl font-bold text-green-700 dark:text-green-300">${(order.quotation_amount || 0).toFixed(2)}</p>
+                <div className="p-4 rounded-xl" style={{ backgroundColor: '#EAF6EE' }}>
+                  <p className="text-xs text-green-600 uppercase tracking-wide mb-1">Quotation Amount</p>
+                  <p className="text-xl font-bold text-green-700">{formatCurrency(order.quotation_amount || 0)}</p>
                 </div>
               </>
             )}
             {order.sales_invoice && (
               <>
-                <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
-                  <p className="text-xs text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-1">Paid Amount</p>
-                  <p className="text-xl font-bold text-blue-700 dark:text-blue-300">${(order.paid_amount || 0).toFixed(2)}</p>
+                <div className="p-4 rounded-xl" style={{ backgroundColor: '#EAF0FA' }}>
+                  <p className="text-xs text-blue-600 uppercase tracking-wide mb-1">Paid Amount</p>
+                  <p className="text-xl font-bold text-blue-700">{formatCurrency(order.paid_amount || 0)}</p>
                 </div>
-                <div className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-xl">
-                  <p className="text-xs text-orange-600 dark:text-orange-400 uppercase tracking-wide mb-1">Balance Due</p>
-                  <p className="text-xl font-bold text-orange-700 dark:text-orange-300">${(order.balance_amount || 0).toFixed(2)}</p>
+                <div className="p-4 rounded-xl" style={{ backgroundColor: '#FBF2E8' }}>
+                  <p className="text-xs text-orange-600 uppercase tracking-wide mb-1">Balance Due</p>
+                  <p className="text-xl font-bold text-orange-700">{formatCurrency(order.balance_amount || 0)}</p>
                 </div>
               </>
             )}
@@ -729,7 +775,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
         </div>
       )}
 
-      <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-4">Watches in this Order ({order.items?.length || 0})</h3>
+      <h3 className="text-xl font-bold text-gray-800 mb-4">Watches in this Order ({order.items?.length || 0})</h3>
       {(order.items || []).map((item, idx) => (
         <WatchCard
           key={item.name || idx}
@@ -744,16 +790,17 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           onUpdatePrices={(itemIndex) => setUpdatePriceModal({ isOpen: true, watchIndex: itemIndex })}
           onAssignTechnician={(itemIndex) => setAssignTechnicianModal({ isOpen: true, watchIndex: itemIndex })}
           onAddIssue={(itemIndex) => setAddIssueModal({ isOpen: true, watchIndex: itemIndex })}
+          onAddTask={(itemIndex) => setAddTaskModal({ isOpen: true, watchIndex: itemIndex })}
           issueTemplates={issueTemplates}
           defaultExpanded={idx === 0}
         />
       ))}
 
       {/* Total Order Summary */}
-      <div className="mt-6 p-6 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+      <div className="mt-4 sm:mt-6 p-4 sm:p-6 bg-white rounded-2xl shadow-sm" style={{ border: '1px solid #F0EEEB' }}>
         <div className="flex justify-between items-center">
-          <span className="text-lg font-semibold text-gray-700 dark:text-gray-300">Total Estimated Cost</span>
-          <span className="text-3xl font-bold text-green-600 dark:text-green-400">${totalOrderCost.toFixed(2)}</span>
+          <span className="text-base sm:text-lg font-semibold text-gray-700">Total Estimated Cost</span>
+          <span className="text-2xl sm:text-3xl font-bold text-green-600">{formatCurrency(totalOrderCost)}</span>
         </div>
       </div>
 
@@ -832,6 +879,24 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
             onSave={async (selected) => {
               await handleAddIssue(watchIndex, selected);
               setAddIssueModal({ isOpen: false, watchIndex: null });
+            }}
+          />
+        );
+      })()}
+
+      {/* Add Task Modal */}
+      {addTaskModal.isOpen && addTaskModal.watchIndex !== null && (() => {
+        const watchIndex = addTaskModal.watchIndex;
+        const currentTaskServiceNames = new Set((order.items[watchIndex]?.tasks || []).map((t: any) => t.service));
+        return (
+          <AddTaskModal
+            isOpen={addTaskModal.isOpen}
+            onClose={() => setAddTaskModal({ isOpen: false, watchIndex: null })}
+            taskTemplates={taskTemplates}
+            currentTaskServiceNames={currentTaskServiceNames}
+            onSave={async (selected) => {
+              await handleAddTask(watchIndex, selected);
+              setAddTaskModal({ isOpen: false, watchIndex: null });
             }}
           />
         );

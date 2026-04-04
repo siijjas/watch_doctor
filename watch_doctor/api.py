@@ -2,6 +2,70 @@ import frappe
 from frappe import _  # noqa: F401
 import json
 
+
+# ==================== App Configuration ====================
+
+@frappe.whitelist()
+def get_app_config():
+	"""Return app-level configuration: logo URL, currency symbol, decimal places."""
+	config = {
+		"logo_url": "",
+		"currency_code": "USD",
+		"currency_symbol": "$",
+		"decimal_places": 2,
+	}
+
+	# Logo stored via frappe defaults (no schema change needed)
+	try:
+		logo = frappe.db.get_default("dw_logo_url", "watch_doctor")
+		config["logo_url"] = logo or ""
+	except Exception:
+		pass
+
+	# Default currency: prefer default Company currency, fall back to System Settings
+	try:
+		currency_code = None
+		# Try default company first
+		default_company = frappe.db.get_single_value("Global Defaults", "default_company")
+		if default_company:
+			currency_code = frappe.db.get_value("Company", default_company, "default_currency")
+		# Fallback to System Settings
+		if not currency_code:
+			currency_code = frappe.db.get_single_value("System Settings", "currency")
+		currency_code = currency_code or "USD"
+		config["currency_code"] = currency_code
+	except Exception:
+		pass
+
+	# Fetch symbol and decimal places from Currency doctype
+	try:
+		currency_row = frappe.db.get_value(
+			"Currency", config["currency_code"],
+			["symbol", "fraction_units"], as_dict=True
+		)
+		if currency_row:
+			config["currency_symbol"] = currency_row.symbol or config["currency_code"]
+			fraction_units = int(currency_row.fraction_units or 100)
+			import math
+			config["decimal_places"] = round(math.log10(fraction_units)) if fraction_units > 1 else 0
+	except Exception:
+		pass
+
+	return config
+
+
+@frappe.whitelist()
+def save_logo_url(logo_url):
+	"""Persist the app logo URL using frappe defaults."""
+	try:
+		frappe.db.set_default("dw_logo_url", logo_url, "watch_doctor")
+		frappe.db.commit()
+		return {"success": True}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "save_logo_url error")
+		return {"success": False, "error": str(e)}
+
+
 @frappe.whitelist()
 def save_repair_order(doc_json):
 	"""Custom save method for repair orders that handles system fields properly."""
@@ -44,6 +108,53 @@ def save_repair_order(doc_json):
 	all_tasks = []
 	all_parts = []
 	all_issues = []
+
+	def ensure_other_issue_template():
+		"""Return a valid DW Issue Template name for the generic Other issue."""
+		if frappe.db.exists("DW Issue Template", "Other"):
+			return "Other"
+		existing_other = frappe.db.sql(
+			"""
+			select name
+			from `tabDW Issue Template`
+			where lower(issue_name) = 'other'
+			limit 1
+			""",
+			as_dict=True,
+		)
+		if existing_other:
+			return existing_other[0].name
+		other_doc = frappe.get_doc({
+			"doctype": "DW Issue Template",
+			"issue_name": "Other",
+			"description": "Generic issue placeholder for custom complaints",
+			"is_active": 1,
+		})
+		other_doc.insert(ignore_permissions=True)
+		return other_doc.name
+
+	def resolve_issue_template_name(raw_issue):
+		"""Resolve an issue label or name into a valid DW Issue Template name."""
+		if not raw_issue:
+			return None
+		issue_value = str(raw_issue).strip()
+		if not issue_value:
+			return None
+		if frappe.db.exists("DW Issue Template", issue_value):
+			return issue_value
+		by_issue_name = frappe.db.sql(
+			"""
+			select name
+			from `tabDW Issue Template`
+			where lower(issue_name) = lower(%s)
+			limit 1
+			""",
+			(issue_value,),
+			as_dict=True,
+		)
+		if by_issue_name:
+			return by_issue_name[0].name
+		return None
 	
 	for i, item in enumerate(doc_dict.get('items', [])):
 		item_key = str(i + 1)
@@ -63,6 +174,16 @@ def save_repair_order(doc_json):
 		# Process Issues
 		if item.get('issues'):
 			for issue in item['issues']:
+				raw_issue = issue.get('issue')
+				is_other = bool(issue.get('is_other'))
+				if is_other or (str(raw_issue or '').strip().lower() == 'other'):
+					# Child doctype requires a valid Link value even for custom "Other" entries.
+					issue['issue'] = ensure_other_issue_template()
+					issue['is_other'] = 1
+				else:
+					resolved_name = resolve_issue_template_name(raw_issue)
+					if resolved_name:
+						issue['issue'] = resolved_name
 				issue['repair_item_key'] = item_key
 				all_issues.append(issue)
 				

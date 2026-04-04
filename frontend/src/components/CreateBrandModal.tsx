@@ -12,6 +12,13 @@ interface CreateBrandModalProps {
     onBrandCreated: (brand: WatchBrand) => void;
 }
 
+const toTitleCase = (value: string): string =>
+    value
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
 export const CreateBrandModal: React.FC<CreateBrandModalProps> = ({ isOpen, onClose, initialName = '', onBrandCreated }) => {
     const [brandName, setBrandName] = useState(initialName);
     const [description, setDescription] = useState('');
@@ -35,9 +42,11 @@ export const CreateBrandModal: React.FC<CreateBrandModalProps> = ({ isOpen, onCl
             return;
         }
 
+        const normalizedBrandName = toTitleCase(brandName);
+
         setIsSubmitting(true);
         try {
-            const newBrand = await apiService.createWatchBrand(brandName, description);
+            const newBrand = await apiService.createWatchBrand(normalizedBrandName, description);
             onBrandCreated(newBrand);
             onClose();
         } catch (err) {
@@ -61,6 +70,7 @@ export const CreateBrandModal: React.FC<CreateBrandModalProps> = ({ isOpen, onCl
                     label="Brand Name"
                     value={brandName}
                     onChange={(e) => setBrandName(e.target.value)}
+                    onBlur={() => setBrandName((prev) => toTitleCase(prev))}
                     placeholder="e.g. Rolex"
                     required
                 />

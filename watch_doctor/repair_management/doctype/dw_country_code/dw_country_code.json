@@ -10,6 +10,7 @@
     "field_order": [
         "country_name",
         "code",
+        "display_order",
         "is_active"
     ],
     "fields": [
@@ -28,6 +29,13 @@
             "label": "Dial Code",
             "reqd": 1,
             "description": "E.g. +91"
+        },
+        {
+            "default": "0",
+            "fieldname": "display_order",
+            "fieldtype": "Int",
+            "in_list_view": 1,
+            "label": "Display Order"
         },
         {
             "default": "1",

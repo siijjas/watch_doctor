@@ -9,17 +9,20 @@ import { RepairOrderForm } from './components/RepairOrderForm';
 import Dashboard from './components/Dashboard';
 import POS from './components/POS';
 import DailyReport from './components/DailyReport';
+import Settings from './components/Settings';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { AppConfigProvider } from './context/AppConfigContext';
 import { LoginPage } from './components/LoginPage';
 
-type ViewType = 'dashboard' | 'orders' | 'pos' | 'daily-report';
+type ViewType = 'dashboard' | 'orders' | 'pos' | 'daily-report' | 'settings';
 
 // Main app content (shown when authenticated)
 const AppContent: React.FC = () => {
   const { user, logout } = useAuth();
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [repairOrders, setRepairOrders] = useState<RepairOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -167,26 +170,30 @@ const AppContent: React.FC = () => {
   );
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen" style={{ backgroundColor: '#FAF7F2' }}>
       <Sidebar
         currentView={currentView}
         onChangeView={(view) => {
           setCurrentView(view);
           setSelectedOrder(null);
         }}
+        isMobileOpen={isSidebarOpen}
+        onMobileClose={() => setIsSidebarOpen(false)}
       />
 
-      <div className="flex-1 flex flex-col overflow-hidden ml-64">
+      <div className="flex-1 flex flex-col overflow-hidden lg:ml-[240px]">
         <Header
-          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'pos' ? 'POS' : currentView === 'daily-report' ? 'Reports' : 'Repair Orders'}
+          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'pos' ? 'POS' : currentView === 'daily-report' ? 'Reports' : currentView === 'settings' ? 'Settings' : 'Repair Orders'}
+          onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
         />
 
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className={currentView === 'pos' ? 'flex-1 overflow-hidden p-0' : 'flex-1 overflow-y-auto px-4 pb-6 sm:px-6 lg:px-8 lg:pb-8'}>
           {currentView === 'orders' && !selectedOrder && (
             <div className="mb-4 flex justify-end">
               <button
                 onClick={() => handleOpenForm()}
-                className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-xl shadow-lg transition duration-300 flex items-center"
+                className="font-semibold py-2.5 px-5 rounded-xl shadow-sm transition duration-200 flex items-center text-sm hover:opacity-90"
+                style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
               >
                 <span className="mr-2">+</span> New Order
               </button>
@@ -202,6 +209,8 @@ const AppContent: React.FC = () => {
             <POS onBack={() => setCurrentView('dashboard')} />
           ) : currentView === 'daily-report' ? (
             <DailyReport onSelectOrder={handleSelectOrderById} />
+          ) : currentView === 'settings' ? (
+            <Settings />
           ) : selectedOrder ? (
             <RepairOrderDetail order={selectedOrder} onBack={handleBackToList} onEdit={handleOpenForm} onDelete={handleDeleteOrder} onRefresh={handleRefreshOrder} />
           ) : (
@@ -253,7 +262,9 @@ const App: React.FC = () => {
 const Root: React.FC = () => {
   return (
     <AuthProvider>
-      <App />
+      <AppConfigProvider>
+        <App />
+      </AppConfigProvider>
     </AuthProvider>
   );
 };

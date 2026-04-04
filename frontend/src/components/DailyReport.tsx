@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { isErpNext } from '../services/apiService';
+import { useAppConfig } from '../context/AppConfigContext';
 import { todayISO } from './reports/reportShared';
 import type { DailyReportData } from './reports/reportShared';
 import RepairSummaryReport from './reports/RepairSummaryReport';
@@ -50,6 +51,7 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
     const [data, setData] = useState<DailyReportData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const { config } = useAppConfig();
 
     const loadReport = useCallback(async (date: string) => {
         if (!isErpNext) {
@@ -105,7 +107,7 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
                         {isLoading ? 'Loading…' : 'Refresh'}
                     </button>
                     <button
-                        onClick={() => data && printReport(activeTab, data)}
+                        onClick={() => data && printReport(activeTab, data, { logoUrl: config.logoUrl, currencySymbol: config.currencySymbol, decimalPlaces: config.decimalPlaces })}
                         disabled={!data}
                         className="px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-40"
                     >

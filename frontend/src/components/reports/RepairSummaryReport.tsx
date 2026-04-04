@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAppConfig } from '../../context/AppConfigContext';
 import {
     fmt,
     StatCard,
@@ -20,6 +21,7 @@ interface RepairSummaryReportProps {
 }
 
 const RepairSummaryReport: React.FC<RepairSummaryReportProps> = ({ data, onSelectOrder }) => {
+    const { formatCurrency } = useAppConfig();
     const maxTasks = Math.max(...(data.technician_tasks.map(t => t.tasks_completed)), 1);
 
     return (
@@ -136,7 +138,7 @@ const RepairSummaryReport: React.FC<RepairSummaryReportProps> = ({ data, onSelec
                                                 {o.customer_name}
                                             </td>
                                             <td className="py-2 text-right text-gray-800 dark:text-gray-200 font-medium">
-                                                {o.invoiced_amount ? `$${fmt(o.invoiced_amount)}` : '—'}
+                                                {o.invoiced_amount ? formatCurrency(o.invoiced_amount) : '—'}
                                             </td>
                                         </tr>
                                     ))}
@@ -230,7 +232,7 @@ const RepairSummaryReport: React.FC<RepairSummaryReportProps> = ({ data, onSelec
                                             <td className="py-2 pr-3 text-gray-700 dark:text-gray-300">{p.item_name}</td>
                                             <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400">{p.total_qty}</td>
                                             <td className="py-2 text-right font-medium text-gray-800 dark:text-gray-200">
-                                                ${fmt(p.total_amount)}
+                                                {formatCurrency(p.total_amount)}
                                             </td>
                                         </tr>
                                     ))}
@@ -242,7 +244,7 @@ const RepairSummaryReport: React.FC<RepairSummaryReportProps> = ({ data, onSelec
                                             {data.parts_used.reduce((s, p) => s + p.total_qty, 0)}
                                         </td>
                                         <td className="pt-2 text-right text-sm font-bold text-gray-800 dark:text-gray-200">
-                                            ${fmt(data.parts_used.reduce((s, p) => s + p.total_amount, 0))}
+                                            {formatCurrency(data.parts_used.reduce((s, p) => s + p.total_amount, 0))}
                                         </td>
                                     </tr>
                                 </tfoot>

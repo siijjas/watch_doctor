@@ -3,6 +3,7 @@ import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import * as apiService from '../services/apiService';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface PaymentModalProps {
     isOpen: boolean;
@@ -21,6 +22,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
     invoiceAmount,
     onSuccess
 }) => {
+    const { formatCurrency } = useAppConfig();
     const [discount, setDiscount] = useState<number>(0);
     const [paymentMode, setPaymentMode] = useState<string>('Cash');
     const [markAsDelivered, setMarkAsDelivered] = useState<boolean>(true);
@@ -99,7 +101,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
                 {/* Invoice Amount */}
                 <div className="flex justify-between items-center p-3 bg-gray-100 dark:bg-gray-800 rounded">
                     <span className="font-medium">Invoice Amount:</span>
-                    <span className="text-lg font-bold text-blue-600">${invoiceAmount.toFixed(2)}</span>
+                    <span className="text-lg font-bold text-blue-600">{formatCurrency(invoiceAmount)}</span>
                 </div>
 
                 {/* Discount */}
@@ -121,7 +123,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
                 <div className="flex justify-between items-center p-3 bg-green-100 dark:bg-green-900 rounded">
                     <span className="font-medium">Final Amount:</span>
                     <span className="text-xl font-bold text-green-600 dark:text-green-400">
-                        ${finalAmount.toFixed(2)}
+                        {formatCurrency(finalAmount)}
                     </span>
                 </div>
 

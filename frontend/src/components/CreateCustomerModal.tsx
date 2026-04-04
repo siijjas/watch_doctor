@@ -18,6 +18,13 @@ interface CountryCode {
     code: string;
 }
 
+const toTitleCase = (value: string): string =>
+    value
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
 export const CreateCustomerModal: React.FC<CreateCustomerModalProps> = ({ isOpen, onClose, initialName = '', onCustomerCreated }) => {
     const [name, setName] = useState(initialName);
     const [mobile, setMobile] = useState('');
@@ -80,13 +87,15 @@ export const CreateCustomerModal: React.FC<CreateCustomerModalProps> = ({ isOpen
             return;
         }
 
+        const normalizedName = toTitleCase(name);
+
         setIsSubmitting(true);
         try {
             // Combine country code and mobile
             const fullMobile = mobile ? `${selectedCode}${mobile}` : undefined;
 
             const newCustomer = await apiService.createCustomer({
-                customer_name: name,
+                customer_name: normalizedName,
                 mobile_no: fullMobile,
                 email_id: email
             });
@@ -113,6 +122,7 @@ export const CreateCustomerModal: React.FC<CreateCustomerModalProps> = ({ isOpen
                     label="Customer Name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    onBlur={() => setName((prev) => toTitleCase(prev))}
                     placeholder="e.g. John Doe"
                     required
                 />

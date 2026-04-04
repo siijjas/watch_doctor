@@ -3,6 +3,7 @@ import type { RepairOrder, RepairTaskTemplate, Item } from '../types';
 import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Select } from './ui/Select';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface CreateQuotationModalProps {
     isOpen: boolean;
@@ -21,6 +22,7 @@ export const CreateQuotationModal: React.FC<CreateQuotationModalProps> = ({
     taskTemplates,
     allItems
 }) => {
+    const { formatCurrency } = useAppConfig();
     const [quotationType, setQuotationType] = useState<'Estimate' | 'Final'>('Estimate');
     const [selectionMode, setSelectionMode] = useState<'all' | 'specific'>('all');
     const [selectedWatchIndices, setSelectedWatchIndices] = useState<number[]>([]);
@@ -178,7 +180,7 @@ export const CreateQuotationModal: React.FC<CreateQuotationModalProps> = ({
                                         </div>
                                         <div className="text-right">
                                             <div className="font-semibold text-green-600 dark:text-green-400">
-                                                ${watchCost.toFixed(2)}
+                                                {formatCurrency(watchCost)}
                                             </div>
                                         </div>
                                     </label>
@@ -207,7 +209,7 @@ export const CreateQuotationModal: React.FC<CreateQuotationModalProps> = ({
                         <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
                             <span className="font-semibold text-gray-900 dark:text-gray-100">Total Amount:</span>
                             <span className="font-bold text-lg text-green-600 dark:text-green-400">
-                                ${getTotalAmount().toFixed(2)}
+                                {formatCurrency(getTotalAmount())}
                             </span>
                         </div>
                     </div>

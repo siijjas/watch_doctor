@@ -4,6 +4,7 @@ import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Select } from './ui/Select';
 import { Input } from './ui/Input';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface CreateInvoiceModalProps {
     isOpen: boolean;
@@ -20,6 +21,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
     order,
     hasQuotation
 }) => {
+    const { formatCurrency } = useAppConfig();
     const [sourceType, setSourceType] = useState<'quotation' | 'order'>(hasQuotation ? 'quotation' : 'order');
     const [paymentType, setPaymentType] = useState<'full' | 'advance' | 'balance'>('full');
     const [customAmount, setCustomAmount] = useState<string>('');
@@ -65,7 +67,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
         }
 
         if (amount > balanceAmount) {
-            alert(`Amount cannot exceed balance due (${balanceAmount.toFixed(2)})`);
+            alert(`Amount cannot exceed balance due (${formatCurrency(balanceAmount)})`);
             return;
         }
 
@@ -137,7 +139,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                         />
                         {paymentType === 'advance' && (
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                Suggested: {(totalAmount * 0.5).toFixed(2)} (50% advance)
+                                Suggested: {formatCurrency(totalAmount * 0.5)} (50% advance)
                             </p>
                         )}
                     </div>
@@ -150,7 +152,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                         <div className="flex justify-between">
                             <span className="text-gray-600 dark:text-gray-400">Total Amount:</span>
                             <span className="font-medium text-gray-900 dark:text-gray-100">
-                                ${totalAmount.toFixed(2)}
+                                {formatCurrency(totalAmount)}
                             </span>
                         </div>
                         {paidAmount > 0 && (
@@ -158,13 +160,13 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                                 <div className="flex justify-between">
                                     <span className="text-gray-600 dark:text-gray-400">Paid Amount:</span>
                                     <span className="font-medium text-gray-900 dark:text-gray-100">
-                                        ${paidAmount.toFixed(2)}
+                                        {formatCurrency(paidAmount)}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-gray-600 dark:text-gray-400">Balance Due:</span>
                                     <span className="font-medium text-gray-900 dark:text-gray-100">
-                                        ${balanceAmount.toFixed(2)}
+                                        {formatCurrency(balanceAmount)}
                                     </span>
                                 </div>
                             </>
@@ -172,16 +174,16 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                         <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
                             <span className="font-semibold text-gray-900 dark:text-gray-100">Invoice Amount:</span>
                             <span className="font-bold text-lg text-green-600 dark:text-green-400">
-                                ${paymentType === 'full'
-                                    ? totalAmount.toFixed(2)
-                                    : (customAmount ? parseFloat(customAmount).toFixed(2) : '0.00')}
+                                {paymentType === 'full'
+                                    ? formatCurrency(totalAmount)
+                                    : formatCurrency(customAmount ? parseFloat(customAmount) : 0)}
                             </span>
                         </div>
                         {paymentType !== 'full' && customAmount && (
                             <div className="flex justify-between text-xs">
                                 <span className="text-gray-500 dark:text-gray-400">Remaining Balance:</span>
                                 <span className="text-gray-500 dark:text-gray-400">
-                                    ${(balanceAmount - parseFloat(customAmount || '0')).toFixed(2)}
+                                    {formatCurrency(balanceAmount - parseFloat(customAmount || '0'))}
                                 </span>
                             </div>
                         )}

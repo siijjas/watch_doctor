@@ -10,13 +10,13 @@ export const Input: React.FC<InputProps> = ({ label, id, className, ...props }) 
   return (
     <div className="w-full">
       {label && (
-        <label htmlFor={inputId} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label htmlFor={inputId} className="block text-sm font-medium text-gray-700 mb-1">
           {label}
         </label>
       )}
       <input
         id={inputId}
-        className={`w-full p-2 border border-gray-300 rounded-md shadow-sm dark:bg-gray-700 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500 ${className || ''}`}
+        className={`w-full px-3 py-2.5 border border-[#E8E8E8] rounded-xl bg-white text-sm shadow-sm focus:ring-[#648DDA] focus:border-[#648DDA] ${className || ''}`}
         {...props}
       />
     </div>

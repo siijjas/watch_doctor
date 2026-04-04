@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAppConfig } from '../../context/AppConfigContext';
 import {
     fmt,
     StatCard,
@@ -32,6 +33,7 @@ interface FinancialSummaryReportProps {
 const EMPTY_FINANCIAL: FinancialReportData = { total_expenses: 0, expense_breakdown: [], expense_entries: [], repair_payment_breakdown: [] };
 
 const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair, pos, financial: financialRaw }) => {
+    const { formatCurrency } = useAppConfig();
     const financial = financialRaw ?? EMPTY_FINANCIAL;
     const totalRevenue = repair.revenue + pos.total_sales;
     const totalExpenses = financial.total_expenses;
@@ -61,19 +63,19 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <StatCard
                     label="Total Revenue"
-                    value={`$${fmt(totalRevenue)}`}
+                    value={formatCurrency(totalRevenue)}
                     color="emerald"
                     icon={<TrendingIcon />}
                 />
                 <StatCard
                     label="Total Expenses"
-                    value={`$${fmt(totalExpenses)}`}
+                    value={formatCurrency(totalExpenses)}
                     color="rose"
                     icon={<ExpenseIcon />}
                 />
                 <StatCard
                     label="Net Revenue"
-                    value={`$${fmt(netRevenue)}`}
+                    value={formatCurrency(netRevenue)}
                     subLabel={netRevenue >= 0 ? 'Profitable' : 'Loss'}
                     color={netColor}
                     icon={<NetIcon />}
@@ -101,10 +103,10 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                 {modeBalances.map((mb, idx) => (
                                     <tr key={idx}>
                                         <td className="py-2 pr-3 font-medium text-gray-700 dark:text-gray-300">{mb.mode_of_payment}</td>
-                                        <td className="py-2 pr-3 text-right text-emerald-600 dark:text-emerald-400">${fmt(mb.income)}</td>
-                                        <td className="py-2 pr-3 text-right text-rose-600 dark:text-rose-400">{mb.expenses > 0 ? `$${fmt(mb.expenses)}` : '—'}</td>
+                                        <td className="py-2 pr-3 text-right text-emerald-600 dark:text-emerald-400">{formatCurrency(mb.income)}</td>
+                                        <td className="py-2 pr-3 text-right text-rose-600 dark:text-rose-400">{mb.expenses > 0 ? formatCurrency(mb.expenses) : '—'}</td>
                                         <td className={`py-2 text-right font-semibold ${ mb.balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                                            {mb.balance < 0 ? '−' : ''}${fmt(Math.abs(mb.balance))}
+                                            {mb.balance < 0 ? '−' : ''}{formatCurrency(Math.abs(mb.balance))}
                                         </td>
                                     </tr>
                                 ))}
@@ -112,10 +114,10 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             <tfoot>
                                 <tr className="border-t border-gray-200 dark:border-gray-600 font-bold">
                                     <td className="pt-2 text-sm text-gray-700 dark:text-gray-300">Total</td>
-                                    <td className="pt-2 text-right text-sm text-emerald-600 dark:text-emerald-400">${fmt(modeBalances.reduce((s, m) => s + m.income, 0))}</td>
-                                    <td className="pt-2 text-right text-sm text-rose-600 dark:text-rose-400">${fmt(modeBalances.reduce((s, m) => s + m.expenses, 0))}</td>
+                                    <td className="pt-2 text-right text-sm text-emerald-600 dark:text-emerald-400">{formatCurrency(modeBalances.reduce((s, m) => s + m.income, 0))}</td>
+                                    <td className="pt-2 text-right text-sm text-rose-600 dark:text-rose-400">{formatCurrency(modeBalances.reduce((s, m) => s + m.expenses, 0))}</td>
                                     <td className={`pt-2 text-right text-sm ${netRevenue >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                                        {netRevenue < 0 ? '−' : ''}${fmt(Math.abs(netRevenue))}
+                                        {netRevenue < 0 ? '−' : ''}{formatCurrency(Math.abs(netRevenue))}
                                     </td>
                                 </tr>
                             </tfoot>
@@ -147,7 +149,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                                 <span className="text-sm text-gray-700 dark:text-gray-300">{e.mode_of_payment}</span>
                                                 <span className="text-xs text-gray-400">({e.count} {e.count === 1 ? 'entry' : 'entries'})</span>
                                             </div>
-                                            <span className="text-sm font-semibold text-gray-900 dark:text-white">${fmt(e.total)}</span>
+                                            <span className="text-sm font-semibold text-gray-900 dark:text-white">{formatCurrency(e.total)}</span>
                                         </div>
                                         <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                                             <div className="h-2 bg-rose-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
@@ -158,7 +160,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             })}
                             <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-between text-sm font-bold text-gray-900 dark:text-white">
                                 <span>Total Expenses</span>
-                                <span className="text-rose-600 dark:text-rose-400">${fmt(totalExpenses)}</span>
+                                <span className="text-rose-600 dark:text-rose-400">{formatCurrency(totalExpenses)}</span>
                             </div>
                         </div>
                     )}
@@ -196,7 +198,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                                 {e.remarks || '—'}
                                             </td>
                                             <td className="py-2 text-right font-semibold text-rose-600 dark:text-rose-400">
-                                                ${fmt(e.amount)}
+                                                {formatCurrency(e.amount)}
                                             </td>
                                         </tr>
                                     ))}
@@ -205,7 +207,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                     <tr className="border-t border-gray-200 dark:border-gray-600">
                                         <td colSpan={4} className="pt-2 text-sm font-bold text-gray-700 dark:text-gray-300">Total</td>
                                         <td className="pt-2 text-right text-sm font-bold text-rose-600 dark:text-rose-400">
-                                            ${fmt(totalExpenses)}
+                                            {formatCurrency(totalExpenses)}
                                         </td>
                                     </tr>
                                 </tfoot>
@@ -223,24 +225,24 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                     <div className="space-y-3">
                         <div className="flex justify-between text-sm">
                             <span className="text-gray-600 dark:text-gray-400">Repair Revenue</span>
-                            <span className="font-semibold text-gray-900 dark:text-white">${fmt(repair.revenue)}</span>
+                            <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(repair.revenue)}</span>
                         </div>
                         <div className="flex justify-between text-sm">
                             <span className="text-gray-600 dark:text-gray-400">POS Revenue</span>
-                            <span className="font-semibold text-gray-900 dark:text-white">${fmt(pos.total_sales)}</span>
+                            <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(pos.total_sales)}</span>
                         </div>
                         <div className="flex justify-between text-sm font-semibold border-t border-gray-100 dark:border-gray-700 pt-2">
                             <span className="text-gray-700 dark:text-gray-300">Total Revenue</span>
-                            <span className="text-gray-900 dark:text-white">${fmt(totalRevenue)}</span>
+                            <span className="text-gray-900 dark:text-white">{formatCurrency(totalRevenue)}</span>
                         </div>
                         <div className="flex justify-between text-sm">
                             <span className="text-gray-600 dark:text-gray-400">Total Expenses</span>
-                            <span className="font-semibold text-rose-600 dark:text-rose-400">− ${fmt(totalExpenses)}</span>
+                            <span className="font-semibold text-rose-600 dark:text-rose-400">− {formatCurrency(totalExpenses)}</span>
                         </div>
                         <div className={`flex justify-between text-base font-bold border-t-2 pt-3 ${netRevenue >= 0 ? 'border-emerald-200 dark:border-emerald-700' : 'border-rose-200 dark:border-rose-700'}`}>
                             <span className="text-gray-900 dark:text-white">Net Revenue</span>
                             <span className={netRevenue >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
-                                {netRevenue < 0 ? '−' : ''} ${fmt(Math.abs(netRevenue))}
+                                {netRevenue < 0 ? '−' : ''} {formatCurrency(Math.abs(netRevenue))}
                             </span>
                         </div>
                     </div>
@@ -261,7 +263,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                         {repair.invoice_count > 0 && (
                             <div className="flex justify-between text-sm">
                                 <span className="text-gray-600 dark:text-gray-400">Avg. per Invoice</span>
-                                <span className="font-semibold text-gray-900 dark:text-white">${fmt(repair.revenue / repair.invoice_count)}</span>
+                                <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(repair.revenue / repair.invoice_count)}</span>
                             </div>
                         )}
                         <p className="text-xs uppercase tracking-wide text-gray-400 font-medium pt-2">POS</p>
@@ -306,12 +308,12 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                         <span className="text-sm text-gray-700 dark:text-gray-300">{p.mode_of_payment}</span>
                                         <span className="text-xs text-gray-400">({p.txn_count} txn{p.txn_count !== 1 ? 's' : ''})</span>
                                     </div>
-                                    <span className="text-sm font-semibold text-gray-900 dark:text-white">${fmt(p.total)}</span>
+                                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{formatCurrency(p.total)}</span>
                                 </div>
                             ))}
                             <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-between text-sm font-bold text-gray-900 dark:text-white">
                                 <span>Total POS</span>
-                                <span>${fmt(pos.total_sales)}</span>
+                                <span>{formatCurrency(pos.total_sales)}</span>
                             </div>
                         </div>
                     )}

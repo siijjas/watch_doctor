@@ -1,7 +1,12 @@
 import type { DailyReportData } from './reportShared';
 
+// These are set once per print call via printReport()
+let _currencySymbol = '$';
+let _decimalPlaces = 2;
+let _logoUrl = '';
+
 const fmt = (n: number) =>
-    n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    `${_currencySymbol}${n.toLocaleString('en-US', { minimumFractionDigits: _decimalPlaces, maximumFractionDigits: _decimalPlaces })}`;
 
 const fmtDate = (iso: string) => {
     const d = new Date(iso + 'T00:00:00');
@@ -121,12 +126,12 @@ function statusBadge(status: string): string {
 
 function header(title: string, date: string): string {
     const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    const logoHtml = _logoUrl
+        ? `<img src="${_logoUrl}" alt="Logo" style="max-height:44px;max-width:180px;object-fit:contain;" />`
+        : `<div class="rpt-logo-icon">⌚</div><div class="rpt-logo-name">WatchDoc</div>`;
     return `
     <div class="rpt-header">
-        <div class="rpt-logo">
-            <div class="rpt-logo-icon">⌚</div>
-            <div class="rpt-logo-name">WatchDoc</div>
-        </div>
+        <div class="rpt-logo">${logoHtml}</div>
         <div class="rpt-meta">
             <div class="rpt-title">${title}</div>
             <div class="rpt-date">${fmtDate(date)}</div>
@@ -166,7 +171,7 @@ function buildRepairHtml(data: DailyReportData): string {
                 ${r.completed_orders.map(o => `<tr>
                     <td class="mono">${o.name}</td>
                     <td>${o.customer_name}</td>
-                    <td class="amount">${o.invoiced_amount ? '$' + fmt(o.invoiced_amount) : '—'}</td>
+                    <td class="amount">${o.invoiced_amount ? fmt(o.invoiced_amount) : '—'}</td>
                 </tr>`).join('')}
             </tbody>
         </table>`;
@@ -206,13 +211,13 @@ function buildRepairHtml(data: DailyReportData): string {
                 ${r.parts_used.map(p => `<tr>
                     <td>${p.item_name}</td>
                     <td class="right">${p.total_qty}</td>
-                    <td class="amount">$${fmt(p.total_amount)}</td>
+                    <td class="amount">${fmt(p.total_amount)}</td>
                 </tr>`).join('')}
             </tbody>
             <tfoot><tr class="total-row">
                 <td>Total</td>
                 <td class="right">${partsTotalQty}</td>
-                <td class="amount">$${fmt(partsTotalAmt)}</td>
+                <td class="amount">${fmt(partsTotalAmt)}</td>
             </tr></tfoot>
         </table>`;
 
@@ -276,13 +281,13 @@ function buildSalesHtml(data: DailyReportData): string {
             return `<div class="bar-row">
                 <div class="bar-meta">
                     <span>${pm.mode_of_payment} <span style="color:#9ca3af;font-size:10px">(${pm.txn_count} txn${pm.txn_count !== 1 ? 's' : ''})</span></span>
-                    <span><strong>$${fmt(pm.total)}</strong> <span style="color:#9ca3af">${pct}%</span></span>
+                    <span><strong>${fmt(pm.total)}</strong> <span style="color:#9ca3af">${pct}%</span></span>
                 </div>
                 <div class="bar-track"><div class="bar-fill bar-fill-teal" style="width:${pct}%"></div></div>
             </div>`;
         }).join('')}
         <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid #e5e7eb;padding-top:8px;margin-top:8px">
-            <span>Total</span><span>$${fmt(p.total_sales)}</span>
+            <span>Total</span><span>${fmt(p.total_sales)}</span>
         </div>`;
 
     const itemsSection = p.items_sold.length === 0
@@ -295,13 +300,13 @@ function buildSalesHtml(data: DailyReportData): string {
                 ${p.items_sold.map(item => `<tr>
                     <td>${item.item_name}</td>
                     <td class="right">${item.total_qty}</td>
-                    <td class="amount">$${fmt(item.total_amount)}</td>
+                    <td class="amount">${fmt(item.total_amount)}</td>
                 </tr>`).join('')}
             </tbody>
             <tfoot><tr class="total-row">
                 <td>Total</td>
                 <td class="right">${totalQty}</td>
-                <td class="amount">$${fmt(p.total_sales)}</td>
+                <td class="amount">${fmt(p.total_sales)}</td>
             </tr></tfoot>
         </table>`;
 
@@ -311,7 +316,7 @@ function buildSalesHtml(data: DailyReportData): string {
         <div class="stats stats-3">
             <div class="stat stat-teal">
                 <div class="stat-label">POS Total Sales</div>
-                <div class="stat-value">$${fmt(p.total_sales)}</div>
+                <div class="stat-value">${fmt(p.total_sales)}</div>
             </div>
             <div class="stat stat-indigo">
                 <div class="stat-label">Transactions</div>
@@ -351,14 +356,14 @@ function buildFinancialHtml(data: DailyReportData): string {
             return `<div class="bar-row">
                 <div class="bar-meta">
                     <span>${e.mode_of_payment} <span style="color:#9ca3af;font-size:10px">(${e.count} ${e.count === 1 ? 'entry' : 'entries'})</span></span>
-                    <span><strong class="text-rose">$${fmt(e.total)}</strong> <span style="color:#9ca3af">${pct}%</span></span>
+                    <span><strong class="text-rose">${fmt(e.total)}</strong> <span style="color:#9ca3af">${pct}%</span></span>
                 </div>
                 <div class="bar-track"><div class="bar-fill bar-fill-rose" style="width:${pct}%"></div></div>
             </div>`;
         }).join('')}
         <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid #e5e7eb;padding-top:8px;margin-top:8px">
             <span>Total Expenses</span>
-            <span class="text-rose">$${fmt(fin.total_expenses)}</span>
+            <span class="text-rose">${fmt(fin.total_expenses)}</span>
         </div>`;
 
     const expenseEntries = !fin.expense_entries || fin.expense_entries.length === 0
@@ -373,12 +378,12 @@ function buildFinancialHtml(data: DailyReportData): string {
                     <td>${e.mode_of_payment}</td>
                     <td>${e.debit_account || '—'}</td>
                     <td>${e.remarks || '—'}</td>
-                    <td class="amount-rose">$${fmt(e.amount)}</td>
+                    <td class="amount-rose">${fmt(e.amount)}</td>
                 </tr>`).join('')}
             </tbody>
             <tfoot><tr class="total-row">
                 <td colspan="4">Total</td>
-                <td class="amount-rose">$${fmt(fin.total_expenses)}</td>
+                <td class="amount-rose">${fmt(fin.total_expenses)}</td>
             </tr></tfoot>
         </table>`;
 
@@ -406,16 +411,16 @@ function buildFinancialHtml(data: DailyReportData): string {
             <tbody>
                 ${modeBalances.map(mb => `<tr>
                     <td>${mb.mode}</td>
-                    <td class="amount">$${fmt(mb.income)}</td>
-                    <td class="${mb.expenses > 0 ? 'amount-rose' : 'right'} ">${mb.expenses > 0 ? `$${fmt(mb.expenses)}` : '—'}</td>
-                    <td class="${mb.balance >= 0 ? 'amount' : 'amount-rose'}">${mb.balance < 0 ? '−' : ''}$${fmt(Math.abs(mb.balance))}</td>
+                    <td class="amount">${fmt(mb.income)}</td>
+                    <td class="${mb.expenses > 0 ? 'amount-rose' : 'right'} ">${mb.expenses > 0 ? `${fmt(mb.expenses)}` : '—'}</td>
+                    <td class="${mb.balance >= 0 ? 'amount' : 'amount-rose'}">${mb.balance < 0 ? '−' : ''}${fmt(Math.abs(mb.balance))}</td>
                 </tr>`).join('')}
             </tbody>
             <tfoot><tr class="total-row">
                 <td>Total</td>
-                <td class="amount">$${fmt(totalIncome)}</td>
-                <td class="amount-rose">$${fmt(totalExpOut)}</td>
-                <td class="${net >= 0 ? 'amount' : 'amount-rose'}">${net < 0 ? '−' : ''}$${fmt(Math.abs(net))}</td>
+                <td class="amount">${fmt(totalIncome)}</td>
+                <td class="amount-rose">${fmt(totalExpOut)}</td>
+                <td class="${net >= 0 ? 'amount' : 'amount-rose'}">${net < 0 ? '−' : ''}${fmt(Math.abs(net))}</td>
             </tr></tfoot>
         </table>`;
 
@@ -425,15 +430,15 @@ function buildFinancialHtml(data: DailyReportData): string {
         <div class="stats stats-3">
             <div class="stat stat-green">
                 <div class="stat-label">Total Revenue</div>
-                <div class="stat-value">$${fmt(totalRevenue)}</div>
+                <div class="stat-value">${fmt(totalRevenue)}</div>
             </div>
             <div class="stat stat-rose">
                 <div class="stat-label">Total Expenses</div>
-                <div class="stat-value">$${fmt(fin.total_expenses)}</div>
+                <div class="stat-value">${fmt(fin.total_expenses)}</div>
             </div>
             <div class="stat ${net >= 0 ? 'stat-green' : 'stat-rose'}">
                 <div class="stat-label">Net Revenue</div>
-                <div class="stat-value ${netClass}">${net < 0 ? '−' : ''}$${fmt(Math.abs(net))}</div>
+                <div class="stat-value ${netClass}">${net < 0 ? '−' : ''}${fmt(Math.abs(net))}</div>
                 <div class="stat-sub">${net >= 0 ? 'Profitable' : 'Loss'}</div>
             </div>
         </div>
@@ -446,11 +451,11 @@ function buildFinancialHtml(data: DailyReportData): string {
         <div class="grid-2">
             <div class="card">
                 <div class="section-title">Net Revenue Summary</div>
-                <div class="net-row"><span>Repair Revenue</span><span>$${fmt(r.revenue)}</span></div>
-                <div class="net-row"><span>POS Revenue</span><span>$${fmt(p.total_sales)}</span></div>
-                <div class="net-row subtotal"><span>Total Revenue</span><span>$${fmt(totalRevenue)}</span></div>
-                <div class="net-row"><span>Total Expenses</span><span class="text-rose">− $${fmt(fin.total_expenses)}</span></div>
-                <div class="net-row total"><span>Net Revenue</span><span class="${netClass}">${net < 0 ? '−' : ''}$${fmt(Math.abs(net))}</span></div>
+                <div class="net-row"><span>Repair Revenue</span><span>${fmt(r.revenue)}</span></div>
+                <div class="net-row"><span>POS Revenue</span><span>${fmt(p.total_sales)}</span></div>
+                <div class="net-row subtotal"><span>Total Revenue</span><span>${fmt(totalRevenue)}</span></div>
+                <div class="net-row"><span>Total Expenses</span><span class="text-rose">− ${fmt(fin.total_expenses)}</span></div>
+                <div class="net-row total"><span>Net Revenue</span><span class="${netClass}">${net < 0 ? '−' : ''}${fmt(Math.abs(net))}</span></div>
             </div>
             <div class="card">
                 <div class="section-title">Expenses by Payment Mode</div>
@@ -475,12 +480,12 @@ function buildFinancialHtml(data: DailyReportData): string {
                         ${p.payment_breakdown.map(pm => `<tr>
                             <td>${pm.mode_of_payment}</td>
                             <td>${pm.txn_count}</td>
-                            <td class="amount">$${fmt(pm.total)}</td>
+                            <td class="amount">${fmt(pm.total)}</td>
                         </tr>`).join('')}
                     </tbody>
                     <tfoot><tr class="total-row">
                         <td colspan="2">Total POS</td>
-                        <td class="amount">$${fmt(p.total_sales)}</td>
+                        <td class="amount">${fmt(p.total_sales)}</td>
                     </tr></tfoot>
                 </table>`}
         </div>
@@ -489,14 +494,14 @@ function buildFinancialHtml(data: DailyReportData): string {
             <div class="card">
                 <div class="section-title">Transaction Details — Repair</div>
                 <div class="net-row"><span>Invoices Issued</span><span>${r.invoice_count}</span></div>
-                <div class="net-row"><span>Total Invoiced</span><span>$${fmt(r.revenue)}</span></div>
-                ${r.invoice_count > 0 ? `<div class="net-row"><span>Avg. per Invoice</span><span>$${fmt(r.revenue / r.invoice_count)}</span></div>` : ''}
+                <div class="net-row"><span>Total Invoiced</span><span>${fmt(r.revenue)}</span></div>
+                ${r.invoice_count > 0 ? `<div class="net-row"><span>Avg. per Invoice</span><span>${fmt(r.revenue / r.invoice_count)}</span></div>` : ''}
                 <div class="net-row"><span>Orders Completed</span><span>${r.completed_count}</span></div>
             </div>
             <div class="card">
                 <div class="section-title">Transaction Details — POS</div>
                 <div class="net-row"><span>Transactions</span><span>${p.transaction_count}</span></div>
-                <div class="net-row"><span>Total Sales</span><span>$${fmt(p.total_sales)}</span></div>
+                <div class="net-row"><span>Total Sales</span><span>${fmt(p.total_sales)}</span></div>
                 <div class="net-row"><span>Unique Items Sold</span><span>${p.items_sold.length}</span></div>
                 ${fin.expense_breakdown.length > 0
                     ? `<div class="net-row"><span>Expense Entries</span><span>${fin.expense_entries?.length ?? 0}</span></div>` : ''}
@@ -505,7 +510,15 @@ function buildFinancialHtml(data: DailyReportData): string {
 }
 
 // ─────────────── Main entry point ───────────────
-export function printReport(tab: 'repair' | 'sales' | 'financial', data: DailyReportData): void {
+export function printReport(
+    tab: 'repair' | 'sales' | 'financial',
+    data: DailyReportData,
+    options?: { logoUrl?: string; currencySymbol?: string; decimalPlaces?: number }
+): void {
+    // Apply display settings
+    _logoUrl = options?.logoUrl ?? '';
+    _currencySymbol = options?.currencySymbol ?? '$';
+    _decimalPlaces = typeof options?.decimalPlaces === 'number' ? options.decimalPlaces : 2;
     const builders: Record<typeof tab, (d: DailyReportData) => string> = {
         repair: buildRepairHtml,
         sales: buildSalesHtml,

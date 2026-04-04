@@ -61,9 +61,7 @@ const cleanPayload = (obj: any): any => {
     if (obj !== null && typeof obj === 'object') {
         // Remove ALL Frappe system fields that cannot be modified
         const {
-            creation,
             modified_by,
-            owner,
             simple_description,
             docstatus,
             __islocal,
@@ -622,6 +620,45 @@ export const getPaymentModes = async (): Promise<any[]> => {
         body: JSON.stringify({}),
     });
     return res.message || [];
+};
+
+// ==================== App Config APIs ====================
+
+export const getAppConfig = async (): Promise<{ logo_url: string; currency_code: string; currency_symbol: string; decimal_places: number }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_app_config', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message || { logo_url: '', currency_code: 'USD', currency_symbol: '$', decimal_places: 2 };
+};
+
+export const saveLogoUrl = async (logoUrl: string): Promise<void> => {
+    await apiFetch('/api/method/watch_doctor.api.save_logo_url', {
+        method: 'POST',
+        body: JSON.stringify({ logo_url: logoUrl }),
+    });
+};
+
+export const uploadFile = async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('is_private', '0');
+    formData.append('folder', 'Home/Attachments');
+
+    const response = await fetch('/api/method/upload_file', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+            'X-Frappe-CSRF-Token': window.csrf_token || window.frappe?.csrf_token || '',
+        },
+        body: formData,
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Upload failed: ${response.status}`);
+    }
+    const data = await response.json();
+    return data.message?.file_url || '';
 };
 
 // ==================== POS APIs ====================

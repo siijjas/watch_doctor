@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAppConfig } from '../../context/AppConfigContext';
 import {
     fmt,
     StatCard,
@@ -15,6 +16,7 @@ interface SalesSummaryReportProps {
 }
 
 const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
+    const { formatCurrency } = useAppConfig();
     const totalQty = data.items_sold.reduce((s, i) => s + i.total_qty, 0);
 
     return (
@@ -23,7 +25,7 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <StatCard
                     label="POS Total Sales"
-                    value={`$${fmt(data.total_sales)}`}
+                    value={formatCurrency(data.total_sales)}
                     color="teal"
                     icon={<POSIcon />}
                 />
@@ -71,7 +73,7 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                                                 </span>
                                             </div>
                                             <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                                                ${fmt(p.total)}
+                                                {formatCurrency(p.total)}
                                             </span>
                                         </div>
                                         <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
@@ -86,7 +88,7 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                             })}
                             <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-between text-sm font-bold text-gray-900 dark:text-white">
                                 <span>Total</span>
-                                <span>${fmt(data.total_sales)}</span>
+                                <span>{formatCurrency(data.total_sales)}</span>
                             </div>
                         </div>
                     )}
@@ -120,7 +122,7 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                                                 {item.total_qty}
                                             </td>
                                             <td className="py-2 text-right font-medium text-gray-800 dark:text-gray-200">
-                                                ${fmt(item.total_amount)}
+                                                {formatCurrency(item.total_amount)}
                                             </td>
                                         </tr>
                                     ))}
@@ -132,7 +134,7 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                                             {totalQty}
                                         </td>
                                         <td className="pt-2 text-right text-sm font-bold text-gray-800 dark:text-gray-200">
-                                            ${fmt(data.total_sales)}
+                                            {formatCurrency(data.total_sales)}
                                         </td>
                                     </tr>
                                 </tfoot>

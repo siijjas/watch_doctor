@@ -13,6 +13,13 @@ interface CreateModelModalProps {
     onModelCreated: (model: WatchModel) => void;
 }
 
+const toTitleCase = (value: string): string =>
+    value
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
 export const CreateModelModal: React.FC<CreateModelModalProps> = ({ isOpen, onClose, brand, initialName = '', onModelCreated }) => {
     const [modelName, setModelName] = useState(initialName);
     const [description, setDescription] = useState('');
@@ -41,9 +48,11 @@ export const CreateModelModal: React.FC<CreateModelModalProps> = ({ isOpen, onCl
             return;
         }
 
+        const normalizedModelName = toTitleCase(modelName);
+
         setIsSubmitting(true);
         try {
-            const newModel = await apiService.createWatchModel(brand, modelName, description);
+            const newModel = await apiService.createWatchModel(brand, normalizedModelName, description);
             onModelCreated(newModel);
             onClose();
         } catch (err) {
@@ -71,6 +80,7 @@ export const CreateModelModal: React.FC<CreateModelModalProps> = ({ isOpen, onCl
                     label="Model Name"
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
+                    onBlur={() => setModelName((prev) => toTitleCase(prev))}
                     placeholder="e.g. Submariner"
                     required
                 />

@@ -8,6 +8,7 @@ import { Input } from './ui/Input';
 import { Select } from './ui/Select';
 import { Autocomplete } from './ui/Autocomplete';
 import { ConfirmDialog } from './ui/ConfirmDialog';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface AddPartModalProps {
     isOpen: boolean;
@@ -28,6 +29,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
     taskTemplates,
     initialTask
 }) => {
+    const { formatCurrency } = useAppConfig();
     const [formData, setFormData] = useState<RepairPartUsed>({
         part: '',
         quantity: 1,
@@ -108,7 +110,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
                     options={searchResults.map(p => ({
                         value: p.name,
                         label: `${p.item_code || p.name} - ${p.item_name}`,
-                        subtitle: `Stock: ${p.stock_qty || 0} ${p.stock_uom || ''} | Price: $${p.standard_rate || 0}`
+                        subtitle: `Stock: ${p.stock_qty || 0} ${p.stock_uom || ''} | Price: ${formatCurrency(p.standard_rate || 0)}`
                     }))}
                     value={formData.part}
                     onChange={(value) => {
@@ -139,7 +141,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
                             </div>
                             <div>
                                 <p className="font-semibold text-gray-700 dark:text-gray-300">Price:</p>
-                                <p className="font-medium text-green-600 dark:text-green-400">${selectedPart.standard_rate || 0}</p>
+                                <p className="font-medium text-green-600 dark:text-green-400">{formatCurrency(selectedPart.standard_rate || 0)}</p>
                             </div>
                         </div>
                         {selectedPart.description && <p className="italic mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">{selectedPart.description}</p>}

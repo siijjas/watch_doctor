@@ -129,7 +129,7 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
     return (
         <div ref={wrapperRef} className={`relative ${className}`}>
             {label && (
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
                     {label}
                 </label>
             )}
@@ -142,7 +142,7 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
                     onFocus={handleFocus}
                     onKeyDown={handleKeyDown}
                     placeholder={placeholder}
-                    className="w-full p-2 border border-gray-300 rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2.5 border border-[#E8E8E8] rounded-xl bg-white text-sm focus:ring-2 focus:ring-[#648DDA] focus:border-[#648DDA]"
                     autoComplete="off"
                 />
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -158,22 +158,22 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
             </div>
 
             {isOpen && filteredOptions.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg max-h-60 overflow-auto">
+                <div className="absolute z-50 w-full mt-1 bg-white border border-[#E8E8E8] rounded-xl shadow-lg max-h-60 overflow-auto">
                     {filteredOptions.map((option, index) => (
                         <div
                             key={option.value}
                             onClick={() => handleOptionClick(option.value)}
                             onMouseEnter={() => setHighlightedIndex(index)}
-                            className={`px-3 py-2 cursor-pointer transition-colors ${index === highlightedIndex
-                                ? 'bg-blue-100 dark:bg-blue-900'
-                                : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                            className={`px-3 py-2.5 cursor-pointer transition-colors ${index === highlightedIndex
+                                ? 'bg-[#F0EDEA]'
+                                : 'hover:bg-[#F9F7F4]'
                                 } ${option.value === value ? 'font-semibold' : ''}`}
                         >
-                            <div className="text-sm text-gray-900 dark:text-gray-100">
+                            <div className="text-sm text-gray-900">
                                 {option.label}
                             </div>
                             {option.subtitle && (
-                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                <div className="text-xs text-gray-500">
                                     {option.subtitle}
                                 </div>
                             )}
@@ -183,10 +183,10 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
             )}
 
             {isOpen && filteredOptions.length === 0 && searchQuery && (
-                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg overflow-hidden">
+                <div className="absolute z-50 w-full mt-1 bg-white border border-[#E8E8E8] rounded-xl shadow-lg overflow-hidden">
                     {onCreate ? (
                         <div
-                            className="px-3 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-sm text-blue-600 dark:text-blue-400 font-medium flex items-center"
+                            className="px-3 py-2.5 cursor-pointer hover:bg-[#F9F7F4] text-sm text-[#648DDA] font-medium flex items-center"
                             onClick={() => {
                                 onCreate(searchQuery);
                                 setIsOpen(false);
@@ -196,7 +196,7 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
                             <span className="mr-2 text-lg leading-none">+</span> Create "{searchQuery}"
                         </div>
                     ) : (
-                        <div className="p-3 text-sm text-gray-500 dark:text-gray-400">
+                        <div className="p-3 text-sm text-gray-500">
                             No results found
                         </div>
                     )}

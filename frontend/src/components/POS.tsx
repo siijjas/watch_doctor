@@ -4,12 +4,16 @@ import type { POSItem, POSCustomer, CartItem, POSDraft } from '../services/apiSe
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { useToast } from './ui/Toast';
+import { useAppConfig } from '../context/AppConfigContext';
 
 interface POSProps {
     onBack?: () => void;
 }
 
+const LAST_POS_CUSTOMER_KEY = 'watch_doctor_last_pos_customer';
+
 const POS: React.FC<POSProps> = ({ onBack }) => {
+    const { formatCurrency, config } = useAppConfig();
     const [items, setItems] = useState<POSItem[]>([]);
     const [customers, setCustomers] = useState<POSCustomer[]>([]);
     const [cart, setCart] = useState<CartItem[]>([]);
@@ -50,6 +54,11 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         loadDrafts();
     }, []);
 
+    useEffect(() => {
+        if (!selectedCustomer) return;
+        localStorage.setItem(LAST_POS_CUSTOMER_KEY, JSON.stringify(selectedCustomer));
+    }, [selectedCustomer]);
+
     const loadItems = async (search: string = '') => {
         setIsLoading(true);
         try {
@@ -66,6 +75,21 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         try {
             const data = await apiService.getPosCustomers(search);
             setCustomers(data);
+
+            if (!search && !selectedCustomer) {
+                try {
+                    const raw = localStorage.getItem(LAST_POS_CUSTOMER_KEY);
+                    if (raw) {
+                        const lastCustomer = JSON.parse(raw) as POSCustomer;
+                        const matched = data.find(c => c.name === lastCustomer.name);
+                        if (matched) {
+                            setSelectedCustomer(matched);
+                        }
+                    }
+                } catch {
+                    localStorage.removeItem(LAST_POS_CUSTOMER_KEY);
+                }
+            }
         } catch (error) {
             console.error('Failed to load customers:', error);
         }
@@ -180,7 +204,6 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
 
     const clearCart = () => {
         setCart([]);
-        setSelectedCustomer(null);
         setCurrentDraftName(null);
         setDiscountPercent(0);
         setDiscountAmountInput(0);
@@ -259,7 +282,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                     effectiveDiscountPercent
                 );
             }
-            showToast(`Invoice ${result.invoice_name} created! Total: €${result.grand_total.toFixed(2)}`, 'success');
+            showToast(`Invoice ${result.invoice_name} created! Total: ${formatCurrency(result.grand_total)}`, 'success');
             clearCart();
             setShowPaymentModal(false);
             loadDrafts();
@@ -271,18 +294,18 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     };
 
     return (
-        <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 overflow-hidden">
+        <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#FAF7F2' }}>
             {/* Toast Notification */}
             {ToastComponent}
             {/* Top Bar */}
-            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between shrink-0">
+            <div className="bg-white px-4 py-3 flex items-center justify-between shrink-0" style={{ borderBottom: '1px solid #F0EEEB' }}>
                 <div className="flex items-center space-x-4">
                     {onBack && (
                         <Button variant="ghost" onClick={onBack} className="text-sm">
                             ← Back
                         </Button>
                     )}
-                    <h1 className="text-xl font-bold text-gray-900 dark:text-white">Point of Sale</h1>
+                    <h1 className="text-xl font-bold text-gray-900">Point of Sale</h1>
                 </div>
                 <div className="flex items-center space-x-2">
                     <Button
@@ -319,7 +342,8 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                 placeholder="Search items..."
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full pl-12 pr-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                                className="w-full pl-12 pr-4 py-3 rounded-xl bg-white text-gray-900"
+                                style={{ border: '1px solid #E8E8E8' }}
                             />
                         </div>
                     </div>
@@ -338,10 +362,11 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                     <div
                                         key={item.name}
                                         onClick={() => addToCart(item)}
-                                        className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-3 cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all flex items-center justify-between"
+                                        className="bg-white rounded-xl p-3 cursor-pointer hover:shadow-sm transition-all flex items-center justify-between"
+                                        style={{ border: '1px solid #F0EEEB' }}
                                     >
                                         <div className="flex items-center space-x-3">
-                                            <div className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center shrink-0">
+                                            <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: '#F5F1EC' }}>
                                                 {item.image ? (
                                                     <img src={item.image} alt="" className="w-full h-full object-cover rounded-lg" />
                                                 ) : (
@@ -349,12 +374,12 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                                 )}
                                             </div>
                                             <div>
-                                                <h3 className="font-medium text-gray-900 dark:text-white text-sm">{item.item_name}</h3>
+                                                <h3 className="font-medium text-gray-900 text-sm">{item.item_name}</h3>
                                                 <p className="text-xs text-gray-500">{item.item_code}</p>
                                             </div>
                                         </div>
                                         <div className="text-right">
-                                            <p className="font-bold text-green-600 dark:text-green-400">€{(item.standard_rate || 0).toFixed(2)}</p>
+                                            <p className="font-bold text-green-600">{formatCurrency(item.standard_rate || 0)}</p>
                                             <p className="text-xs text-gray-500">{item.stock_qty} in stock</p>
                                         </div>
                                     </div>
@@ -365,9 +390,9 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                 </div>
 
                 {/* Right Panel - Cart */}
-                <div className="w-96 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col shrink-0">
+                <div className="w-96 bg-white flex flex-col shrink-0" style={{ borderLeft: '1px solid #F0EEEB' }}>
                     {/* Customer Selection */}
-                    <div className="p-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
+                    <div className="p-4 shrink-0" style={{ borderBottom: '1px solid #F0EEEB' }}>
                         <label className="text-xs text-gray-500 uppercase tracking-wide mb-2 block">Customer</label>
                         <div className="relative">
                             <input
@@ -380,10 +405,11 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                     setShowCustomerDropdown(true);
                                 }}
                                 onFocus={() => setShowCustomerDropdown(true)}
-                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm"
+                                className="w-full px-4 py-2 rounded-lg bg-white text-sm"
+                                style={{ border: '1px solid #E8E8E8' }}
                             />
                             {showCustomerDropdown && customers.length > 0 && !selectedCustomer && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-40 overflow-y-auto z-10">
+                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-lg shadow-lg max-h-40 overflow-y-auto z-10" style={{ borderColor: '#E8E8E8' }}>
                                     {customers.map(customer => (
                                         <div
                                             key={customer.name}
@@ -392,7 +418,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                                 setShowCustomerDropdown(false);
                                                 setCustomerSearch('');
                                             }}
-                                            className="px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-sm"
+                                            className="px-4 py-2 hover:bg-stone-50 cursor-pointer text-sm"
                                         >
                                             {customer.customer_name}
                                         </div>
@@ -412,21 +438,23 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                         ) : (
                             <div className="space-y-2">
                                 {cart.map(item => (
-                                    <div key={item.item_code} className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                                    <div key={item.item_code} className="rounded-lg p-3" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
                                         <div className="flex justify-between items-start mb-2">
-                                            <h4 className="font-medium text-gray-900 dark:text-white text-sm flex-1 pr-2">{item.item_name}</h4>
+                                            <h4 className="font-medium text-gray-900 text-sm flex-1 pr-2">{item.item_name}</h4>
                                             <button onClick={() => removeFromCart(item.item_code)} className="text-red-500 text-xs hover:text-red-700">✕</button>
                                         </div>
                                         <div className="flex justify-between items-center">
                                             <div className="flex items-center space-x-2">
                                                 <button
                                                     onClick={() => updateCartQty(item.item_code, -1)}
-                                                    className="w-7 h-7 rounded bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-sm"
+                                                    className="w-7 h-7 rounded flex items-center justify-center text-sm"
+                                                    style={{ backgroundColor: '#E9E4DF' }}
                                                 >−</button>
                                                 <span className="w-6 text-center text-sm">{item.qty}</span>
                                                 <button
                                                     onClick={() => updateCartQty(item.item_code, 1)}
-                                                    className="w-7 h-7 rounded bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-sm"
+                                                    className="w-7 h-7 rounded flex items-center justify-center text-sm"
+                                                    style={{ backgroundColor: '#E9E4DF' }}
                                                 >+</button>
                                             </div>
                                             {/* Editable Unit Price */}
@@ -459,10 +487,10 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                                         title="Click to edit unit price"
                                                     >
                                                         <div className="flex items-center justify-end space-x-1">
-                                                            <span className="text-xs text-gray-500">€{item.rate.toFixed(2)}</span>
-                                                            <span className="text-xs text-blue-500 opacity-0 group-hover:opacity-100">✏️</span>
+                                                            <span className="text-xs text-gray-500">{formatCurrency(item.rate)}</span>
+                                                            <span className="text-xs opacity-0 group-hover:opacity-100" style={{ color: '#648DDA' }}>✏️</span>
                                                         </div>
-                                                        <p className="font-bold text-green-600 text-sm">€{(item.rate * item.qty).toFixed(2)}</p>
+                                                        <p className="font-bold text-green-600 text-sm">{formatCurrency(item.rate * item.qty)}</p>
                                                     </div>
                                                 )}
                                             </div>
@@ -474,14 +502,14 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                     </div>
 
                     {/* Cart Footer */}
-                    <div className="border-t border-gray-200 dark:border-gray-700 p-4 shrink-0 bg-gray-50 dark:bg-gray-900">
+                    <div className="p-4 shrink-0 sticky bottom-0 z-10" style={{ borderTop: '1px solid #F0EEEB', backgroundColor: '#F8F5F1' }}>
                         <div className="flex justify-between items-center mb-3">
-                            <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
-                            <span className="font-medium">€{cartSubtotal.toFixed(2)}</span>
+                            <span className="text-gray-600">Subtotal</span>
+                            <span className="font-medium">{formatCurrency(cartSubtotal)}</span>
                         </div>
                         <div className="flex justify-between items-center mb-3">
-                            <span className="text-lg font-bold text-gray-800 dark:text-white">Total</span>
-                            <span className="text-2xl font-bold text-green-600">€{cartTotal.toFixed(2)}</span>
+                            <span className="text-lg font-bold text-gray-800">Total</span>
+                            <span className="text-2xl font-bold text-green-600">{formatCurrency(cartTotal)}</span>
                         </div>
                         <div className="flex space-x-2">
                             <Button
@@ -495,7 +523,8 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             <Button
                                 onClick={handleOpenPayment}
                                 disabled={cart.length === 0 || !selectedCustomer}
-                                className="flex-1 py-3 bg-green-600 hover:bg-green-700"
+                                className="flex-1 py-3"
+                                style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
                             >
                                 Pay
                             </Button>
@@ -512,17 +541,18 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             {/* Payment Modal */}
             {showPaymentModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md p-6">
-                        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Complete Payment</h2>
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" style={{ border: '1px solid #F0EEEB' }}>
+                        <h2 className="text-xl font-bold text-gray-900 mb-4">Complete Payment</h2>
 
                         <div className="space-y-4">
                             {/* Payment Mode */}
                             <div>
-                                <label className="text-sm text-gray-600 dark:text-gray-400 block mb-2">Payment Method</label>
+                                <label className="text-sm text-gray-600 block mb-2">Payment Method</label>
                                 <select
                                     value={selectedPaymentMode}
                                     onChange={(e) => setSelectedPaymentMode(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900"
+                                    className="w-full px-4 py-3 rounded-xl bg-white"
+                                    style={{ border: '1px solid #E8E8E8' }}
                                 >
                                     {paymentModes.map(mode => (
                                         <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
@@ -535,17 +565,17 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
 
                             {/* Discount */}
                             <div>
-                                <label className="text-sm text-gray-600 dark:text-gray-400 block mb-2">Discount</label>
+                                <label className="text-sm text-gray-600 block mb-2">Discount</label>
                                 <div className="flex space-x-2">
-                                    <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                                    <div className="flex rounded-lg p-1" style={{ backgroundColor: '#F0EDEA' }}>
                                         <button
                                             onClick={() => setDiscountType('percent')}
-                                            className={`px-3 py-1 rounded text-sm ${discountType === 'percent' ? 'bg-white dark:bg-gray-600 shadow' : ''}`}
+                                            className={`px-3 py-1 rounded text-sm ${discountType === 'percent' ? 'bg-white shadow' : ''}`}
                                         >%</button>
                                         <button
                                             onClick={() => setDiscountType('amount')}
-                                            className={`px-3 py-1 rounded text-sm ${discountType === 'amount' ? 'bg-white dark:bg-gray-600 shadow' : ''}`}
-                                        >€</button>
+                                            className={`px-3 py-1 rounded text-sm ${discountType === 'amount' ? 'bg-white shadow' : ''}`}
+                                        >{config.currencySymbol}</button>
                                     </div>
                                     {discountType === 'percent' ? (
                                         <input
@@ -555,7 +585,8 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                             min="0"
                                             max="100"
                                             placeholder="0"
-                                            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900"
+                                            className="flex-1 px-4 py-2 rounded-xl bg-white"
+                                            style={{ border: '1px solid #E8E8E8' }}
                                         />
                                     ) : (
                                         <input
@@ -565,27 +596,28 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                             min="0"
                                             max={cartSubtotal}
                                             placeholder="0.00"
-                                            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900"
+                                            className="flex-1 px-4 py-2 rounded-xl bg-white"
+                                            style={{ border: '1px solid #E8E8E8' }}
                                         />
                                     )}
                                 </div>
                             </div>
 
                             {/* Summary */}
-                            <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4">
+                            <div className="rounded-xl p-4" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
                                 <div className="flex justify-between mb-2">
-                                    <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
-                                    <span>€{cartSubtotal.toFixed(2)}</span>
+                                    <span className="text-gray-600">Subtotal</span>
+                                    <span>{formatCurrency(cartSubtotal)}</span>
                                 </div>
                                 {discountAmount > 0 && (
                                     <div className="flex justify-between mb-2 text-red-500">
                                         <span>Discount {discountType === 'percent' ? `(${discountPercent}%)` : ''}</span>
-                                        <span>-€{discountAmount.toFixed(2)}</span>
+                                        <span>-{formatCurrency(discountAmount)}</span>
                                     </div>
                                 )}
-                                <div className="flex justify-between font-bold text-lg pt-2 border-t border-gray-200 dark:border-gray-600">
+                                <div className="flex justify-between font-bold text-lg pt-2" style={{ borderTop: '1px solid #E8E8E8' }}>
                                     <span>Total</span>
-                                    <span className="text-green-600">€{cartTotal.toFixed(2)}</span>
+                                    <span className="text-green-600">{formatCurrency(cartTotal)}</span>
                                 </div>
                             </div>
                         </div>
@@ -597,9 +629,10 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             <Button
                                 onClick={handleConfirmPayment}
                                 disabled={isProcessing}
-                                className="flex-1 bg-green-600 hover:bg-green-700"
+                                className="flex-1"
+                                style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
                             >
-                                {isProcessing ? 'Processing...' : `Pay €${cartTotal.toFixed(2)}`}
+                                {isProcessing ? 'Processing...' : `Pay ${formatCurrency(cartTotal)}`}
                             </Button>
                         </div>
                     </div>
@@ -609,9 +642,9 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             {/* Drafts Modal */}
             {showDrafts && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col" style={{ border: '1px solid #F0EEEB' }}>
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Held Orders</h2>
+                            <h2 className="text-xl font-bold text-gray-900">Held Orders</h2>
                             <button onClick={() => setShowDrafts(false)} className="text-gray-500 hover:text-gray-700">✕</button>
                         </div>
 
@@ -621,11 +654,11 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             ) : (
                                 <div className="space-y-2">
                                     {drafts.map(draft => (
-                                        <div key={draft.name} className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 flex items-center justify-between">
+                                        <div key={draft.name} className="rounded-xl p-4 flex items-center justify-between" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
                                             <div>
-                                                <p className="font-medium text-gray-900 dark:text-white">{draft.name}</p>
+                                                <p className="font-medium text-gray-900">{draft.name}</p>
                                                 <p className="text-sm text-gray-500">{draft.customer_name} • {draft.item_count} items</p>
-                                                <p className="text-sm font-bold text-green-600">€{(draft.grand_total || 0).toFixed(2)}</p>
+                                                <p className="text-sm font-bold text-green-600">{formatCurrency(draft.grand_total || 0)}</p>
                                             </div>
                                             <div className="flex space-x-2">
                                                 <Button variant="outline" size="sm" onClick={() => handleLoadDraft(draft)}>
@@ -647,26 +680,27 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             {/* Return Invoice Modal */}
             {showReturnModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md p-6">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" style={{ border: '1px solid #F0EEEB' }}>
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold text-gray-900 dark:text-white">↩️ Return Invoice</h2>
+                            <h2 className="text-xl font-bold text-gray-900">↩️ Return Invoice</h2>
                             <button onClick={() => setShowReturnModal(false)} className="text-gray-500 hover:text-gray-700">✕</button>
                         </div>
 
                         <div className="space-y-4">
                             <div>
-                                <label className="text-sm text-gray-600 dark:text-gray-400 block mb-2">Invoice Number</label>
+                                <label className="text-sm text-gray-600 block mb-2">Invoice Number</label>
                                 <input
                                     type="text"
                                     value={returnInvoiceSearch}
                                     onChange={(e) => setReturnInvoiceSearch(e.target.value)}
                                     placeholder="e.g. ACC-SINV-2025-00001"
-                                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900"
+                                    className="w-full px-4 py-3 rounded-xl bg-white"
+                                    style={{ border: '1px solid #E8E8E8' }}
                                 />
                             </div>
 
-                            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl p-4">
-                                <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                                <p className="text-sm text-yellow-800">
                                     <strong>Note:</strong> To process a return, enter the original invoice number.
                                     This will create a Credit Note to reverse the sale.
                                 </p>
@@ -688,7 +722,8 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                         showToast('Please enter an invoice number', 'error');
                                     }
                                 }}
-                                className="flex-1 bg-orange-500 hover:bg-orange-600"
+                                className="flex-1"
+                                style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
                             >
                                 Open Invoice
                             </Button>

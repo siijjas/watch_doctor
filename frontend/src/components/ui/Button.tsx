@@ -7,14 +7,14 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button: React.FC<ButtonProps> = ({ children, className, variant = 'primary', size = 'md', ...props }) => {
-  const baseClasses = "inline-flex items-center justify-center rounded-md font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:pointer-events-none";
+  const baseClasses = "inline-flex items-center justify-center rounded-xl font-semibold focus:outline-none focus:ring-2 focus:ring-offset-0 transition-colors disabled:opacity-50 disabled:pointer-events-none";
 
   const variantClasses = {
-    primary: "bg-blue-500 text-white hover:bg-blue-600 focus:ring-blue-500",
-    secondary: "bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-400 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600",
-    ghost: "hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200",
-    destructive: "bg-red-500 text-white hover:bg-red-600 focus:ring-red-500",
-    outline: "border border-gray-300 dark:border-gray-600 bg-transparent hover:bg-gray-100 dark:hover:bg-gray-800",
+    primary: "bg-[#648DDA] text-[#FDFEFF] hover:opacity-90 focus:ring-[#AFC3E8]",
+    secondary: "bg-[#F0EDEA] text-[#4B5563] hover:bg-[#E9E4DF] focus:ring-[#D7CEC4]",
+    ghost: "hover:bg-[#F5F1EC] text-[#4B5563]",
+    destructive: "bg-[#DC2626] text-white hover:bg-[#B91C1C] focus:ring-[#FCA5A5]",
+    outline: "border border-[#E8E8E8] bg-white text-[#4B5563] hover:bg-[#F9F7F4] focus:ring-[#DADADA]",
   };
 
   const sizeClasses = {
