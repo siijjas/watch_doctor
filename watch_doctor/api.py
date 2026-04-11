@@ -1251,44 +1251,76 @@ def get_daily_report(report_date=None):
 	expense_breakdown = sorted(mode_expense_map.values(), key=lambda x: x["total"], reverse=True)
 	total_expenses = sum(b["total"] for b in expense_breakdown)
 
-	# ---- POS SECTION ----
+	# ---- POS / SALES OVERVIEW SECTION ----
 
-	# Submitted POS invoices on report_date
-	pos_invoices = frappe.db.sql("""
-		SELECT name, grand_total, customer
-		FROM `tabSales Invoice`
-		WHERE is_pos = 1 AND docstatus = 1 AND posting_date = %s
+	# Fetch all submitted Sales Invoices for the date
+	# We exclude invoices that are explicitly linked to a Repair Order (already counted above)
+	# This ensures Repair + Sales = Total Revenue
+	all_sales_invoices = frappe.db.sql("""
+		SELECT si.name, si.grand_total, si.is_pos, si.is_return, si.owner, si.customer
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
+		WHERE si.docstatus = 1 
+			AND si.posting_date = %s
+			AND ro.name IS NULL
 	""", (report_date,), as_dict=True)
 
-	pos_total = sum(inv["grand_total"] for inv in pos_invoices)
-	pos_count = len(pos_invoices)
-	pos_invoice_names = [inv["name"] for inv in pos_invoices]
+	total_retail_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 1 and inv["is_return"] == 0)
+	total_b2b_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 0 and inv["is_return"] == 0)
+	total_returns = sum(abs(inv["grand_total"]) for inv in all_sales_invoices if inv["is_return"] == 1)
+	net_sales = (total_retail_sales + total_b2b_sales) - total_returns
+	
+	transaction_count = len([inv for inv in all_sales_invoices if inv["is_return"] == 0])
+	sales_inv_names = [inv["name"] for inv in all_sales_invoices]
 
-	# Payment method breakdown
+	# Payment method breakdown for all general sales
 	payment_breakdown = []
-	if pos_invoice_names:
-		placeholders = ", ".join(["%s"] * len(pos_invoice_names))
-		payment_rows = frappe.db.sql(
+	if sales_inv_names:
+		placeholders = ", ".join(["%s"] * len(sales_inv_names))
+		payment_breakdown = frappe.db.sql(
 			f"SELECT mode_of_payment, SUM(amount) as total, COUNT(DISTINCT parent) as txn_count "
 			f"FROM `tabSales Invoice Payment` "
 			f"WHERE parent IN ({placeholders}) "
 			f"GROUP BY mode_of_payment ORDER BY total DESC",
-			tuple(pos_invoice_names), as_dict=True
+			tuple(sales_inv_names), as_dict=True
 		)
-		payment_breakdown = payment_rows
 
-	# Items sold
+	# Items sold & Category Breakdown
 	items_sold = []
-	if pos_invoice_names:
-		placeholders = ", ".join(["%s"] * len(pos_invoice_names))
-		item_rows = frappe.db.sql(
+	category_breakdown = []
+	if sales_inv_names:
+		placeholders = ", ".join(["%s"] * len(sales_inv_names))
+		# Detailed items
+		items_sold = frappe.db.sql(
 			f"SELECT item_code, item_name, SUM(qty) as total_qty, SUM(amount) as total_amount "
 			f"FROM `tabSales Invoice Item` "
 			f"WHERE parent IN ({placeholders}) "
 			f"GROUP BY item_code, item_name ORDER BY total_qty DESC",
-			tuple(pos_invoice_names), as_dict=True
+			tuple(sales_inv_names), as_dict=True
 		)
-		items_sold = item_rows
+		# Categorical summary
+		category_breakdown = frappe.db.sql(
+			f"SELECT item_group, SUM(qty) as total_qty, SUM(amount) as total_amount "
+			f"FROM `tabSales Invoice Item` "
+			f"WHERE parent IN ({placeholders}) "
+			f"GROUP BY item_group ORDER BY total_amount DESC",
+			tuple(sales_inv_names), as_dict=True
+		)
+
+	# Cashier / Staff Breakdown
+	cashier_breakdown = []
+	if all_sales_invoices:
+		cashier_map = {}
+		for inv in all_sales_invoices:
+			owner = inv["owner"]
+			if owner not in cashier_map:
+				cashier_map[owner] = {"owner": owner, "total": 0.0, "count": 0}
+			if inv["is_return"] == 0:
+				cashier_map[owner]["total"] += float(inv["grand_total"])
+				cashier_map[owner]["count"] += 1
+			else:
+				cashier_map[owner]["total"] -= float(abs(inv["grand_total"]))
+		cashier_breakdown = sorted(cashier_map.values(), key=lambda x: x["total"], reverse=True)
 
 	return {
 		"date": report_date,
@@ -1306,10 +1338,16 @@ def get_daily_report(report_date=None):
 			"parts_used": parts_used,
 		},
 		"pos": {
-			"total_sales": pos_total,
-			"transaction_count": pos_count,
+			"total_sales": total_retail_sales + total_b2b_sales,
+			"total_retail_sales": total_retail_sales,
+			"total_b2b_sales": total_b2b_sales,
+			"total_returns": total_returns,
+			"net_sales": net_sales,
+			"transaction_count": transaction_count,
 			"payment_breakdown": payment_breakdown,
 			"items_sold": items_sold,
+			"category_breakdown": category_breakdown,
+			"cashier_breakdown": cashier_breakdown,
 		},
 		"financial": {
 			"total_expenses": total_expenses,

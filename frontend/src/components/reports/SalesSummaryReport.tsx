@@ -8,6 +8,8 @@ import {
     POSIcon,
     ReceiptIcon,
     TagIcon,
+    TrendingIcon,
+    UserGroupIcon,
 } from './reportShared';
 import type { PosReportData } from './reportShared';
 
@@ -22,25 +24,95 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
     return (
         <div className="space-y-6">
             {/* ── Stats ── */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
-                    label="POS Total Sales"
-                    value={formatCurrency(data.total_sales)}
+                    label="Net Sales"
+                    value={formatCurrency(data.net_sales)}
                     color="teal"
+                    icon={<TrendingIcon />}
+                    subLabel={`Total gross minus returns`}
+                />
+                <StatCard
+                    label="Retail (POS)"
+                    value={formatCurrency(data.total_retail_sales)}
+                    color="indigo"
                     icon={<POSIcon />}
                 />
                 <StatCard
-                    label="Transactions"
-                    value={data.transaction_count}
-                    color="indigo"
+                    label="B2B / Custom"
+                    value={formatCurrency(data.total_b2b_sales)}
+                    color="sky"
                     icon={<ReceiptIcon />}
                 />
                 <StatCard
-                    label="Items Sold (qty)"
-                    value={totalQty}
-                    color="sky"
-                    icon={<TagIcon />}
+                    label="Returns"
+                    value={formatCurrency(data.total_returns)}
+                    color="rose"
+                    icon={<ReceiptIcon className="rotate-180" />}
                 />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Sales by Category */}
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                    <SectionTitle>
+                        <TagIcon className="text-indigo-500" />
+                        Sales by Category
+                    </SectionTitle>
+                    {data.category_breakdown.length === 0 ? (
+                        <EmptyState label="No categorical data" />
+                    ) : (
+                        <div className="space-y-4">
+                            {data.category_breakdown.map((cat, idx) => {
+                                const pct = data.net_sales > 0
+                                    ? Math.max(0, Math.round((cat.total_amount / data.net_sales) * 100))
+                                    : 0;
+                                return (
+                                    <div key={idx}>
+                                        <div className="flex items-center justify-between mb-1 text-sm">
+                                            <span className="text-gray-700 dark:text-gray-300 font-medium">{cat.item_group}</span>
+                                            <span className="text-gray-900 dark:text-white font-bold">{formatCurrency(cat.total_amount)}</span>
+                                        </div>
+                                        <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                                            <div
+                                                className="h-2 bg-indigo-500 rounded-full transition-all"
+                                                style={{ width: `${pct}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+
+                {/* Sales by Cashier */}
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                    <SectionTitle>
+                        <UserGroupIcon className="text-sky-500" />
+                        Sales by Cashier
+                    </SectionTitle>
+                    {data.cashier_breakdown.length === 0 ? (
+                        <EmptyState label="No cashier data" />
+                    ) : (
+                        <div className="space-y-4">
+                            {data.cashier_breakdown.map((c, idx) => (
+                                <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-xl">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-sky-100 dark:bg-sky-900/30 flex items-center justify-center text-sky-600 dark:text-sky-400 font-bold text-xs">
+                                            {c.owner.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{c.owner}</p>
+                                            <p className="text-xs text-gray-500">{c.count} transaction{c.count !== 1 ? 's' : ''}</p>
+                                        </div>
+                                    </div>
+                                    <p className="text-sm font-bold text-gray-900 dark:text-white">{formatCurrency(c.total)}</p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* ── Detail Grid ── */}
@@ -53,12 +125,13 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                         Payment Methods
                     </SectionTitle>
                     {data.payment_breakdown.length === 0 ? (
-                        <EmptyState label="No POS sales" />
+                        <EmptyState label="No sales payments" />
                     ) : (
                         <div className="space-y-4">
                             {data.payment_breakdown.map((p, idx) => {
-                                const pct = data.total_sales > 0
-                                    ? Math.round((p.total / data.total_sales) * 100)
+                                const baseTotal = data.total_retail_sales + data.total_b2b_sales;
+                                const pct = baseTotal > 0
+                                    ? Math.round((p.total / baseTotal) * 100)
                                     : 0;
                                 return (
                                     <div key={idx}>
@@ -86,10 +159,6 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                                     </div>
                                 );
                             })}
-                            <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-between text-sm font-bold text-gray-900 dark:text-white">
-                                <span>Total</span>
-                                <span>{formatCurrency(data.total_sales)}</span>
-                            </div>
                         </div>
                     )}
                 </div>
@@ -127,17 +196,6 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data }) => {
                                         </tr>
                                     ))}
                                 </tbody>
-                                <tfoot>
-                                    <tr className="border-t border-gray-200 dark:border-gray-600">
-                                        <td className="pt-2 pr-3 text-sm font-bold text-gray-700 dark:text-gray-300">Total</td>
-                                        <td className="pt-2 pr-3 text-right text-sm font-bold text-gray-800 dark:text-gray-200">
-                                            {totalQty}
-                                        </td>
-                                        <td className="pt-2 text-right text-sm font-bold text-gray-800 dark:text-gray-200">
-                                            {formatCurrency(data.total_sales)}
-                                        </td>
-                                    </tr>
-                                </tfoot>
                             </table>
                         </div>
                     )}

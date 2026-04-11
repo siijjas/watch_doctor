@@ -66,11 +66,29 @@ export interface RepairReportData {
     parts_used: PartUsed[];
 }
 
+export interface CategoryBreakdown {
+    item_group: string;
+    total_qty: number;
+    total_amount: number;
+}
+
+export interface CashierBreakdown {
+    owner: string;
+    total: number;
+    count: number;
+}
+
 export interface PosReportData {
     total_sales: number;
+    total_retail_sales: number;
+    total_b2b_sales: number;
+    total_returns: number;
+    net_sales: number;
     transaction_count: number;
     payment_breakdown: PaymentBreakdown[];
     items_sold: ItemSold[];
+    category_breakdown: CategoryBreakdown[];
+    cashier_breakdown: CashierBreakdown[];
 }
 
 export interface ExpenseEntry {

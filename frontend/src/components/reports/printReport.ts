@@ -272,12 +272,12 @@ function buildRepairHtml(data: DailyReportData): string {
 // ─────────────── SALES SUMMARY ───────────────
 function buildSalesHtml(data: DailyReportData): string {
     const p = data.pos;
-    const totalQty = p.items_sold.reduce((s, i) => s + i.total_qty, 0);
+    const baseTotal = (p.total_retail_sales ?? 0) + (p.total_b2b_sales ?? 0);
 
     const paymentSection = p.payment_breakdown.length === 0
-        ? `<p class="empty">No POS payments</p>`
+        ? `<p class="empty">No payments recorded</p>`
         : `${p.payment_breakdown.map(pm => {
-            const pct = p.total_sales > 0 ? Math.round((pm.total / p.total_sales) * 100) : 0;
+            const pct = baseTotal > 0 ? Math.round((pm.total / baseTotal) * 100) : 0;
             return `<div class="bar-row">
                 <div class="bar-meta">
                     <span>${pm.mode_of_payment} <span style="color:#9ca3af;font-size:10px">(${pm.txn_count} txn${pm.txn_count !== 1 ? 's' : ''})</span></span>
@@ -285,10 +285,35 @@ function buildSalesHtml(data: DailyReportData): string {
                 </div>
                 <div class="bar-track"><div class="bar-fill bar-fill-teal" style="width:${pct}%"></div></div>
             </div>`;
-        }).join('')}
-        <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid #e5e7eb;padding-top:8px;margin-top:8px">
-            <span>Total</span><span>${fmt(p.total_sales)}</span>
-        </div>`;
+        }).join('')}`;
+
+    const categorySection = !p.category_breakdown || p.category_breakdown.length === 0
+        ? `<p class="empty">No category data</p>`
+        : `${p.category_breakdown.map(cat => {
+            const pct = (p.net_sales ?? 0) > 0 ? Math.max(0, Math.round((cat.total_amount / (p.net_sales ?? 1)) * 100)) : 0;
+            return `<div class="bar-row">
+                <div class="bar-meta">
+                    <span style="font-weight:600">${cat.item_group}</span>
+                    <span><strong>${fmt(cat.total_amount)}</strong> <span style="color:#9ca3af">${pct}%</span></span>
+                </div>
+                <div class="bar-track"><div class="bar-fill" style="background:#6366f1;width:${pct}%"></div></div>
+            </div>`;
+        }).join('')}`;
+
+    const cashierSection = !p.cashier_breakdown || p.cashier_breakdown.length === 0
+        ? `<p class="empty">No cashier data</p>`
+        : `<table>
+            <thead><tr>
+                <th>Cashier / User</th><th class="right">Transactions</th><th class="right">Amount</th>
+            </tr></thead>
+            <tbody>
+                ${p.cashier_breakdown.map(c => `<tr>
+                    <td>${c.owner}</td>
+                    <td class="right">${c.count}</td>
+                    <td class="amount">${fmt(c.total)}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
 
     const itemsSection = p.items_sold.length === 0
         ? `<p class="empty">No items sold</p>`
@@ -303,32 +328,40 @@ function buildSalesHtml(data: DailyReportData): string {
                     <td class="amount">${fmt(item.total_amount)}</td>
                 </tr>`).join('')}
             </tbody>
-            <tfoot><tr class="total-row">
-                <td>Total</td>
-                <td class="right">${totalQty}</td>
-                <td class="amount">${fmt(p.total_sales)}</td>
-            </tr></tfoot>
         </table>`;
 
     return `
         ${header('Sales Summary', data.date)}
 
-        <div class="stats stats-3">
+        <div class="stats stats-4">
             <div class="stat stat-teal">
-                <div class="stat-label">POS Total Sales</div>
-                <div class="stat-value">${fmt(p.total_sales)}</div>
+                <div class="stat-label">Net Sales</div>
+                <div class="stat-value">${fmt(p.net_sales ?? 0)}</div>
+                <div class="stat-sub">Gross minus returns</div>
             </div>
             <div class="stat stat-indigo">
-                <div class="stat-label">Transactions</div>
-                <div class="stat-value">${p.transaction_count}</div>
+                <div class="stat-label">Retail (POS)</div>
+                <div class="stat-value">${fmt(p.total_retail_sales ?? 0)}</div>
             </div>
             <div class="stat stat-blue">
-                <div class="stat-label">Items Sold (qty)</div>
-                <div class="stat-value">${totalQty}</div>
+                <div class="stat-label">B2B / Custom</div>
+                <div class="stat-value">${fmt(p.total_b2b_sales ?? 0)}</div>
+            </div>
+            <div class="stat stat-rose">
+                <div class="stat-label">Returns</div>
+                <div class="stat-value">${fmt(p.total_returns ?? 0)}</div>
             </div>
         </div>
 
         <div class="grid-2">
+            <div class="card">
+                <div class="section-title">Sales by Category</div>
+                ${categorySection}
+            </div>
+            <div class="card">
+                <div class="section-title">Sales by Cashier</div>
+                ${cashierSection}
+            </div>
             <div class="card">
                 <div class="section-title">Payment Methods</div>
                 ${paymentSection}
@@ -471,8 +504,8 @@ function buildFinancialHtml(data: DailyReportData): string {
         <div class="card-full">
             <div class="section-title">POS — Payment Methods</div>
             ${p.payment_breakdown.length === 0
-                ? `<p class="empty">No POS payments</p>`
-                : `<table>
+            ? `<p class="empty">No POS payments</p>`
+            : `<table>
                     <thead><tr>
                         <th>Mode</th><th>Transactions</th><th class="right">Amount</th>
                     </tr></thead>
@@ -504,7 +537,7 @@ function buildFinancialHtml(data: DailyReportData): string {
                 <div class="net-row"><span>Total Sales</span><span>${fmt(p.total_sales)}</span></div>
                 <div class="net-row"><span>Unique Items Sold</span><span>${p.items_sold.length}</span></div>
                 ${fin.expense_breakdown.length > 0
-                    ? `<div class="net-row"><span>Expense Entries</span><span>${fin.expense_entries?.length ?? 0}</span></div>` : ''}
+            ? `<div class="net-row"><span>Expense Entries</span><span>${fin.expense_entries?.length ?? 0}</span></div>` : ''}
             </div>
         </div>`;
 }
