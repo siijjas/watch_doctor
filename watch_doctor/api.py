@@ -1165,79 +1165,68 @@ def get_daily_report(report_date=None):
 
 	# ---- FINANCIAL / EXPENSES SECTION ----
 
-	# Get active payment modes configured in scope
-	active_modes = frappe.db.sql("""
-		SELECT payment_mode
-		FROM `tabDW Payment Mode Config`
-		WHERE is_active = 1
-	""", as_dict=True)
-	active_mode_names = [m["payment_mode"] for m in active_modes]
+	# ---- FINANCIAL / EXPENSES SECTION ----
 
 	expense_entries = []
 
-	if active_mode_names:
-		pm_placeholders = ", ".join(["%s"] * len(active_mode_names))
+	# 1) Payment Entry expenses — outgoing payments on ALL modes
+	pe_rows = frappe.db.sql(
+		"""SELECT
+			pe.name,
+			pe.mode_of_payment,
+			pe.party_type,
+			pe.party,
+			pe.paid_amount AS amount,
+			COALESCE(pe.remarks, '') AS remarks,
+			pe.paid_to AS debit_account
+		FROM `tabPayment Entry` pe
+		WHERE pe.payment_type = 'Pay'
+			AND pe.docstatus = 1
+			AND pe.posting_date = %s
+		ORDER BY pe.creation ASC""",
+		(report_date,),
+		as_dict=True
+	)
+	expense_entries.extend(pe_rows)
 
-		# 1) Payment Entry expenses — outgoing payments on configured modes
-		pe_rows = frappe.db.sql(
+	# 2) Journal Entry debits — credit on ANY mode-of-payment account = cash out
+	default_company = frappe.defaults.get_defaults().get("company")
+	mode_account_rows = frappe.db.sql(
+		"""SELECT mopa.default_account, mop.name AS mode_of_payment
+		FROM `tabMode of Payment Account` mopa
+		INNER JOIN `tabMode of Payment` mop ON mopa.parent = mop.name
+		WHERE (mopa.company = %s OR mopa.company IS NULL OR mopa.company = '')""",
+		(default_company or "",),
+		as_dict=True
+	)
+	account_to_mode = {r["default_account"]: r["mode_of_payment"] for r in mode_account_rows}
+	payment_accounts = list(account_to_mode.keys())
+
+	if payment_accounts:
+		pa_placeholders = ", ".join(["%s"] * len(payment_accounts))
+		je_rows = frappe.db.sql(
 			f"""SELECT
-				pe.name,
-				pe.mode_of_payment,
-				pe.party_type,
-				pe.party,
-				pe.paid_amount AS amount,
-				COALESCE(pe.remarks, '') AS remarks,
-				pe.paid_to AS debit_account
-			FROM `tabPayment Entry` pe
-			WHERE pe.payment_type = 'Pay'
-				AND pe.docstatus = 1
-				AND pe.posting_date = %s
-				AND pe.mode_of_payment IN ({pm_placeholders})
-			ORDER BY pe.creation ASC""",
-			tuple([report_date] + active_mode_names),
+				je.name,
+				jea.account,
+				jea.credit_in_account_currency AS amount,
+				COALESCE(jea.user_remark, je.user_remark, '') AS remarks,
+				jea_debit.account AS debit_account
+			FROM `tabJournal Entry Account` jea
+			INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
+			LEFT JOIN `tabJournal Entry Account` jea_debit
+				ON jea_debit.parent = je.name
+				AND jea_debit.debit_in_account_currency > 0
+			WHERE je.docstatus = 1
+				AND je.posting_date = %s
+				AND jea.account IN ({pa_placeholders})
+				AND jea.credit_in_account_currency > 0
+			ORDER BY je.creation ASC""",
+			tuple([report_date] + payment_accounts),
 			as_dict=True
 		)
-		expense_entries.extend(pe_rows)
-
-		# 2) Journal Entry debits — credit on payment-mode accounts = cash out
-		default_company = frappe.defaults.get_defaults().get("company")
-		mode_account_rows = frappe.db.sql(
-			f"""SELECT mopa.default_account, mop.name AS mode_of_payment
-			FROM `tabMode of Payment Account` mopa
-			INNER JOIN `tabMode of Payment` mop ON mopa.parent = mop.name
-			WHERE mop.name IN ({pm_placeholders})
-				AND (mopa.company = %s OR mopa.company IS NULL OR mopa.company = '')""",
-			tuple(active_mode_names + [default_company or ""]),
-			as_dict=True
-		)
-		account_to_mode = {r["default_account"]: r["mode_of_payment"] for r in mode_account_rows}
-		payment_accounts = list(account_to_mode.keys())
-
-		if payment_accounts:
-			pa_placeholders = ", ".join(["%s"] * len(payment_accounts))
-			je_rows = frappe.db.sql(
-				f"""SELECT
-					je.name,
-					jea.account,
-					jea.credit_in_account_currency AS amount,
-					COALESCE(jea.user_remark, je.user_remark, '') AS remarks,
-					jea_debit.account AS debit_account
-				FROM `tabJournal Entry Account` jea
-				INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
-				LEFT JOIN `tabJournal Entry Account` jea_debit
-					ON jea_debit.parent = je.name
-					AND jea_debit.debit_in_account_currency > 0
-				WHERE je.docstatus = 1
-					AND je.posting_date = %s
-					AND jea.account IN ({pa_placeholders})
-					AND jea.credit_in_account_currency > 0
-				ORDER BY je.creation ASC""",
-				tuple([report_date] + payment_accounts),
-				as_dict=True
-			)
-			for row in je_rows:
-				row["mode_of_payment"] = account_to_mode.get(row["account"], row["account"])
-			expense_entries.extend(je_rows)
+		for row in je_rows:
+			row["mode_of_payment"] = account_to_mode.get(row["account"], row["account"])
+		expense_entries.extend(je_rows)
 
 	# Aggregate by payment mode
 	mode_expense_map = {}
