@@ -1189,6 +1189,16 @@ def get_daily_report(report_date=None):
 	)
 	expense_entries.extend(pe_rows)
 
+	def _mode_breakdown_dicts(rows):
+		m = {}
+		for r in rows:
+			mode = r.get("mode_of_payment") or "Other"
+			if mode not in m:
+				m[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
+			m[mode]["total"] += float(r.get("amount") or 0)
+			m[mode]["count"] += 1
+		return sorted(m.values(), key=lambda x: x["total"], reverse=True)
+
 	# 2) Journal Entry debits — credit on ANY mode-of-payment account = cash out
 	default_company = frappe.defaults.get_defaults().get("company")
 	mode_account_rows = frappe.db.sql(
@@ -1202,6 +1212,7 @@ def get_daily_report(report_date=None):
 	account_to_mode = {r["default_account"]: r["mode_of_payment"] for r in mode_account_rows}
 	payment_accounts = list(account_to_mode.keys())
 
+	je_detail_rows = []
 	if payment_accounts:
 		pa_placeholders = ", ".join(["%s"] * len(payment_accounts))
 		je_rows = frappe.db.sql(
@@ -1226,7 +1237,18 @@ def get_daily_report(report_date=None):
 		)
 		for row in je_rows:
 			row["mode_of_payment"] = account_to_mode.get(row["account"], row["account"])
+			je_detail_rows.append({
+				"name": row["name"],
+				"mode_of_payment": row["mode_of_payment"],
+				"against_account": row.get("debit_account") or "",
+				"amount": float(row["amount"] or 0),
+				"remarks": row.get("remarks") or "",
+			})
 		expense_entries.extend(je_rows)
+
+	je_count = len(je_detail_rows)
+	je_total = sum(r["amount"] for r in je_detail_rows)
+	je_by_mode = _mode_breakdown_dicts(je_detail_rows)
 
 	# Aggregate by payment mode
 	mode_expense_map = {}
@@ -1239,6 +1261,98 @@ def get_daily_report(report_date=None):
 
 	expense_breakdown = sorted(mode_expense_map.values(), key=lambda x: x["total"], reverse=True)
 	total_expenses = sum(b["total"] for b in expense_breakdown)
+
+	# ---- PAYMENT ENTRIES OVERVIEW ----
+	# All submitted Payment Entries for the day — Receive (collections) and Pay (disbursements)
+	pe_all = frappe.db.sql("""
+		SELECT
+			pe.name,
+			pe.payment_type,
+			pe.mode_of_payment,
+			pe.party_type,
+			pe.party,
+			COALESCE(pe.party_name, '') AS party_name,
+			pe.paid_amount AS amount,
+			COALESCE(pe.remarks, '') AS remarks,
+			COALESCE(pe.reference_no, '') AS reference_no
+		FROM `tabPayment Entry` pe
+		WHERE pe.docstatus = 1
+			AND pe.posting_date = %s
+		ORDER BY pe.payment_type DESC, pe.creation ASC
+	""", (report_date,), as_dict=True)
+
+	pe_receive = [p for p in pe_all if p["payment_type"] == "Receive"]
+	pe_pay_all = [p for p in pe_all if p["payment_type"] == "Pay"]
+
+	total_pe_received = sum(float(p["amount"] or 0) for p in pe_receive)
+	total_pe_paid = sum(float(p["amount"] or 0) for p in pe_pay_all)
+	net_pe_cash = total_pe_received - total_pe_paid
+
+	def _mode_breakdown(entries):
+		m = {}
+		for p in entries:
+			mode = p.get("mode_of_payment") or "Other"
+			if mode not in m:
+				m[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
+			m[mode]["total"] += float(p.get("amount") or 0)
+			m[mode]["count"] += 1
+		return sorted(m.values(), key=lambda x: x["total"], reverse=True)
+
+	pe_receive_by_mode = _mode_breakdown(pe_receive)
+	pe_pay_by_mode = _mode_breakdown(pe_pay_all)
+
+	# Split outgoing PEs: Purchases (Supplier) vs Operating (everything else)
+	pe_purchases = [p for p in pe_pay_all if p.get("party_type") == "Supplier"]
+	pe_operating = [p for p in pe_pay_all if p.get("party_type") != "Supplier"]
+	total_pe_purchases = sum(float(p["amount"] or 0) for p in pe_purchases)
+	total_pe_operating = sum(float(p["amount"] or 0) for p in pe_operating)
+	pe_purchases_by_mode = _mode_breakdown(pe_purchases)
+	pe_operating_by_mode = _mode_breakdown(pe_operating)
+
+	# ---- CUSTOMER COLLECTIONS (PE Receive against credit Sales Invoices) ----
+	pe_customer_collections = []
+	for p in pe_receive:
+		if p.get("party_type") == "Customer":
+			# Check if this PE references a Sales Invoice
+			refs = frappe.db.sql("""
+				SELECT reference_doctype, reference_name, allocated_amount
+				FROM `tabPayment Entry Reference`
+				WHERE parent = %s AND reference_doctype = 'Sales Invoice'
+			""", (p["name"],), as_dict=True)
+			if refs:
+				for ref in refs:
+					pe_customer_collections.append({
+						"pe_name": p["name"],
+						"customer": p.get("party") or "",
+						"customer_name": p.get("party_name") or p.get("party") or "",
+						"invoice": ref["reference_name"],
+						"amount": float(ref["allocated_amount"] or 0),
+						"mode_of_payment": p.get("mode_of_payment") or "",
+					})
+	total_customer_collections = sum(c["amount"] for c in pe_customer_collections)
+
+	# ---- CREDIT INVOICES FOR THE DAY ----
+	# Credit Sales Invoices: submitted today, outstanding > 0 (not fully paid)
+	credit_sales_invoices = frappe.db.sql("""
+		SELECT si.name, si.customer, si.grand_total, si.outstanding_amount,
+			COALESCE(si.customer_name, '') AS customer_name
+		FROM `tabSales Invoice` si
+		WHERE si.docstatus = 1 AND si.posting_date = %s
+			AND si.outstanding_amount > 0
+		ORDER BY si.outstanding_amount DESC
+	""", (report_date,), as_dict=True)
+	total_credit_sales = sum(float(inv["outstanding_amount"] or 0) for inv in credit_sales_invoices)
+
+	# Credit Purchase Invoices: submitted today, outstanding > 0
+	credit_purchase_invoices = frappe.db.sql("""
+		SELECT pi.name, pi.supplier, pi.grand_total, pi.outstanding_amount,
+			COALESCE(pi.supplier_name, '') AS supplier_name
+		FROM `tabPurchase Invoice` pi
+		WHERE pi.docstatus = 1 AND pi.posting_date = %s
+			AND pi.outstanding_amount > 0
+		ORDER BY pi.outstanding_amount DESC
+	""", (report_date,), as_dict=True)
+	total_credit_purchases = sum(float(inv["outstanding_amount"] or 0) for inv in credit_purchase_invoices)
 
 	# ---- POS / SALES OVERVIEW SECTION ----
 
@@ -1343,5 +1457,34 @@ def get_daily_report(report_date=None):
 			"expense_breakdown": expense_breakdown,
 			"expense_entries": expense_entries,
 			"repair_payment_breakdown": repair_payment_breakdown,
+			# Payment Entries overview (Receive + Pay)
+			"pe_entries": pe_all,
+			"pe_receive": pe_receive,
+			"pe_pay": pe_pay_all,
+			"total_pe_received": total_pe_received,
+			"total_pe_paid": total_pe_paid,
+			"net_pe_cash": net_pe_cash,
+			"pe_receive_by_mode": pe_receive_by_mode,
+			"pe_pay_by_mode": pe_pay_by_mode,
+			# Purchase vs Operating split
+			"pe_purchases": pe_purchases,
+			"pe_operating": pe_operating,
+			"total_pe_purchases": total_pe_purchases,
+			"total_pe_operating": total_pe_operating,
+			"pe_purchases_by_mode": pe_purchases_by_mode,
+			"pe_operating_by_mode": pe_operating_by_mode,
+			# Journal Entry detail
+			"je_entries": je_detail_rows,
+			"je_count": je_count,
+			"je_total": je_total,
+			"je_by_mode": je_by_mode,
+			# Customer collections against credit invoices
+			"pe_customer_collections": pe_customer_collections,
+			"total_customer_collections": total_customer_collections,
+			# Credit invoices
+			"credit_sales_invoices": credit_sales_invoices,
+			"total_credit_sales": total_credit_sales,
+			"credit_purchase_invoices": credit_purchase_invoices,
+			"total_credit_purchases": total_credit_purchases,
 		}
 	}

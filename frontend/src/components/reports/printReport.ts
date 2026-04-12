@@ -18,12 +18,12 @@ const BASE_STYLES = `
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #111827; background: #fff; font-size: 12px; line-height: 1.5; }
 
   /* ── Header ── */
-  .rpt-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 3px solid #7c3aed; margin-bottom: 20px; }
+    .rpt-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 3px solid #1a365d; margin-bottom: 20px; }
   .rpt-logo { display: flex; align-items: center; gap: 10px; }
-  .rpt-logo-icon { width: 36px; height: 36px; background: #7c3aed; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; }
+    .rpt-logo-icon { width: 36px; height: 36px; background: #1a365d; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; }
   .rpt-logo-name { font-size: 20px; font-weight: 700; color: #1f2937; letter-spacing: -0.5px; }
   .rpt-meta { text-align: right; }
-  .rpt-title { font-size: 16px; font-weight: 700; color: #7c3aed; }
+    .rpt-title { font-size: 16px; font-weight: 700; color: #1a365d; }
   .rpt-date { font-size: 11px; color: #6b7280; margin-top: 2px; }
   .rpt-printed { font-size: 10px; color: #9ca3af; }
 
@@ -35,14 +35,14 @@ const BASE_STYLES = `
   .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; font-weight: 600; }
   .stat-value { font-size: 20px; font-weight: 700; color: #111827; margin-top: 2px; }
   .stat-sub { font-size: 9px; color: #9ca3af; margin-top: 2px; }
-  .stat-accent { border-top: 3px solid #7c3aed; }
+    .stat-accent { border-top: 3px solid #1a365d; }
   .stat-green { border-top: 3px solid #10b981; }
   .stat-amber { border-top: 3px solid #f59e0b; }
   .stat-blue { border-top: 3px solid #3b82f6; }
   .stat-teal { border-top: 3px solid #14b8a6; }
   .stat-rose { border-top: 3px solid #f43f5e; }
   .stat-pink { border-top: 3px solid #ec4899; }
-  .stat-indigo { border-top: 3px solid #6366f1; }
+    .stat-indigo { border-top: 3px solid #1a365d; }
 
   /* ── Sections ── */
   .section { margin-bottom: 20px; break-inside: avoid; }
@@ -70,7 +70,7 @@ const BASE_STYLES = `
   .badge-blue { background: #dbeafe; color: #1e40af; }
   .badge-green { background: #d1fae5; color: #065f46; }
   .badge-gray { background: #f3f4f6; color: #6b7280; }
-  .badge-purple { background: #ede9fe; color: #6d28d9; }
+    .badge-purple { background: #e0e7ff; color: #1a365d; }
 
   /* ── Bar ── */
   .bar-row { margin-bottom: 10px; }
@@ -83,19 +83,19 @@ const BASE_STYLES = `
   /* Net summary */
   .net-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; border-bottom: 1px solid #f3f4f6; }
   .net-row.subtotal { font-weight: 600; border-bottom: 1px solid #e5e7eb; padding-top: 8px; }
-  .net-row.total { font-weight: 700; font-size: 14px; border-top: 2px solid #7c3aed; border-bottom: none; padding-top: 10px; margin-top: 4px; }
+    .net-row.total { font-weight: 700; font-size: 14px; border-top: 2px solid #1a365d; border-bottom: none; padding-top: 10px; margin-top: 4px; }
   .text-green { color: #059669; }
   .text-rose { color: #f43f5e; }
-  .text-purple { color: #7c3aed; }
+    .text-purple { color: #1a365d; }
 
   /* ── Tech bar ── */
   .tech-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-  .tech-avatar { width: 28px; height: 28px; border-radius: 50%; background: #ede9fe; color: #6d28d9; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .tech-avatar { width: 28px; height: 28px; border-radius: 50%; background: #e0e7ff; color: #1a365d; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .tech-info { flex: 1; }
   .tech-name { font-size: 11px; font-weight: 600; color: #1f2937; }
   .tech-bar-track { height: 4px; background: #f3f4f6; border-radius: 2px; overflow: hidden; margin-top: 4px; }
-  .tech-bar-fill { height: 100%; background: #6366f1; border-radius: 2px; }
-  .tech-count { font-size: 11px; font-weight: 700; color: #6366f1; white-space: nowrap; }
+    .tech-bar-fill { height: 100%; background: #1a365d; border-radius: 2px; }
+    .tech-count { font-size: 11px; font-weight: 700; color: #1a365d; white-space: nowrap; }
 
   /* ── Issue ── */
   .issue-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #f3f4f6; }
@@ -296,7 +296,7 @@ function buildSalesHtml(data: DailyReportData): string {
                     <span style="font-weight:600">${cat.item_group}</span>
                     <span><strong>${fmt(cat.total_amount)}</strong> <span style="color:#9ca3af">${pct}%</span></span>
                 </div>
-                <div class="bar-track"><div class="bar-fill" style="background:#6366f1;width:${pct}%"></div></div>
+                <div class="bar-track"><div class="bar-fill" style="background:#1a365d;width:${pct}%"></div></div>
             </div>`;
         }).join('')}`;
 
@@ -378,7 +378,9 @@ function buildFinancialHtml(data: DailyReportData): string {
     const r = data.repair;
     const p = data.pos;
     const fin = data.financial ?? { total_expenses: 0, expense_breakdown: [], expense_entries: [], repair_payment_breakdown: [] };
-    const totalRevenue = r.revenue + p.total_sales;
+    const retailSales = p.total_retail_sales ?? 0;
+    const netSalesInCard = retailSales + r.revenue;
+    const totalRevenue = netSalesInCard;
     const net = totalRevenue - fin.total_expenses;
     const netClass = net >= 0 ? 'text-green' : 'text-rose';
 
@@ -399,28 +401,113 @@ function buildFinancialHtml(data: DailyReportData): string {
             <span class="text-rose">${fmt(fin.total_expenses)}</span>
         </div>`;
 
-    const expenseEntries = !fin.expense_entries || fin.expense_entries.length === 0
-        ? `<p class="empty">No expense entries</p>`
-        : `<table>
-            <thead><tr>
-                <th>Entry</th><th>Mode</th><th>Debit Account</th><th>Remarks</th><th class="right">Amount</th>
-            </tr></thead>
-            <tbody>
-                ${fin.expense_entries.map(e => `<tr>
-                    <td class="mono">${e.name}</td>
-                    <td>${e.mode_of_payment}</td>
-                    <td>${e.debit_account || '—'}</td>
-                    <td>${e.remarks || '—'}</td>
-                    <td class="amount-rose">${fmt(e.amount)}</td>
-                </tr>`).join('')}
-            </tbody>
-            <tfoot><tr class="total-row">
-                <td colspan="4">Total</td>
-                <td class="amount-rose">${fmt(fin.total_expenses)}</td>
-            </tr></tfoot>
-        </table>`;
+    const pePurchases = fin.pe_purchases ?? [];
+    const peEntries = fin.pe_entries ?? [];
+    const pePayByMode = fin.pe_pay_by_mode ?? [];
+    const peOperatingByMode = fin.pe_operating_by_mode ?? [];
+    const jeEntries = fin.je_entries ?? [];
+    const jeByMode = fin.je_by_mode ?? [];
+
+    const supplierEntriesHtml = pePurchases.length === 0
+        ? `<p class="empty" style="padding:10px">No supplier payment entries</p>`
+        : `${pePurchases.map(pu => `<div class="net-row"><span>${pu.party_name || pu.party || '—'}</span><span class="text-rose">${fmt(pu.amount)}</span></div>`).join('')}`;
+
+    const jeExpenseEntriesHtml = jeEntries.length === 0
+        ? `<p class="empty" style="padding:10px">No journal-entry expense records</p>`
+        : `${jeEntries.map(je => `<div class="net-row"><span>${je.against_account || '—'}</span><span class="text-rose">${fmt(je.amount)}</span></div>`).join('')}`;
+
+    const peModeBreakdown = pePayByMode.length > 0 ? pePayByMode : peOperatingByMode;
+
+    const peOperatingByModeHtml = peModeBreakdown.length === 0
+        ? ''
+        : `${peModeBreakdown.map(m => `<div class="net-row"><span>${m.mode_of_payment} <span style="color:#9ca3af;font-size:10px">x${m.count}</span></span><span class="text-rose">${fmt(m.total)}</span></div>`).join('')}`;
+
+    const jeByModeHtml = jeByMode.length === 0
+        ? `<p class="empty" style="padding:10px">No JE mode breakdown</p>`
+        : `${jeByMode.map(m => `<div class="net-row"><span>${m.mode_of_payment} <span style="color:#9ca3af;font-size:10px">x${m.count}</span></span><span class="text-rose">${fmt(m.total)}</span></div>`).join('')}`;
+
+    const purchasesSectionHtml = pePurchases.length === 0
+        ? ''
+        : `<div style="margin-bottom:12px;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px">
+                <div style="font-weight:700;color:#9a3412;margin-bottom:8px">Purchases</div>
+                <div class="net-row"><span>Total Purchases</span><span class="text-rose">${fmt(fin.total_pe_purchases ?? 0)}</span></div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px solid #fdba74">
+                    <div style="font-size:11px;color:#9a3412;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Supplier Payment Entries</div>
+                    ${supplierEntriesHtml}
+                </div>
+            </div>`;
+
+    const unifiedOutflowCardHtml = `
+        <div class="card-full">
+            <div class="section-title">Outflow Streams</div>
+            ${purchasesSectionHtml}
+
+            <div style="margin-bottom:12px;padding:12px;background:#fff1f2;border:1px solid #fecdd3;border-radius:8px">
+                <div style="font-weight:700;color:#9f1239;margin-bottom:8px">Expense</div>
+                <div class="net-row"><span>Payment Entries (Operating)</span><span class="text-rose">${fmt(fin.total_pe_operating ?? 0)}</span></div>
+                <div class="net-row"><span>Journal Entries</span><span class="text-rose">${fmt(fin.je_total ?? 0)}</span></div>
+
+                ${peModeBreakdown.length > 0
+                    ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #fda4af">
+                        <div style="font-size:11px;color:#9f1239;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">PE - By Payment Mode</div>
+                        ${peOperatingByModeHtml}
+                    </div>`
+                    : ''}
+
+                <div style="margin-top:8px;padding-top:8px;border-top:1px solid #fda4af">
+                    <div style="font-size:11px;color:#9f1239;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">JE - By Payment Mode</div>
+                    ${jeByModeHtml}
+                </div>
+
+                <div style="margin-top:8px;padding-top:8px;border-top:1px solid #fda4af">
+                    <div style="font-size:11px;color:#9f1239;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Expense Entries</div>
+                    ${jeExpenseEntriesHtml}
+                </div>
+            </div>
+
+            <div style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:12px">
+                <div style="font-weight:700;text-align:center;color:#1a365d;font-size:14px">Total Outflow: ${fmt(fin.total_expenses)}</div>
+            </div>
+        </div>`;
+
+    const incomeModeMap = new Map<string, number>();
+    p.payment_breakdown.forEach(pm => {
+        incomeModeMap.set(pm.mode_of_payment, (incomeModeMap.get(pm.mode_of_payment) ?? 0) + pm.total);
+    });
+    (fin.repair_payment_breakdown ?? []).forEach(rm => {
+        incomeModeMap.set(rm.mode_of_payment, (incomeModeMap.get(rm.mode_of_payment) ?? 0) + rm.total);
+    });
+    const incomeModeBreakdown = Array.from(incomeModeMap.entries())
+        .map(([mode, total]) => ({ mode, total }))
+        .sort((a, b) => b.total - a.total);
+
+    const incomeModeBreakdownHtml = incomeModeBreakdown.length === 0
+        ? `<p class="empty">No payment mode data</p>`
+        : `${incomeModeBreakdown.map(m => `<div class="net-row"><span>${m.mode}</span><span>${fmt(m.total)}</span></div>`).join('')}`;
 
     // Payment mode balance
+    // Build unified income stream section
+    const unifiedIncomeCardHtml = `
+        <div class="card-full">
+            <div class="section-title">Total Income</div>
+            <div style="margin-bottom:20px">
+                <div style="padding:12px;background:#f9fafb;border-radius:6px;border-left:3px solid #14b8a6">
+                    <div style="font-weight:600;color:#14b8a6;margin-bottom:8px">Sales Stream</div>
+                    <div class="net-row"><span>Retail Sales</span><span>${fmt(retailSales)}</span></div>
+                    <div class="net-row"><span>Repair Invoices</span><span>${fmt(r.revenue)}</span></div>
+                    <div class="net-row"><span>Returns</span><span class="text-rose">− ${fmt(p.total_returns ?? 0)}</span></div>
+                    <div class="net-row" style="border-top:1px solid #d1d5db;padding-top:8px;margin-top:8px;font-weight:600"><span>Net Sales</span><span>${fmt(netSalesInCard)}</span></div>
+                    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb">
+                        <div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">By Payment Mode</div>
+                        ${incomeModeBreakdownHtml}
+                    </div>
+                </div>
+            </div>
+            <div style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:12px">
+                <div style="font-weight:700;text-align:center;color:#1a365d;font-size:14px">Total Income: ${fmt(totalRevenue)}</div>
+            </div>
+        </div>`;
+
     const modeSet = new Set<string>();
     p.payment_breakdown.forEach(pm => modeSet.add(pm.mode_of_payment));
     (fin.repair_payment_breakdown ?? []).forEach(rp => modeSet.add(rp.mode_of_payment));
@@ -457,89 +544,87 @@ function buildFinancialHtml(data: DailyReportData): string {
             </tr></tfoot>
         </table>`;
 
+    const totalOutflowAll = peEntries
+        .filter((e: any) => e.payment_type === 'Pay')
+        .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0)
+        + (fin.je_total ?? 0);
+
+    const allEntriesRows = [
+        ...peEntries.map((e: any) => ({
+            entryId: e.name,
+            entryType: e.payment_type === 'Receive' ? 'Receive' : 'Pay',
+            partyOrAccount: e.party_name || e.party || '—',
+            mode: e.mode_of_payment || '—',
+            remarks: e.remarks || '—',
+            amount: Number(e.amount || 0),
+            isReceive: e.payment_type === 'Receive',
+        })),
+        ...jeEntries.map((je: any) => ({
+            entryId: je.name,
+            entryType: 'JE',
+            partyOrAccount: je.against_account || '—',
+            mode: je.mode_of_payment || '—',
+            remarks: je.remarks || '—',
+            amount: Number(je.amount || 0),
+            isReceive: false,
+        })),
+    ];
+
+    const allEntriesTableHtml = allEntriesRows.length === 0
+        ? ''
+        : `<div class="card-full">
+            <div class="section-title">All Entries</div>
+            <table>
+                <thead><tr>
+                    <th>Entry ID</th><th>Type</th><th>Party / Account</th><th>Mode</th><th>Remarks</th><th class="right">Amount</th>
+                </tr></thead>
+                <tbody>
+                    ${allEntriesRows.map(rw => `<tr>
+                        <td class="mono">${rw.entryId}</td>
+                        <td>${rw.entryType}</td>
+                        <td>${rw.partyOrAccount}</td>
+                        <td>${rw.mode}</td>
+                        <td>${rw.remarks}</td>
+                        <td class="${rw.isReceive ? 'amount' : 'amount-rose'}">${rw.isReceive ? '+' : ''}${fmt(rw.amount)}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td colspan="5">Total Outflow</td>
+                    <td class="amount-rose">${fmt(totalOutflowAll)}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
     return `
         ${header('Financial Summary', data.date)}
 
         <div class="stats stats-3">
             <div class="stat stat-green">
-                <div class="stat-label">Total Revenue</div>
+                <div class="stat-label">Total Income</div>
                 <div class="stat-value">${fmt(totalRevenue)}</div>
             </div>
             <div class="stat stat-rose">
-                <div class="stat-label">Total Expenses</div>
+                <div class="stat-label">Total Outflow</div>
                 <div class="stat-value">${fmt(fin.total_expenses)}</div>
             </div>
             <div class="stat ${net >= 0 ? 'stat-green' : 'stat-rose'}">
-                <div class="stat-label">Net Revenue</div>
+                <div class="stat-label">Balance</div>
                 <div class="stat-value ${netClass}">${net < 0 ? '−' : ''}${fmt(Math.abs(net))}</div>
-                <div class="stat-sub">${net >= 0 ? 'Profitable' : 'Loss'}</div>
+                <div class="stat-sub">${net >= 0 ? 'Positive' : 'Negative'}</div>
             </div>
         </div>
 
+        ${unifiedIncomeCardHtml}
+
+        ${unifiedOutflowCardHtml}
+
+        ${allEntriesTableHtml}
+
         <div class="card-full">
-            <div class="section-title">Payment Mode Balance</div>
+            <div class="section-title">Cash Flow by Payment Mode</div>
             ${modeBalanceTable}
         </div>
-
-        <div class="grid-2">
-            <div class="card">
-                <div class="section-title">Net Revenue Summary</div>
-                <div class="net-row"><span>Repair Revenue</span><span>${fmt(r.revenue)}</span></div>
-                <div class="net-row"><span>POS Revenue</span><span>${fmt(p.total_sales)}</span></div>
-                <div class="net-row subtotal"><span>Total Revenue</span><span>${fmt(totalRevenue)}</span></div>
-                <div class="net-row"><span>Total Expenses</span><span class="text-rose">− ${fmt(fin.total_expenses)}</span></div>
-                <div class="net-row total"><span>Net Revenue</span><span class="${netClass}">${net < 0 ? '−' : ''}${fmt(Math.abs(net))}</span></div>
-            </div>
-            <div class="card">
-                <div class="section-title">Expenses by Payment Mode</div>
-                ${expenseBreakdown}
-            </div>
-        </div>
-
-        <div class="card-full">
-            <div class="section-title">Expense Details</div>
-            ${expenseEntries}
-        </div>
-
-        <div class="card-full">
-            <div class="section-title">POS — Payment Methods</div>
-            ${p.payment_breakdown.length === 0
-            ? `<p class="empty">No POS payments</p>`
-            : `<table>
-                    <thead><tr>
-                        <th>Mode</th><th>Transactions</th><th class="right">Amount</th>
-                    </tr></thead>
-                    <tbody>
-                        ${p.payment_breakdown.map(pm => `<tr>
-                            <td>${pm.mode_of_payment}</td>
-                            <td>${pm.txn_count}</td>
-                            <td class="amount">${fmt(pm.total)}</td>
-                        </tr>`).join('')}
-                    </tbody>
-                    <tfoot><tr class="total-row">
-                        <td colspan="2">Total POS</td>
-                        <td class="amount">${fmt(p.total_sales)}</td>
-                    </tr></tfoot>
-                </table>`}
-        </div>
-
-        <div class="grid-2">
-            <div class="card">
-                <div class="section-title">Transaction Details — Repair</div>
-                <div class="net-row"><span>Invoices Issued</span><span>${r.invoice_count}</span></div>
-                <div class="net-row"><span>Total Invoiced</span><span>${fmt(r.revenue)}</span></div>
-                ${r.invoice_count > 0 ? `<div class="net-row"><span>Avg. per Invoice</span><span>${fmt(r.revenue / r.invoice_count)}</span></div>` : ''}
-                <div class="net-row"><span>Orders Completed</span><span>${r.completed_count}</span></div>
-            </div>
-            <div class="card">
-                <div class="section-title">Transaction Details — POS</div>
-                <div class="net-row"><span>Transactions</span><span>${p.transaction_count}</span></div>
-                <div class="net-row"><span>Total Sales</span><span>${fmt(p.total_sales)}</span></div>
-                <div class="net-row"><span>Unique Items Sold</span><span>${p.items_sold.length}</span></div>
-                ${fin.expense_breakdown.length > 0
-            ? `<div class="net-row"><span>Expense Entries</span><span>${fin.expense_entries?.length ?? 0}</span></div>` : ''}
-            </div>
-        </div>`;
+`;
 }
 
 // ─────────────── Main entry point ───────────────

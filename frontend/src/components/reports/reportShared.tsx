@@ -114,11 +114,84 @@ export interface ModeBalance {
     balance: number;
 }
 
+export interface PaymentEntryRow {
+    name: string;
+    payment_type: 'Receive' | 'Pay';
+    mode_of_payment: string;
+    party_type: string;
+    party: string;
+    party_name: string;
+    amount: number;
+    remarks: string;
+    reference_no?: string;
+}
+
+export interface PeModeBreakdown {
+    mode_of_payment: string;
+    total: number;
+    count: number;
+}
+
+export interface JournalEntryRow {
+    name: string;
+    mode_of_payment: string;
+    against_account: string;
+    amount: number;
+    remarks: string;
+}
+
+export interface CustomerCollectionRow {
+    pe_name: string;
+    customer: string;
+    customer_name: string;
+    invoice: string;
+    amount: number;
+    mode_of_payment: string;
+}
+
+export interface CreditInvoice {
+    name: string;
+    customer?: string;
+    customer_name?: string;
+    supplier?: string;
+    supplier_name?: string;
+    grand_total: number;
+    outstanding_amount: number;
+}
+
 export interface FinancialReportData {
     total_expenses: number;
     expense_breakdown: ExpenseBreakdown[];
     expense_entries: ExpenseEntry[];
     repair_payment_breakdown: { mode_of_payment: string; total: number }[];
+    pe_entries?: PaymentEntryRow[];
+    pe_receive?: PaymentEntryRow[];
+    pe_pay?: PaymentEntryRow[];
+    total_pe_received?: number;
+    total_pe_paid?: number;
+    net_pe_cash?: number;
+    pe_receive_by_mode?: PeModeBreakdown[];
+    pe_pay_by_mode?: PeModeBreakdown[];
+    // Purchase vs Operating split
+    pe_purchases?: PaymentEntryRow[];
+    pe_operating?: PaymentEntryRow[];
+    total_pe_purchases?: number;
+    total_pe_operating?: number;
+    pe_purchases_by_mode?: PeModeBreakdown[];
+    pe_operating_by_mode?: PeModeBreakdown[];
+    // Journal Entry detail
+    je_entries?: JournalEntryRow[];
+    je_count?: number;
+    je_total?: number;
+    je_by_mode?: PeModeBreakdown[];
+    // Customer collections (PE Receive against credit SI)
+    pe_customer_collections?: CustomerCollectionRow[];
+    total_customer_collections?: number;
+    // Credit invoices
+    credit_sales_invoices?: CreditInvoice[];
+    total_credit_sales?: number;
+    credit_purchase_invoices?: CreditInvoice[];
+    total_credit_purchases?: number;
 }
 
 export interface DailyReportData {
