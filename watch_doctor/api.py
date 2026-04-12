@@ -1329,6 +1329,17 @@ def get_daily_report(report_date=None):
 						"amount": float(ref["allocated_amount"] or 0),
 						"mode_of_payment": p.get("mode_of_payment") or "",
 					})
+			else:
+				# No explicit invoice references (on-account/customer collection).
+				# Count this as collection so income stream reflects actual cash received.
+				pe_customer_collections.append({
+					"pe_name": p["name"],
+					"customer": p.get("party") or "",
+					"customer_name": p.get("party_name") or p.get("party") or "",
+					"invoice": "",
+					"amount": float(p.get("amount") or 0),
+					"mode_of_payment": p.get("mode_of_payment") or "",
+				})
 	total_customer_collections = sum(c["amount"] for c in pe_customer_collections)
 
 	# ---- CREDIT INVOICES FOR THE DAY ----
@@ -1354,13 +1365,30 @@ def get_daily_report(report_date=None):
 	""", (report_date,), as_dict=True)
 	total_credit_purchases = sum(float(inv["outstanding_amount"] or 0) for inv in credit_purchase_invoices)
 
+	# Purchased items summary (for purchase-focused daily view)
+	items_purchased = frappe.db.sql("""
+		SELECT
+			pii.item_code,
+			pii.item_name,
+			SUM(pii.qty) AS total_qty,
+			CASE WHEN SUM(pii.qty) = 0 THEN 0 ELSE SUM(pii.amount) / SUM(pii.qty) END AS rate,
+			SUM(pii.amount) AS total_amount
+		FROM `tabPurchase Invoice Item` pii
+		INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
+		WHERE pi.docstatus = 1
+			AND pi.posting_date = %s
+		GROUP BY pii.item_code, pii.item_name
+		ORDER BY total_qty DESC
+	""", (report_date,), as_dict=True)
+
 	# ---- POS / SALES OVERVIEW SECTION ----
 
 	# Fetch all submitted Sales Invoices for the date
 	# We exclude invoices that are explicitly linked to a Repair Order (already counted above)
 	# This ensures Repair + Sales = Total Revenue
 	all_sales_invoices = frappe.db.sql("""
-		SELECT si.name, si.grand_total, si.is_pos, si.is_return, si.owner, si.customer
+		SELECT si.name, si.grand_total, si.outstanding_amount, si.is_pos, si.is_return, si.owner, si.customer,
+			COALESCE(si.customer_name, '') AS customer_name
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
 		WHERE si.docstatus = 1 
@@ -1378,6 +1406,7 @@ def get_daily_report(report_date=None):
 
 	# Payment method breakdown for all general sales
 	payment_breakdown = []
+	sales_payment_modes = {}
 	if sales_inv_names:
 		placeholders = ", ".join(["%s"] * len(sales_inv_names))
 		payment_breakdown = frappe.db.sql(
@@ -1387,6 +1416,14 @@ def get_daily_report(report_date=None):
 			f"GROUP BY mode_of_payment ORDER BY total DESC",
 			tuple(sales_inv_names), as_dict=True
 		)
+		sales_payment_rows = frappe.db.sql(
+			f"SELECT parent, GROUP_CONCAT(DISTINCT mode_of_payment ORDER BY mode_of_payment SEPARATOR ', ') AS payment_modes "
+			f"FROM `tabSales Invoice Payment` "
+			f"WHERE parent IN ({placeholders}) "
+			f"GROUP BY parent",
+			tuple(sales_inv_names), as_dict=True
+		)
+		sales_payment_modes = {r["parent"]: (r.get("payment_modes") or "") for r in sales_payment_rows}
 
 	# Items sold & Category Breakdown
 	items_sold = []
@@ -1395,7 +1432,9 @@ def get_daily_report(report_date=None):
 		placeholders = ", ".join(["%s"] * len(sales_inv_names))
 		# Detailed items
 		items_sold = frappe.db.sql(
-			f"SELECT item_code, item_name, SUM(qty) as total_qty, SUM(amount) as total_amount "
+			f"SELECT item_code, item_name, SUM(qty) as total_qty, "
+			f"CASE WHEN SUM(qty) = 0 THEN 0 ELSE SUM(amount) / SUM(qty) END as rate, "
+			f"SUM(amount) as total_amount "
 			f"FROM `tabSales Invoice Item` "
 			f"WHERE parent IN ({placeholders}) "
 			f"GROUP BY item_code, item_name ORDER BY total_qty DESC",
@@ -1424,6 +1463,52 @@ def get_daily_report(report_date=None):
 			else:
 				cashier_map[owner]["total"] -= float(abs(inv["grand_total"]))
 		cashier_breakdown = sorted(cashier_map.values(), key=lambda x: x["total"], reverse=True)
+
+	# Detailed sales and purchase entries for executive drill-down tables
+	sales_entries = []
+	for inv in all_sales_invoices:
+		amount = float(inv.get("grand_total") or 0)
+		outstanding = float(inv.get("outstanding_amount") or 0)
+		if inv.get("is_return") == 1:
+			payment_status = "Returned"
+		elif outstanding <= 0:
+			payment_status = "Paid"
+		elif outstanding < amount:
+			payment_status = "Partially Paid"
+		else:
+			payment_status = "Unpaid"
+
+		sales_entries.append({
+			"id": inv.get("name"),
+			"party_name": inv.get("customer_name") or inv.get("customer") or "",
+			"amount": amount,
+			"payment_status": payment_status,
+			"payment_mode": sales_payment_modes.get(inv.get("name"), "Credit" if outstanding > 0 else "N/A"),
+			"source": "Sales Invoice",
+		})
+
+	purchase_entries = []
+	for p in pe_purchases:
+		purchase_entries.append({
+			"id": p.get("name"),
+			"party_name": p.get("party_name") or p.get("party") or "",
+			"amount": float(p.get("amount") or 0),
+			"payment_status": "Paid",
+			"payment_mode": p.get("mode_of_payment") or "",
+			"source": "Payment Entry",
+		})
+
+	for inv in credit_purchase_invoices:
+		outstanding = float(inv.get("outstanding_amount") or 0)
+		grand_total = float(inv.get("grand_total") or 0)
+		purchase_entries.append({
+			"id": inv.get("name"),
+			"party_name": inv.get("supplier_name") or inv.get("supplier") or "",
+			"amount": outstanding,
+			"payment_status": "Partially Paid" if (grand_total > 0 and outstanding < grand_total) else "Unpaid",
+			"payment_mode": "Credit",
+			"source": "Purchase Invoice",
+		})
 
 	return {
 		"date": report_date,
@@ -1486,5 +1571,8 @@ def get_daily_report(report_date=None):
 			"total_credit_sales": total_credit_sales,
 			"credit_purchase_invoices": credit_purchase_invoices,
 			"total_credit_purchases": total_credit_purchases,
+			"items_purchased": items_purchased,
+			"sales_entries": sales_entries,
+			"purchase_entries": purchase_entries,
 		}
 	}

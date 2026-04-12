@@ -141,11 +141,15 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const { formatCurrency } = useAppConfig();
     const fin = fin$ ?? EMPTY_FINANCIAL;
 
+    // Customer collections against credit invoices
+    const customerCollections   = fin.pe_customer_collections ?? [] as CustomerCollectionRow[];
+    const totalCollections      = fin.total_customer_collections ?? 0;
+
     // ── Derived values ──────────────────────────────────────────
     const repairRevenue   = repair.revenue;
     const salesRevenue    = pos.total_retail_sales;
     const netSalesInCard  = pos.total_retail_sales + repairRevenue;
-    const totalIncome     = repairRevenue + salesRevenue;
+    const totalIncome     = repairRevenue + salesRevenue + totalCollections;
 
     const pePurchases     = fin.pe_purchases     ?? [];
     const peOperating     = fin.pe_operating     ?? [];
@@ -165,9 +169,6 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const totalOutflow       = purchaseTotal + otherExpensesTotal;
     const balance            = totalIncome - totalOutflow;
 
-    // Customer collections against credit invoices
-    const customerCollections   = fin.pe_customer_collections ?? [] as CustomerCollectionRow[];
-    const totalCollections      = fin.total_customer_collections ?? 0;
     const creditSalesInvoices   = fin.credit_sales_invoices     ?? [] as CreditInvoice[];
     const totalCreditSales      = fin.total_credit_sales        ?? 0;
     const creditPurchaseInvoices = fin.credit_purchase_invoices ?? [] as CreditInvoice[];
@@ -178,11 +179,15 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
         const allModes = new Set<string>();
         pos.payment_breakdown.forEach(p => allModes.add(p.mode_of_payment));
         (fin.repair_payment_breakdown ?? []).forEach(r => allModes.add(r.mode_of_payment));
+        customerCollections.forEach(c => allModes.add(c.mode_of_payment));
         fin.expense_breakdown.forEach(e => allModes.add(e.mode_of_payment));
         return Array.from(allModes).map(mode => {
             const posIn    = pos.payment_breakdown.find(p => p.mode_of_payment === mode)?.total ?? 0;
             const repIn    = (fin.repair_payment_breakdown ?? []).find(r => r.mode_of_payment === mode)?.total ?? 0;
-            const income   = posIn + repIn;
+            const collIn   = customerCollections
+                .filter(c => c.mode_of_payment === mode)
+                .reduce((s, c) => s + c.amount, 0);
+            const income   = posIn + repIn + collIn;
             const outflow  = fin.expense_breakdown.find(e => e.mode_of_payment === mode)?.total ?? 0;
             return { mode, income, outflow, balance: income - outflow };
         });
@@ -196,6 +201,9 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     });
     (fin.repair_payment_breakdown ?? []).forEach(rm => {
         incomeModeMap.set(rm.mode_of_payment, (incomeModeMap.get(rm.mode_of_payment) ?? 0) + rm.total);
+    });
+    customerCollections.forEach(c => {
+        incomeModeMap.set(c.mode_of_payment, (incomeModeMap.get(c.mode_of_payment) ?? 0) + c.amount);
     });
     const incomeModeBreakdown = Array.from(incomeModeMap.entries())
         .map(([mode, total]) => ({ mode, total }))
@@ -232,6 +240,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Sales Stream</p>
                             <Row label="Retail Sales" value={formatCurrency(pos.total_retail_sales)} />
                             <Row label="Repair Invoices" value={formatCurrency(repairRevenue)} />
+                            <Row label="Collection" value={formatCurrency(totalCollections)} muted={totalCollections === 0} />
                             {pos.total_returns > 0 && (
                                 <Row label="Returns" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(pos.total_returns)}</span>} />
                             )}
@@ -264,49 +273,6 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                     </StreamCard>
                 </div>
 
-                {/* Customer Collections against Credit Invoices */}
-                {customerCollections.length > 0 && (
-                    <div className="mt-4">
-                        <StreamCard
-                            icon={<CollectIcon />} iconColor="text-blue-500"
-                            title="Customer Collections — Credit Invoice Payments"
-                            total={formatCurrency(totalCollections)}
-                            totalColor="text-emerald-600 dark:text-emerald-400"
-                        >
-                            <div className="space-y-2 mb-4">
-                                <Row label="Payments Received" value={customerCollections.length} />
-                            </div>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
-                                            <th className="text-left pb-2 pr-3">Customer</th>
-                                            <th className="text-left pb-2 pr-3">Invoice</th>
-                                            <th className="text-left pb-2 pr-3">Mode</th>
-                                            <th className="text-right pb-2">Amount</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-50 dark:divide-gray-700">
-                                        {customerCollections.map((c: CustomerCollectionRow, i: number) => (
-                                            <tr key={i}>
-                                                <td className="py-2 pr-3 text-gray-700 dark:text-gray-300 truncate max-w-[160px]">{c.customer_name || c.customer}</td>
-                                                <td className="py-2 pr-3 font-mono text-xs text-gray-500 dark:text-gray-400">{c.invoice || '\u2014'}</td>
-                                                <td className="py-2 pr-3 text-gray-600 dark:text-gray-400">{c.mode_of_payment}</td>
-                                                <td className="py-2 text-right font-semibold text-emerald-600 dark:text-emerald-400">+{formatCurrency(c.amount)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                    <tfoot>
-                                        <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
-                                            <td colSpan={3} className="pt-2 text-sm text-gray-700 dark:text-gray-300">Total Collections</td>
-                                            <td className="pt-2 text-right text-sm text-emerald-600 dark:text-emerald-400">+{formatCurrency(totalCollections)}</td>
-                                        </tr>
-                                    </tfoot>
-                                </table>
-                            </div>
-                        </StreamCard>
-                    </div>
-                )}
             </div>
 
             {/* ══════════════════════════════════════════

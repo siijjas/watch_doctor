@@ -49,6 +49,7 @@ export interface ItemSold {
     item_code: string;
     item_name: string;
     total_qty: number;
+    rate?: number;
     total_amount: number;
 }
 
@@ -159,6 +160,15 @@ export interface CreditInvoice {
     outstanding_amount: number;
 }
 
+export interface SalesPurchaseEntry {
+    id: string;
+    party_name: string;
+    amount: number;
+    payment_status: string;
+    payment_mode: string;
+    source: string;
+}
+
 export interface FinancialReportData {
     total_expenses: number;
     expense_breakdown: ExpenseBreakdown[];
@@ -192,6 +202,9 @@ export interface FinancialReportData {
     total_credit_sales?: number;
     credit_purchase_invoices?: CreditInvoice[];
     total_credit_purchases?: number;
+    items_purchased?: ItemSold[];
+    sales_entries?: SalesPurchaseEntry[];
+    purchase_entries?: SalesPurchaseEntry[];
 }
 
 export interface DailyReportData {
