@@ -87,6 +87,7 @@ npm-debug.log*
 # Test & Debug Files
 # ====================
 test_*.py
+sql_test.py
 debug_*.py
 check_*.py
 fix_*.py
