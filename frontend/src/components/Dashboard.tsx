@@ -16,6 +16,7 @@ import * as apiService from '../services/apiService';
 import type { DashboardStats, OrdersTrendItem, TechnicianStats, TopIssue, PendingOrder } from '../services/apiService';
 import { isErpNext } from '../services/apiService';
 import ExecutiveDashboard from './ExecutiveDashboard';
+import { useAuth } from '../context/AuthContext';
 
 // Register Chart.js components
 ChartJS.register(
@@ -104,6 +105,8 @@ const ProgressIcon = () => (
 );
 
 const Dashboard: React.FC<DashboardProps> = ({ onNavigateToOrders, onSelectOrder }) => {
+    const { hasRole } = useAuth();
+    const canViewExecutiveDashboard = hasRole('executive');
     const [dashboardView, setDashboardView] = useState<'general' | 'executive'>('general');
     const [stats, setStats] = useState<DashboardStats | null>(null);
     const [trend, setTrend] = useState<OrdersTrendItem[]>([]);
@@ -265,7 +268,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToOrders, onSelectOrder
         }
     };
 
-    if (dashboardView === 'executive') {
+    if (dashboardView === 'executive' && canViewExecutiveDashboard) {
         return (
             <ExecutiveDashboard
                 onNavigateToOrders={onNavigateToOrders}
@@ -306,20 +309,21 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigateToOrders, onSelectOrder
                         <h1 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight">Dashboard Overview</h1>
                     </div>
                     <div className="flex items-center gap-2 sm:gap-3">
-                        {/* View Switcher */}
-                        <div className="flex items-center rounded-xl p-1" style={{ backgroundColor: '#F0EDEA' }}>
-                            <button
-                                className="px-4 py-1.5 rounded-lg text-sm font-semibold bg-white text-gray-800 shadow-sm"
-                            >
-                                General
-                            </button>
-                            <button
-                                onClick={() => setDashboardView('executive')}
-                                className="px-4 py-1.5 rounded-lg text-sm font-semibold text-gray-500 hover:text-gray-700 transition-all"
-                            >
-                                Executive
-                            </button>
-                        </div>
+                        {canViewExecutiveDashboard && (
+                            <div className="flex items-center rounded-xl p-1" style={{ backgroundColor: '#F0EDEA' }}>
+                                <button
+                                    className="px-4 py-1.5 rounded-lg text-sm font-semibold bg-white text-gray-800 shadow-sm"
+                                >
+                                    General
+                                </button>
+                                <button
+                                    onClick={() => setDashboardView('executive')}
+                                    className="px-4 py-1.5 rounded-lg text-sm font-semibold text-gray-500 hover:text-gray-700 transition-all"
+                                >
+                                    Executive
+                                </button>
+                            </div>
+                        )}
                         <select
                             value={periodDays}
                             onChange={(e) => setPeriodDays(parseInt(e.target.value))}

@@ -203,8 +203,32 @@ export interface FinancialReportData {
     credit_purchase_invoices?: CreditInvoice[];
     total_credit_purchases?: number;
     items_purchased?: ItemSold[];
+    item_group_profit_summary?: ItemGroupProfitRow[];
+    item_profit_summary?: ItemProfitRow[];
     sales_entries?: SalesPurchaseEntry[];
     purchase_entries?: SalesPurchaseEntry[];
+}
+
+export interface ItemGroupProfitRow {
+    item_group: string;
+    qty_sold: number;
+    sales_amount: number;
+    cogs_amount: number;
+    gross_profit: number;
+    gross_margin_pct: number;
+}
+
+export interface ItemProfitRow {
+    item_code: string;
+    item_name: string;
+    item_group: string;
+    qty_sold: number;
+    selling_rate: number;
+    sales_amount: number;
+    cogs_rate: number;
+    cogs_amount: number;
+    gross_profit: number;
+    gross_margin_pct: number;
 }
 
 export interface DailyReportData {

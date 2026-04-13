@@ -4,6 +4,7 @@ import { DashboardIcon } from '../icons/DashboardIcon';
 import { ListIcon } from '../icons/ListIcon';
 import { useAuth } from '../../context/AuthContext';
 import { useAppConfig } from '../../context/AppConfigContext';
+import type { DWRole } from '../../types';
 
 interface SidebarProps {
     currentView: string;
@@ -12,29 +13,38 @@ interface SidebarProps {
     onMobileClose?: () => void;
 }
 
+interface NavItem {
+    id: string;
+    label: string;
+    icon: React.ReactNode;
+    allowedRoles?: DWRole[]; // undefined = visible to all
+}
+
 const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isMobileOpen = false, onMobileClose }) => {
-    const { user, logout } = useAuth();
+    const { user, logout, hasRole } = useAuth();
     const { config } = useAppConfig();
 
-    const mainItems = [
-        { id: 'dashboard', label: 'Dashboard', icon: <DashboardIcon className="w-5 h-5" /> },
+    const mainItems: NavItem[] = [
+        { id: 'dashboard', label: 'Dashboard', icon: <DashboardIcon className="w-5 h-5" />, allowedRoles: ['executive', 'data_entry'] },
         { id: 'orders', label: 'Orders', icon: <ListIcon className="w-5 h-5" /> },
         {
             id: 'pos', label: 'POS', icon: (
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
-            )
+            ),
+            allowedRoles: ['executive', 'data_entry'],
         },
     ];
 
-    const toolItems = [
+    const toolItems: NavItem[] = [
         {
             id: 'daily-report', label: 'Reports', icon: (
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-            )
+            ),
+            allowedRoles: ['executive', 'data_entry'],
         },
         {
             id: 'settings', label: 'Settings', icon: (
@@ -42,9 +52,18 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isMobileOp
                     <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-            )
+            ),
+            allowedRoles: ['executive'],
         },
     ];
+
+    const isItemVisible = (item: NavItem) => {
+        if (!item.allowedRoles) return true;
+        return hasRole(...item.allowedRoles);
+    };
+
+    const visibleMainItems = mainItems.filter(isItemVisible);
+    const visibleToolItems = toolItems.filter(isItemVisible);
 
     const handleNav = (id: string) => {
         onChangeView(id);
@@ -109,20 +128,22 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isMobileOp
 
             {/* Main Navigation */}
             <nav className="px-3 mt-1 space-y-0.5">
-                {mainItems.map((item) => (
+                {visibleMainItems.map((item) => (
                     <NavButton key={item.id} {...item} />
                 ))}
             </nav>
 
             {/* Tools Section */}
+            {visibleToolItems.length > 0 && (
             <div className="px-3 mt-8">
                 <p className="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Tools</p>
                 <nav className="space-y-0.5">
-                    {toolItems.map((item) => (
+                    {visibleToolItems.map((item) => (
                         <NavButton key={item.id} {...item} />
                     ))}
                 </nav>
             </div>
+            )}
 
             {/* Spacer */}
             <div className="flex-1" />

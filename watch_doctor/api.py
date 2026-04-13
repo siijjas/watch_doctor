@@ -2,6 +2,44 @@ import frappe
 from frappe import _  # noqa: F401
 import json
 
+from watch_doctor.permissions import (
+    require_roles,
+    can_access_repair_order,
+    get_dw_roles,
+    get_current_technician,
+    get_current_technician_identifiers,
+    ROLE_EXECUTIVE,
+    ROLE_DATA_ENTRY,
+    ROLE_TECHNICIAN,
+    PRIVILEGED_ROLES,
+)
+
+
+# ==================== User Info ====================
+
+@frappe.whitelist()
+def get_user_info():
+    """Return the current user's DW roles and linked technician record."""
+    user = frappe.session.user
+    dw_roles = get_dw_roles(user)
+
+    technician = None
+    if "technician" in dw_roles:
+        tech_values = get_current_technician_identifiers(user)
+        if tech_values:
+            technician = frappe.db.get_value(
+                "DW Technician",
+                {"name": ["in", tech_values]},
+                ["name", "technician_name"],
+                as_dict=True,
+            )
+
+    return {
+        "user": user,
+        "roles": dw_roles,
+        "technician": technician,
+    }
+
 
 # ==================== App Configuration ====================
 
@@ -57,6 +95,7 @@ def get_app_config():
 @frappe.whitelist()
 def save_logo_url(logo_url):
 	"""Persist the app logo URL using frappe defaults."""
+	require_roles(ROLE_EXECUTIVE)
 	try:
 		frappe.db.set_default("dw_logo_url", logo_url, "watch_doctor")
 		frappe.db.commit()
@@ -69,7 +108,13 @@ def save_logo_url(logo_url):
 @frappe.whitelist()
 def save_repair_order(doc_json):
 	"""Custom save method for repair orders that handles system fields properly."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	doc_dict = json.loads(doc_json) if isinstance(doc_json, str) else doc_json
+
+	# Technicians may only update orders they are assigned to
+	if doc_dict.get('name'):
+		if not can_access_repair_order(doc_dict['name']):
+			frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
 	
 	# Remove system fields recursively
 	def clean_dict(d):
@@ -241,9 +286,31 @@ def save_repair_order(doc_json):
 @frappe.whitelist()
 def list_repair_orders():
 	"""Return lightweight repair order list with customer display."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+
+	# Technicians: only orders assigned to them
+	roles = set(frappe.get_roles())
+	extra_filters = {}
+	if not (roles & PRIVILEGED_ROLES) and ROLE_TECHNICIAN in roles:
+		tech_values = get_current_technician_identifiers()
+		if tech_values:
+			assigned_orders = frappe.get_all(
+				"DW Repair Item",
+				filters={"technician": ["in", tech_values]},
+				fields=["parent"],
+				distinct=True,
+			)
+			order_names = [r.parent for r in assigned_orders]
+			if not order_names:
+				return []
+			extra_filters["name"] = ["in", order_names]
+		else:
+			return []
+
 	orders = frappe.get_all(
 		"DW Repair Order",
 		fields=["name", "customer", "status", "priority", "received_date"],
+		filters=extra_filters,
 		limit_page_length=50,
 		order_by="modified desc",
 	)
@@ -263,6 +330,7 @@ def list_repair_orders():
 @frappe.whitelist()
 def search_customers(txt: str = ""):
 	"""Search customers by name."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	filters = []
 	or_filters = []
 	if txt:
@@ -305,6 +373,7 @@ def search_customers(txt: str = ""):
 @frappe.whitelist()
 def get_watch_brands(txt: str = ""):
 	"""Search watch brands by name."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	filters = []
 	if txt:
 		needle = f"%{txt}%"
@@ -324,6 +393,7 @@ def get_watch_brands(txt: str = ""):
 @frappe.whitelist()
 def create_watch_brand(brand_name: str, description: str = ""):
 	"""Create a new watch brand."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	if not brand_name:
 		frappe.throw(_("Brand name is required"))
 	
@@ -342,6 +412,7 @@ def create_watch_brand(brand_name: str, description: str = ""):
 @frappe.whitelist()
 def create_watch_model(brand: str, model_name: str, description: str = ""):
 	"""Create a new watch model."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	if not brand or not model_name:
 		frappe.throw(_("Brand and Model name are required"))
 		
@@ -361,6 +432,7 @@ def create_watch_model(brand: str, model_name: str, description: str = ""):
 @frappe.whitelist()
 def get_watch_models(brand: str = "", txt: str = ""):
 	"""Get watch models for a specific brand, optionally filtered by search text."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	filters = []
 	
 	# Always filter by brand if provided
@@ -387,6 +459,7 @@ def get_watch_models(brand: str = "", txt: str = ""):
 @frappe.whitelist()
 def get_issue_templates():
 	"""Get all active issue templates with suggested tasks."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	templates = frappe.get_all(
 		"DW Issue Template",
 		fields=["name", "issue_name", "description", "suggested_task"],
@@ -401,6 +474,7 @@ def get_issue_templates():
 @frappe.whitelist()
 def get_country_codes():
 	"""Get all active country codes."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	codes = frappe.get_all(
 		"DW Country Code",
 		fields=["name", "country_name", "code"],
@@ -418,6 +492,7 @@ def search_items(txt: str = "", item_group: str = ""):
 	
 	Supports flexible word-order matching. For example, 'battery 357' will find '357 RENATA BATTERY'.
 	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	filters = {
 		"disabled": 0  # Only show enabled items
 	}
@@ -492,6 +567,7 @@ def search_items(txt: str = "", item_group: str = ""):
 @frappe.whitelist()
 def get_task_templates():
 	"""Get all active task templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	templates = frappe.get_all(
 		"DW Task Template",
 		fields=["name", "task_name", "description", "default_rate"],
@@ -505,6 +581,7 @@ def get_task_templates():
 @frappe.whitelist()
 def get_employees():
 	"""Get all technicians (employees)."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	employees = frappe.get_all(
 		"DW Technician",
 		fields=["name", "employee_name"],
@@ -517,6 +594,7 @@ def get_employees():
 @frappe.whitelist()
 def get_payment_modes():
 	"""Get configured payment modes for repair workflow."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	# Fetch active payment modes from config
 	payment_modes = frappe.db.sql("""
 		SELECT 
@@ -536,6 +614,7 @@ def get_payment_modes():
 @frappe.whitelist()
 def get_dashboard_stats(days: int = 7):
 	"""Get summary statistics for dashboard KPI cards."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	from datetime import datetime, timedelta
 	
 	today = datetime.now().date()
@@ -600,6 +679,7 @@ def get_dashboard_stats(days: int = 7):
 @frappe.whitelist()
 def get_orders_trend(days: int = 7):
 	"""Get daily order counts for the last N days."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	from datetime import datetime, timedelta
 	
 	today = datetime.now().date()
@@ -646,6 +726,7 @@ def get_orders_trend(days: int = 7):
 @frappe.whitelist()
 def get_technician_stats():
 	"""Get performance stats per technician."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	# Get task counts grouped by technician and status
 	stats = frappe.db.sql("""
 		SELECT 
@@ -668,6 +749,7 @@ def get_technician_stats():
 @frappe.whitelist()
 def get_top_issues(limit: int = 10):
 	"""Get most common repair issues."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	issues = frappe.db.sql("""
 		SELECT 
 			COALESCE(it.issue_name, ri.issue) as issue_name,
@@ -690,6 +772,7 @@ def get_top_issues(limit: int = 10):
 @frappe.whitelist()
 def get_aged_pending_orders(limit: int = 5):
 	"""Get oldest pending repair orders."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	orders = frappe.db.sql("""
 		SELECT 
 			name, customer, received_date, status,
@@ -712,6 +795,7 @@ def get_aged_pending_orders(limit: int = 5):
 @frappe.whitelist()
 def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 	"""Get items for POS with stock and pricing info. Only returns enabled items with stock."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	filters = {"is_stock_item": 1, "disabled": 0}
 	
 	# Get items from Bin that have stock
@@ -790,6 +874,7 @@ def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 @frappe.whitelist()
 def get_pos_customers(search: str = "", limit: int = 20):
 	"""Get customers for POS selection."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	if search:
 		customers = frappe.get_all(
 			"Customer",
@@ -815,6 +900,7 @@ def get_pos_customers(search: str = "", limit: int = 20):
 @frappe.whitelist()
 def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash", discount_percent: float = 0):
 	"""Create a POS Sales Invoice with immediate payment."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
 	discount_percent = float(discount_percent) if discount_percent else 0
 	
@@ -865,6 +951,7 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 			"amount": total_amount
 		}]
 	})
+	invoice.flags.ignore_permissions = True
 	
 	# Add items
 	for item in items:
@@ -874,13 +961,14 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 			"rate": item.get("rate", 0)
 		})
 	
-	invoice.insert()
+	invoice.insert(ignore_permissions=True)
 	
 	# Update payment amount to match grand_total after insert (which calculates taxes/discount etc)
 	if invoice.payments and len(invoice.payments) > 0:
 		invoice.payments[0].amount = invoice.grand_total
-		invoice.save()
+		invoice.save(ignore_permissions=True)
 	
+	invoice.flags.ignore_permissions = True
 	invoice.submit()
 	
 	frappe.db.commit()
@@ -895,6 +983,7 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 @frappe.whitelist()
 def save_pos_draft(customer: str, items_json: str):
 	"""Save POS cart as draft Sales Invoice (not submitted)."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
 	
 	if not customer:
@@ -916,6 +1005,7 @@ def save_pos_draft(customer: str, items_json: str):
 		"update_stock": 1,
 		"items": []
 	})
+	invoice.flags.ignore_permissions = True
 	
 	# Add items
 	for item in items:
@@ -925,7 +1015,7 @@ def save_pos_draft(customer: str, items_json: str):
 			"rate": item.get("rate", 0)
 		})
 	
-	invoice.insert()
+	invoice.insert(ignore_permissions=True)
 	frappe.db.commit()
 	
 	return {
@@ -938,6 +1028,7 @@ def save_pos_draft(customer: str, items_json: str):
 @frappe.whitelist()
 def get_pos_drafts(limit: int = 20):
 	"""Get draft POS invoices (held orders)."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	drafts = frappe.get_all(
 		"Sales Invoice",
 		filters={
@@ -964,6 +1055,7 @@ def get_pos_drafts(limit: int = 20):
 @frappe.whitelist()
 def load_pos_draft(invoice_name: str):
 	"""Load a draft invoice to continue in POS."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 	
 	if invoice.docstatus != 0:
@@ -990,6 +1082,7 @@ def load_pos_draft(invoice_name: str):
 @frappe.whitelist()
 def delete_pos_draft(invoice_name: str):
 	"""Delete a draft POS invoice."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 	
 	if invoice.docstatus != 0:
@@ -1004,7 +1097,9 @@ def delete_pos_draft(invoice_name: str):
 @frappe.whitelist()
 def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_percent: float = 0):
 	"""Submit a draft POS invoice with payment."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
+	invoice.flags.ignore_permissions = True
 	discount_percent = float(discount_percent) if discount_percent else 0
 	
 	if invoice.docstatus != 0:
@@ -1041,13 +1136,14 @@ def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_per
 		"amount": invoice.grand_total
 	})
 	
-	invoice.save()
+	invoice.save(ignore_permissions=True)
 	
 	# Update payment amount after save
 	if invoice.payments and len(invoice.payments) > 0:
 		invoice.payments[-1].amount = invoice.grand_total
-		invoice.save()
+		invoice.save(ignore_permissions=True)
 	
+	invoice.flags.ignore_permissions = True
 	invoice.submit()
 	frappe.db.commit()
 	
@@ -1065,7 +1161,9 @@ def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_per
 @frappe.whitelist()
 def get_daily_report(report_date=None):
 	"""Get a comprehensive daily report for repair works and POS."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	import datetime
+	is_executive = "executive" in get_dw_roles()
 	if not report_date:
 		report_date = datetime.date.today().isoformat()
 
@@ -1428,6 +1526,8 @@ def get_daily_report(report_date=None):
 	# Items sold & Category Breakdown
 	items_sold = []
 	category_breakdown = []
+	item_profit_summary = []
+	item_group_profit_summary = []
 	if sales_inv_names:
 		placeholders = ", ".join(["%s"] * len(sales_inv_names))
 		# Detailed items
@@ -1447,6 +1547,63 @@ def get_daily_report(report_date=None):
 			f"WHERE parent IN ({placeholders}) "
 			f"GROUP BY item_group ORDER BY total_amount DESC",
 			tuple(sales_inv_names), as_dict=True
+		)
+
+	# Item-wise profit summary should include ALL submitted Sales Invoices for the day
+	# (both standalone sales and repair-linked invoices).
+	profit_invoice_names = frappe.get_all(
+		"Sales Invoice",
+		filters={"docstatus": 1, "posting_date": report_date},
+		pluck="name",
+	)
+	if profit_invoice_names:
+		profit_placeholders = ", ".join(["%s"] * len(profit_invoice_names))
+		item_group_profit_summary = frappe.db.sql(
+			f"""
+			SELECT
+				COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other') AS item_group,
+				SUM(sii.qty) AS qty_sold,
+				SUM(sii.base_net_amount) AS sales_amount,
+				SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS cogs_amount,
+				SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS gross_profit,
+				CASE
+					WHEN SUM(sii.base_net_amount) = 0 THEN 0
+					ELSE ((SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0))) / SUM(sii.base_net_amount)) * 100
+				END AS gross_margin_pct
+			FROM `tabSales Invoice Item` sii
+			LEFT JOIN `tabItem` i ON i.name = sii.item_code
+			WHERE sii.parent IN ({profit_placeholders})
+			GROUP BY COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other')
+			ORDER BY gross_profit DESC, sales_amount DESC
+			""",
+			tuple(profit_invoice_names),
+			as_dict=True,
+		)
+
+		item_profit_summary = frappe.db.sql(
+			f"""
+			SELECT
+				sii.item_code,
+				COALESCE(sii.item_name, sii.item_code) AS item_name,
+				COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other') AS item_group,
+				SUM(sii.qty) AS qty_sold,
+				CASE WHEN SUM(sii.qty) = 0 THEN 0 ELSE SUM(sii.base_net_amount) / SUM(sii.qty) END AS selling_rate,
+				SUM(sii.base_net_amount) AS sales_amount,
+				CASE WHEN SUM(sii.qty) = 0 THEN 0 ELSE SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) / SUM(sii.qty) END AS cogs_rate,
+				SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS cogs_amount,
+				SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS gross_profit,
+				CASE
+					WHEN SUM(sii.base_net_amount) = 0 THEN 0
+					ELSE ((SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0))) / SUM(sii.base_net_amount)) * 100
+				END AS gross_margin_pct
+			FROM `tabSales Invoice Item` sii
+			LEFT JOIN `tabItem` i ON i.name = sii.item_code
+			WHERE sii.parent IN ({profit_placeholders})
+			GROUP BY sii.item_code, sii.item_name, COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other')
+			ORDER BY gross_profit DESC, sales_amount DESC
+			""",
+			tuple(profit_invoice_names),
+			as_dict=True,
 		)
 
 	# Cashier / Staff Breakdown
@@ -1572,6 +1729,8 @@ def get_daily_report(report_date=None):
 			"credit_purchase_invoices": credit_purchase_invoices,
 			"total_credit_purchases": total_credit_purchases,
 			"items_purchased": items_purchased,
+			"item_group_profit_summary": item_group_profit_summary if is_executive else [],
+			"item_profit_summary": item_profit_summary if is_executive else [],
 			"sales_entries": sales_entries,
 			"purchase_entries": purchase_entries,
 		}

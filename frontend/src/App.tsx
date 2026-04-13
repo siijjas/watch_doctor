@@ -20,8 +20,15 @@ type ViewType = 'dashboard' | 'orders' | 'pos' | 'daily-report' | 'settings';
 
 // Main app content (shown when authenticated)
 const AppContent: React.FC = () => {
-  const { user, logout } = useAuth();
-  const [currentView, setCurrentView] = useState<ViewType>('dashboard');
+  const { user, logout, hasRole } = useAuth();
+
+  // Determine default view based on role
+  const getDefaultView = (): ViewType => {
+    if (hasRole('executive')) return 'dashboard';
+    return 'orders'; // Data Entry and Technicians land on orders
+  };
+
+  const [currentView, setCurrentView] = useState<ViewType>(getDefaultView());
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [repairOrders, setRepairOrders] = useState<RepairOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(null);
@@ -188,7 +195,7 @@ const AppContent: React.FC = () => {
         />
 
         <main className={currentView === 'pos' ? 'flex-1 overflow-hidden p-0' : 'flex-1 overflow-y-auto px-4 pb-6 sm:px-6 lg:px-8 lg:pb-8'}>
-          {currentView === 'orders' && !selectedOrder && (
+          {currentView === 'orders' && !selectedOrder && hasRole('executive', 'data_entry') && (
             <div className="mb-4 flex justify-end">
               <button
                 onClick={() => handleOpenForm()}
@@ -200,19 +207,19 @@ const AppContent: React.FC = () => {
             </div>
           )}
 
-          {currentView === 'dashboard' ? (
+          {currentView === 'dashboard' && hasRole('executive', 'data_entry') ? (
             <Dashboard
               onNavigateToOrders={handleNavigateToOrders}
               onSelectOrder={handleSelectOrderById}
             />
-          ) : currentView === 'pos' ? (
-            <POS onBack={() => setCurrentView('dashboard')} />
-          ) : currentView === 'daily-report' ? (
+          ) : currentView === 'pos' && hasRole('executive', 'data_entry') ? (
+            <POS onBack={() => setCurrentView(getDefaultView())} />
+          ) : currentView === 'daily-report' && hasRole('executive', 'data_entry') ? (
             <DailyReport onSelectOrder={handleSelectOrderById} />
-          ) : currentView === 'settings' ? (
+          ) : currentView === 'settings' && hasRole('executive') ? (
             <Settings />
           ) : selectedOrder ? (
-            <RepairOrderDetail order={selectedOrder} onBack={handleBackToList} onEdit={handleOpenForm} onDelete={handleDeleteOrder} onRefresh={handleRefreshOrder} />
+            <RepairOrderDetail order={selectedOrder} onBack={handleBackToList} onEdit={hasRole('executive', 'data_entry', 'technician') ? handleOpenForm : undefined} onDelete={hasRole('executive') ? handleDeleteOrder : undefined} onRefresh={handleRefreshOrder} />
           ) : (
             <RepairOrderList
               orders={repairOrders}

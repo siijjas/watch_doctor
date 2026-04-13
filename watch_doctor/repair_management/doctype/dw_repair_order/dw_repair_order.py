@@ -5,6 +5,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import add_days, getdate
+from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
 
 
 class DWRepairOrder(Document):
@@ -549,6 +550,7 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 		Dictionary with success status and message
 	"""
 	import json
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	
 	# Parse boolean if passed as string
 	if isinstance(mark_as_delivered, str):
@@ -559,6 +561,7 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 	
 	# Get the invoice
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
+	invoice.flags.ignore_permissions = True
 	
 	# Apply discount if any
 	if discount > 0:
@@ -615,6 +618,7 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 	
 	# Get repair order
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
+	repair_order.flags.ignore_permissions = True
 	
 	# Update invoiced amount
 	repair_order.db_set('invoiced_amount', invoice.grand_total, update_modified=False)
@@ -633,6 +637,7 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 	if mark_as_delivered:
 		# Submit the repair order
 		repair_order.reload()
+		repair_order.flags.ignore_permissions = True
 		if repair_order.docstatus == 0:
 			repair_order.submit()
 			frappe.msgprint(_("Repair order marked as Delivered"))

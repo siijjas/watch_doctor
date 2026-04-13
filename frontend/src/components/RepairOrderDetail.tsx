@@ -32,8 +32,8 @@ import { useAppConfig } from '../context/AppConfigContext';
 interface RepairOrderDetailProps {
   order: RepairOrder;
   onBack: () => void;
-  onEdit: (order: RepairOrder) => void;
-  onDelete: (orderId: string) => void;
+  onEdit?: (order: RepairOrder) => void;
+  onDelete?: (orderId: string) => void;
   onRefresh?: (orderId: string) => Promise<void>;
 }
 
@@ -669,12 +669,12 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               onClick: () => setViewInvoiceModal(true),
               hidden: !order.sales_invoice,
             },
-            // Edit action (only for draft)
+            // Edit action (only for draft, and if onEdit is provided)
             {
               label: 'Edit Order',
               icon: '✏️',
-              onClick: () => onEdit(order),
-              hidden: order.docstatus !== 0,
+              onClick: () => onEdit?.(order),
+              hidden: order.docstatus !== 0 || !onEdit,
             },
           ]}
         />

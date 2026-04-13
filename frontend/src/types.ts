@@ -6,6 +6,17 @@ export enum OrderStatus {
     Delivered = 'Delivered',
 }
 
+export type DWRole = 'executive' | 'data_entry' | 'technician';
+
+export interface UserInfo {
+    user: string;
+    roles: DWRole[];
+    technician?: {
+        name: string;
+        technician_name: string;
+    } | null;
+}
+
 export enum Priority {
     Normal = 'Normal',
     Urgent = 'Urgent',

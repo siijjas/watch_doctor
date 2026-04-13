@@ -117,13 +117,13 @@ app_license = "mit"
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+permission_query_conditions = {
+	"DW Repair Order": "watch_doctor.permissions.repair_order_query_conditions",
+}
+
+has_permission = {
+	"DW Repair Order": "watch_doctor.permissions.repair_order_has_permission",
+}
 
 # DocType Class
 # ---------------
@@ -247,8 +247,11 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
-# Run doc reload on migrate to ensure DW doctypes are registered
-after_migrate = ["watch_doctor.patches.reload_dw_doctypes.execute"]
+# Run doc reload on migrate to ensure DW doctypes are registered, and set up roles
+after_migrate = [
+    "watch_doctor.patches.reload_dw_doctypes.execute",
+    "watch_doctor.setup_roles.execute",
+]
 
 
 # Fixtures
@@ -256,5 +259,9 @@ fixtures = [
     {
         "doctype": "DocType",
         "filters": [["name", "in", ["DW Technician", "DW Repair Order", "DW Repair Item", "DW Repair Task", "DW Repair Part Used", "DW Task Template", "DW Test"]]],
-    }
+    },
+    {
+        "doctype": "Role",
+        "filters": [["name", "in", ["DW Executive", "DW Data Entry", "DW Technician"]]],
+    },
 ]

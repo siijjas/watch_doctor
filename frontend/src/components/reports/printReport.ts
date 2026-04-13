@@ -1071,11 +1071,83 @@ function buildFinancialHtml(data: DailyReportData): string {
         </div>`;
 }
 
+function buildProfitHtml(data: DailyReportData): string {
+    const fin = data.financial;
+    const rows = fin?.item_profit_summary ?? [];
+    const totalQty = rows.reduce((s: number, r: any) => s + Number(r.qty_sold || 0), 0);
+    const totalSales = rows.reduce((s: number, r: any) => s + Number(r.sales_amount || 0), 0);
+    const totalCogs = rows.reduce((s: number, r: any) => s + Number(r.cogs_amount || 0), 0);
+    const totalGross = rows.reduce((s: number, r: any) => s + Number(r.gross_profit || 0), 0);
+    const margin = totalSales > 0 ? (totalGross / totalSales) * 100 : 0;
+
+    return `
+        ${header('Profit Summary', data.date)}
+
+        <div class="stats stats-4">
+            <div class="stat stat-green">
+                <div class="stat-label">Sales Amount</div>
+                <div class="stat-value text-green">${fmt(totalSales)}</div>
+            </div>
+            <div class="stat stat-rose">
+                <div class="stat-label">COGS</div>
+                <div class="stat-value text-rose">${fmt(totalCogs)}</div>
+            </div>
+            <div class="stat ${totalGross >= 0 ? 'stat-indigo' : 'stat-rose'}">
+                <div class="stat-label">Gross Profit</div>
+                <div class="stat-value ${totalGross >= 0 ? 'text-green' : 'text-rose'}">${totalGross < 0 ? '−' : ''}${fmt(Math.abs(totalGross))}</div>
+            </div>
+            <div class="stat ${margin >= 0 ? 'stat-teal' : 'stat-rose'}">
+                <div class="stat-label">Gross Margin</div>
+                <div class="stat-value">${margin.toFixed(1)}%</div>
+            </div>
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Item-wise Profitability</div>
+            ${rows.length === 0 ? '<p class="empty">No sales items found for this date</p>' : `
+                <table>
+                    <thead><tr>
+                        <th>Item</th>
+                        <th class="right">Qty</th>
+                        <th class="right">Selling Rate</th>
+                        <th class="right">COGS Rate</th>
+                        <th class="right">Gross Profit</th>
+                        <th class="right">Margin %</th>
+                    </tr></thead>
+                    <tbody>
+                        ${rows.map((r: any) => `
+                            <tr>
+                                <td>${r.item_name}<br><span style="color:#9ca3af;font-size:10px">${r.item_code}</span></td>
+                                <td class="right">${Number(r.qty_sold || 0).toFixed(2)}</td>
+                                <td class="amount">${fmt(Number(r.selling_rate || 0))}</td>
+                                <td class="amount">${fmt(Number(r.cogs_rate || 0))}</td>
+                                <td class="${Number(r.gross_profit || 0) >= 0 ? 'amount-green' : 'amount-rose'}">${fmt(Number(r.gross_profit || 0))}</td>
+                                <td class="right">${Number(r.gross_margin_pct || 0).toFixed(1)}%</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                    <tfoot><tr class="total-row">
+                        <td>Totals</td>
+                        <td class="right">${totalQty.toFixed(2)}</td>
+                        <td></td>
+                        <td></td>
+                        <td class="${totalGross >= 0 ? 'amount-green' : 'amount-rose'}">${fmt(totalGross)}</td>
+                        <td class="right">${margin.toFixed(1)}%</td>
+                    </tr></tfoot>
+                </table>
+            `}
+        </div>
+
+        <div class="rpt-footer">
+            WatchDoc · Confidential · For internal use only
+        </div>`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 export function printReport(
-    tab: 'repair' | 'sales' | 'financial',
+    tab: 'repair' | 'sales' | 'financial' | 'profit',
     data: DailyReportData,
     options?: { logoUrl?: string; currencySymbol?: string; decimalPlaces?: number }
 ): void {
@@ -1087,11 +1159,13 @@ export function printReport(
         repair:    buildRepairHtml,
         sales:     buildSalesHtml,
         financial: buildFinancialHtml,
+        profit:    buildProfitHtml,
     };
     const titles = {
         repair:    'Repair Summary',
         sales:     'Daily Sales & Purchase Summary',
         financial: 'Financial Summary',
+        profit:    'Profit Summary',
     };
 
     const win = window.open('', '_blank', 'width=900,height=700');

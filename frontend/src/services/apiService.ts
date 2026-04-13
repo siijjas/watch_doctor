@@ -1,4 +1,4 @@
-import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, QuotationSummary, InvoiceSummary } from '../types';
+import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, QuotationSummary, InvoiceSummary, UserInfo } from '../types';
 
 declare const window: any;
 
@@ -111,6 +111,12 @@ export const deleteDoc = async (doctype: string, name: string): Promise<any> => 
         method: 'POST',
         body: JSON.stringify({ doctype, name }),
     });
+};
+
+// Fetch current user's DW roles and technician info
+export const getUserInfo = async (): Promise<UserInfo> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_user_info', { method: 'POST', body: JSON.stringify({}) });
+    return res.message as UserInfo;
 };
 
 // Specific API functions for the Watch Repair App

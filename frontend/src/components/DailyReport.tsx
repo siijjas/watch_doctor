@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { isErpNext } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
+import { useAuth } from '../context/AuthContext';
 import { todayISO } from './reports/reportShared';
 import type { DailyReportData } from './reports/reportShared';
 import RepairSummaryReport from './reports/RepairSummaryReport';
 import SalesSummaryReport from './reports/SalesSummaryReport';
 import FinancialSummaryReport from './reports/FinancialSummaryReport';
+import ProfitSummaryReport from './reports/ProfitSummaryReport';
 import { printReport } from './reports/printReport';
 
-type ReportTab = 'repair' | 'sales' | 'financial';
+type ReportTab = 'repair' | 'sales' | 'financial' | 'profit';
 
 const TABS: { id: ReportTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -39,6 +41,15 @@ const TABS: { id: ReportTab; label: string; icon: React.ReactNode }[] = [
             </svg>
         ),
     },
+    {
+        id: 'profit',
+        label: 'Profit Summary',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 8-8" />
+            </svg>
+        ),
+    },
 ];
 
 interface DailyReportProps {
@@ -46,6 +57,8 @@ interface DailyReportProps {
 }
 
 const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
+    const { hasRole } = useAuth();
+    const isExecutive = hasRole('executive');
     const [activeTab, setActiveTab] = useState<ReportTab>('repair');
     const [reportDate, setReportDate] = useState(todayISO());
     const [data, setData] = useState<DailyReportData | null>(null);
@@ -82,6 +95,8 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
     useEffect(() => {
         loadReport(reportDate);
     }, [reportDate, loadReport]);
+
+    const visibleTabs = TABS.filter(tab => (tab.id === 'profit' ? isExecutive : true));
 
     return (
         <div className="space-y-6 print:space-y-4">
@@ -121,7 +136,7 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
 
             {/* Tab Bar */}
             <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 w-fit print:hidden">
-                {TABS.map(tab => (
+                {visibleTabs.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
@@ -164,6 +179,9 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
                     )}
                     {activeTab === 'financial' && (
                         <FinancialSummaryReport repair={data.repair} pos={data.pos} financial={data.financial} />
+                    )}
+                    {activeTab === 'profit' && isExecutive && (
+                        <ProfitSummaryReport repair={data.repair} pos={data.pos} financial={data.financial} />
                     )}
                 </>
             )}
