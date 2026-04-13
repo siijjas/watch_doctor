@@ -466,6 +466,13 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                         <Select label="Priority" value={formData.priority} onChange={(e) => handleFieldChange('priority', e.target.value as Priority)}>
                             {Object.values(Priority).map(p => <option key={p} value={p}>{p}</option>)}
                         </Select>
+                        <Input
+                            label="Reference Number"
+                            type="text"
+                            placeholder="Customer's own reference (optional)"
+                            value={formData.reference_number || ''}
+                            onChange={(e) => handleFieldChange('reference_number', e.target.value)}
+                        />
                     </div>
 
                     <div className="space-y-4">

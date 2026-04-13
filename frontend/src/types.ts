@@ -121,6 +121,7 @@ export interface RepairItem {
 export interface RepairOrder extends FrappeDoc {
     customer: string; // Link to Customer name
     contact_person: string;
+    reference_number?: string;
     status: OrderStatus;
     received_date: string;
     promised_delivery_date: string;

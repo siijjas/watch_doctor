@@ -718,6 +718,9 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           <div className="flex flex-col sm:flex-row justify-between items-start gap-3">
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1">{order.name}</h1>
+              {order.reference_number && (
+                <p className="text-sm text-gray-600 font-medium">Ref: {order.reference_number}</p>
+              )}
               <p className="text-gray-500">Watch Repair Order</p>
             </div>
             <div className="flex items-center flex-wrap gap-2">

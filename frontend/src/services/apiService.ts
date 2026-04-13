@@ -358,7 +358,7 @@ export const createCustomer = async (data: { customer_name: string; mobile_no?: 
         doctype: 'Customer',
         customer_name: data.customer_name,
         customer_type: 'Individual',
-        customer_group: 'All Customer Groups',
+        customer_group: 'Individual',
         territory: 'All Territories',
         mobile_no: data.mobile_no,
         email_id: data.email_id
