@@ -88,8 +88,10 @@ const BASE_STYLES = `
     .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 20px; }
   .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; break-inside: avoid; }
   .card-full { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; margin-bottom: 14px; break-inside: avoid; }
+  .card-full-flow { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
 
   /* ── Tables ── */
+  thead { display: table-header-group; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
   thead tr { border-bottom: 1px solid #e5e7eb; }
   th { text-align: left; padding: 0 0 7px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; font-weight: 600; }
@@ -395,7 +397,7 @@ function buildSalesHtml(data: DailyReportData): string {
     const txnCount    = p.transaction_count  ?? 0;
     const avgOrder    = txnCount > 0 ? netSales / txnCount : 0;
 
-    const purchaseTotal       = fin?.total_pe_purchases    ?? 0;
+    const purchaseTotal       = (fin?.total_pe_purchases ?? 0) + (fin?.total_paid_purchases ?? 0);
     const creditPurchases     = fin?.total_credit_purchases ?? 0;
     const totalPurchaseExposure = purchaseTotal + creditPurchases;
     const netPosition         = netSales - totalPurchaseExposure;
@@ -612,7 +614,16 @@ function buildSalesHtml(data: DailyReportData): string {
     // ── 7. Purchase section (conditional) ─────────────────────────────────────
     let purchaseSectionHtml = '';
     if (fin) {
-        const peModeRows = (fin.pe_purchases_by_mode ?? []).map(pm => {
+        // Merge PE-based and cash-invoice-based purchase mode breakdowns
+        const combinedModeMap = new Map<string, { mode_of_payment: string; total: number; count: number }>();
+        [...(fin.pe_purchases_by_mode ?? []), ...(fin.paid_purchases_by_mode ?? [])].forEach((pm: any) => {
+            const existing = combinedModeMap.get(pm.mode_of_payment);
+            if (existing) { existing.total += pm.total; existing.count += pm.count; }
+            else { combinedModeMap.set(pm.mode_of_payment, { ...pm }); }
+        });
+        const combinedPurchasesByMode = Array.from(combinedModeMap.values()).sort((a, b) => b.total - a.total);
+
+        const peModeRows = combinedPurchasesByMode.map(pm => {
             const pct = purchaseTotal > 0 ? Math.round((pm.total / purchaseTotal) * 100) : 0;
             return `<div class="bar-row">
                 <div class="bar-meta">
@@ -637,7 +648,7 @@ function buildSalesHtml(data: DailyReportData): string {
         <div class="grid-2">
             <div class="card">
                 <div class="section-title">Paid Purchases by Mode</div>
-                ${ (fin.pe_purchases_by_mode ?? []).length === 0
+                ${ combinedPurchasesByMode.length === 0
                     ? `<p class="empty">No paid purchases today</p>`
                     : peModeRows + `<div class="net-row bold" style="margin-top:8px"><span>Total Paid</span><span style="color:#8b5cf6">${fmt(purchaseTotal)}</span></div>`
                 }
@@ -865,15 +876,20 @@ function buildFinancialHtml(data: DailyReportData): string {
             </div>`;
         }).join('');
 
-    const pePurchases       = fin.pe_purchases       ?? [];
-    const peOperatingByMode = fin.pe_operating_by_mode ?? fin.pe_pay_by_mode ?? [];
-    const jeEntries         = fin.je_entries          ?? [];
+    const pePurchases           = fin.pe_purchases           ?? [];
+    const paidPurchaseInvoices  = fin.paid_purchase_invoices  ?? [];
+    const peOperatingByMode     = fin.pe_operating_by_mode ?? fin.pe_pay_by_mode ?? [];
+    const jeEntries             = fin.je_entries              ?? [];
 
-    const purchaseRowsHtml = pePurchases.length === 0
-        ? `<p class="empty" style="padding:6px 0">No purchase entries</p>`
-        : pePurchases.map((pu: any) =>
+    const allPurchaseRowsHtml = [
+        ...pePurchases.map((pu: any) =>
             `<div class="net-row"><span>${pu.party_name || pu.party || '—'}</span><span class="text-rose">${fmt(pu.amount)}</span></div>`
-        ).join('');
+        ),
+        ...paidPurchaseInvoices.map((inv: any) =>
+            `<div class="net-row"><span>${inv.supplier_name || inv.supplier || '—'} <span style="color:#9ca3af;font-size:10px" class="mono">${inv.name}</span></span><span class="text-rose">${fmt(inv.grand_total)}</span></div>`
+        ),
+    ].join('');
+    const purchaseRowsHtml = allPurchaseRowsHtml || `<p class="empty" style="padding:6px 0">No purchase entries</p>`;
 
     const expenseRowsHtml = jeEntries.length > 0
         ? jeEntries.map((je: any) =>
@@ -883,7 +899,7 @@ function buildFinancialHtml(data: DailyReportData): string {
             `<div class="net-row"><span>${m.mode_of_payment} <span style="color:#9ca3af;font-size:10px">×${m.count}</span></span><span class="text-rose">${fmt(m.total)}</span></div>`
         ).join('') || `<p class="empty" style="padding:6px 0">No expense entries</p>`;
 
-    const purchasesTotal = fin.total_pe_purchases   ?? 0;
+    const purchasesTotal = (fin.total_pe_purchases ?? 0) + (fin.total_paid_purchases ?? 0);
     const expensesTotal  = (fin.total_pe_operating ?? 0) + (fin.je_total ?? 0);
 
     const modeSet = new Set<string>();
@@ -1102,7 +1118,7 @@ function buildProfitHtml(data: DailyReportData): string {
             </div>
         </div>
 
-        <div class="card-full">
+        <div class="card-full-flow">
             <div class="section-title">Item-wise Profitability</div>
             ${rows.length === 0 ? '<p class="empty">No sales items found for this date</p>' : `
                 <table>
