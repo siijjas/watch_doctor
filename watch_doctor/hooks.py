@@ -264,4 +264,8 @@ fixtures = [
         "doctype": "Role",
         "filters": [["name", "in", ["DW Executive", "DW Data Entry", "DW Technician"]]],
     },
+    {
+        "doctype": "Print Format",
+        "filters": [["name", "=", "DW RO Bag Label"]],
+    },
 ]

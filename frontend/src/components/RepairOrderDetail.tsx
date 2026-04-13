@@ -16,6 +16,7 @@ import { CalendarIcon } from './icons/CalendarIcon';
 import { ClockIcon } from './icons/ClockIcon';
 import { PlusIcon } from './icons/PlusIcon';
 import { RefreshIcon } from './icons/RefreshIcon';
+import { PrinterIcon } from './icons/PrinterIcon';
 import { AddPartModal } from './AddPartModal';
 import { ChangeTaskStatusModal } from './ChangeTaskStatusModal';
 import { UpdatePriceModal } from './UpdatePriceModal';
@@ -544,6 +545,14 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     }
   };
 
+  const handlePrintLabel = () => {
+    const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(order.name)}&format=DW%20RO%20Bag%20Label&no_letterhead=1`;
+    const win = window.open(url, '_blank', 'width=400,height=320,menubar=no,toolbar=no,location=no,status=no');
+    if (win) {
+      win.addEventListener('load', () => win.print(), { once: true });
+    }
+  };
+
   const handleCancel = async () => {
     if (!confirm('Cancel this repair order? This action cannot be undone.')) {
       return;
@@ -575,8 +584,19 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
         ]);
         setEmployees(emps);
         setTaskTemplates(templates);
-        setWatchModels(models);
         setIssueTemplates(issues);
+
+        // Ensure all model IDs used in this order are resolved to model_name,
+        // even when the initial list endpoint is capped.
+        const orderModelIds = Array.from(
+          new Set((order.items || []).map(item => item.watch_model).filter(Boolean))
+        );
+        const loadedModelIds = new Set(models.map(m => m.name));
+        const missingModelIds = orderModelIds.filter(id => !loadedModelIds.has(id));
+        const missingModels = missingModelIds.length
+          ? await apiService.getWatchModelsByIds(missingModelIds)
+          : [];
+        setWatchModels([...models, ...missingModels]);
 
         // Load specific items used in parts
         const partIds = Array.from(new Set(
@@ -640,6 +660,18 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           >
             <RefreshIcon className="h-4 w-4" />
           </Button>
+          {isErpNext && (
+            <Button
+              variant="outline"
+              onClick={handlePrintLabel}
+              className="flex items-center gap-1.5 text-sm font-medium"
+              style={{ borderColor: '#E8E8E8' }}
+              title="Print bag label (1in x 1.5in)"
+            >
+              <PrinterIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Print Label</span>
+            </Button>
+          )}
         </div>
         <ActionsDropdown
           items={[

@@ -430,6 +430,23 @@ export const getWatchModels = async (brand: string, search: string = ''): Promis
     return res.message || [];
 };
 
+export const getWatchModelsByIds = async (modelIds: string[]): Promise<WatchModel[]> => {
+    if (!modelIds.length) {
+        return [];
+    }
+
+    const models = await Promise.all(
+        modelIds.map(id =>
+            apiFetch('/api/method/frappe.client.get', {
+                method: 'POST',
+                body: JSON.stringify({ doctype: 'DW Watch Model', name: id })
+            }).then(res => res.message).catch(() => null)
+        )
+    );
+
+    return models.filter(model => model !== null);
+};
+
 export const createWatchModel = async (brand: string, modelName: string, description: string = ''): Promise<WatchModel> => {
     const res = await apiFetch('/api/method/watch_doctor.api.create_watch_model', {
         method: 'POST',

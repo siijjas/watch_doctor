@@ -10,6 +10,37 @@ from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_ro
 
 class DWRepairOrder(Document):
 	"""DW Repair Order - Main doctype for managing watch repair orders."""
+	DEFAULT_NAMING_SERIES = "YY.MM.####"
+
+	def before_naming(self):
+		"""Use ERPNext naming_series and auto-initialize monthly counter safely."""
+		if not self.naming_series:
+			self.naming_series = self.DEFAULT_NAMING_SERIES
+
+		if self.naming_series != self.DEFAULT_NAMING_SERIES:
+			return
+
+		prefix = getdate().strftime("%y%m")
+		if frappe.db.exists("Series", prefix):
+			return
+
+		max_existing = frappe.db.sql(
+			"""
+			select max(cast(right(name, 4) as unsigned))
+			from `tabDW Repair Order`
+			where name regexp %s
+			""",
+			(rf"^{prefix}[0-9]{{4}}$",),
+		)[0][0] or 0
+
+		if max_existing <= 0:
+			return
+
+		try:
+			frappe.db.sql("insert into `tabSeries` (`name`, `current`) values (%s, %s)", (prefix, max_existing))
+		except Exception:
+			# Another transaction may create it concurrently; safe to continue.
+			pass
 	
 	# Define valid status transitions
 	VALID_TRANSITIONS = {

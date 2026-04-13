@@ -21,3 +21,9 @@ def execute():
 			frappe.reload_doc("watch_doctor", "doctype", dt)
 		except Exception as exc:  # pragma: no cover - best-effort reload
 			frappe.log_error(frappe.get_traceback(), f"Failed to reload {dt}: {exc}")
+
+	# Import / refresh the bag-label print format bundled with the app
+	try:
+		frappe.reload_doc("Repair Management", "print_format", "dw_ro_bag_label")
+	except Exception as exc:  # pragma: no cover - best-effort reload
+		frappe.log_error(frappe.get_traceback(), f"Failed to reload dw_ro_bag_label print format: {exc}")

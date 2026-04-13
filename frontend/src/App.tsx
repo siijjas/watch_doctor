@@ -114,7 +114,11 @@ const AppContent: React.FC = () => {
         if (order.name) {
           setRepairOrders(prev => prev.map(o => o.name === order.name ? order : o));
         } else {
-          const newOrder = { ...order, name: `DW-RO-DEMO-${Date.now()}` };
+          const now = new Date();
+          const yy = String(now.getFullYear()).slice(-2);
+          const mm = String(now.getMonth() + 1).padStart(2, '0');
+          const seq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+          const newOrder = { ...order, name: `${yy}${mm}${seq}` };
           setRepairOrders(prev => [...prev, newOrder]);
         }
         handleCloseForm();

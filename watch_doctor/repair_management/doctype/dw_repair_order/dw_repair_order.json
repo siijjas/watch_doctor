@@ -1,11 +1,12 @@
 {
     "actions": [],
     "allow_rename": 1,
-    "autoname": "format:DW-RO-{YYYY}-{#####}",
+    "autoname": "naming_series:",
     "creation": "2025-01-01 00:00:00.000000",
     "doctype": "DocType",
     "engine": "InnoDB",
     "field_order": [
+        "naming_series",
         "customer",
         "contact_person",
         "status",
@@ -28,6 +29,17 @@
         "all_issues"
     ],
     "fields": [
+        {
+            "fieldname": "naming_series",
+            "fieldtype": "Select",
+            "label": "Series",
+            "options": "YY.MM.####",
+            "default": "YY.MM.####",
+            "reqd": 1,
+            "set_only_once": 1,
+            "no_copy": 1,
+            "print_hide": 1
+        },
         {
             "fieldname": "customer",
             "fieldtype": "Link",
