@@ -1558,17 +1558,18 @@ def get_daily_report(report_date=None):
 	)
 	if profit_invoice_names:
 		profit_placeholders = ", ".join(["%s"] * len(profit_invoice_names))
+		cogs_rate_expr = "CASE WHEN i.is_stock_item = 1 THEN COALESCE(NULLIF(sii.incoming_rate, 0), NULLIF(i.valuation_rate, 0), NULLIF(i.last_purchase_rate, 0), 0) ELSE 0 END"
 		item_group_profit_summary = frappe.db.sql(
 			f"""
 			SELECT
 				COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other') AS item_group,
 				SUM(sii.qty) AS qty_sold,
 				SUM(sii.base_net_amount) AS sales_amount,
-				SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS cogs_amount,
-				SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS gross_profit,
+				SUM(sii.qty * {cogs_rate_expr}) AS cogs_amount,
+				SUM(sii.base_net_amount) - SUM(sii.qty * {cogs_rate_expr}) AS gross_profit,
 				CASE
 					WHEN SUM(sii.base_net_amount) = 0 THEN 0
-					ELSE ((SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0))) / SUM(sii.base_net_amount)) * 100
+					ELSE ((SUM(sii.base_net_amount) - SUM(sii.qty * {cogs_rate_expr})) / SUM(sii.base_net_amount)) * 100
 				END AS gross_margin_pct
 			FROM `tabSales Invoice Item` sii
 			LEFT JOIN `tabItem` i ON i.name = sii.item_code
@@ -1589,12 +1590,12 @@ def get_daily_report(report_date=None):
 				SUM(sii.qty) AS qty_sold,
 				CASE WHEN SUM(sii.qty) = 0 THEN 0 ELSE SUM(sii.base_net_amount) / SUM(sii.qty) END AS selling_rate,
 				SUM(sii.base_net_amount) AS sales_amount,
-				CASE WHEN SUM(sii.qty) = 0 THEN 0 ELSE SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) / SUM(sii.qty) END AS cogs_rate,
-				SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS cogs_amount,
-				SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0)) AS gross_profit,
+				CASE WHEN SUM(sii.qty) = 0 THEN 0 ELSE SUM(sii.qty * {cogs_rate_expr}) / SUM(sii.qty) END AS cogs_rate,
+				SUM(sii.qty * {cogs_rate_expr}) AS cogs_amount,
+				SUM(sii.base_net_amount) - SUM(sii.qty * {cogs_rate_expr}) AS gross_profit,
 				CASE
 					WHEN SUM(sii.base_net_amount) = 0 THEN 0
-					ELSE ((SUM(sii.base_net_amount) - SUM(sii.qty * COALESCE(sii.incoming_rate, 0))) / SUM(sii.base_net_amount)) * 100
+					ELSE ((SUM(sii.base_net_amount) - SUM(sii.qty * {cogs_rate_expr})) / SUM(sii.base_net_amount)) * 100
 				END AS gross_margin_pct
 			FROM `tabSales Invoice Item` sii
 			LEFT JOIN `tabItem` i ON i.name = sii.item_code
