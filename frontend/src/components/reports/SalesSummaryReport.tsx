@@ -133,7 +133,7 @@ function buildInsights(
 
     // 5. Purchase pressure (only when financial data is present)
     if (financial) {
-        const paid = financial.total_pe_purchases ?? 0;
+        const paid = (financial.total_pe_purchases ?? 0) + (financial.total_paid_purchases ?? 0);
         const credit = financial.total_credit_purchases ?? 0;
         const totalExposure = paid + credit;
         if (totalExposure > 0 && data.net_sales > 0) {
@@ -166,8 +166,21 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data, financial
     const { formatCurrency } = useAppConfig();
     const totalQty = data.items_sold.reduce((s, i) => s + i.total_qty, 0);
     const avgOrderValue = data.transaction_count > 0 ? data.net_sales / data.transaction_count : 0;
-    const purchaseTotal = financial?.total_pe_purchases ?? 0;
+    const purchaseTotal = (financial?.total_pe_purchases ?? 0) + (financial?.total_paid_purchases ?? 0);
     const creditPurchases = financial?.total_credit_purchases ?? 0;
+
+    // Merge PE-based and cash-invoice-based purchase mode breakdowns
+    const purchasesByModeMap = new Map<string, { mode_of_payment: string; total: number; count: number }>();
+    [...(financial?.pe_purchases_by_mode ?? []), ...(financial?.paid_purchases_by_mode ?? [])].forEach(p => {
+        const existing = purchasesByModeMap.get(p.mode_of_payment);
+        if (existing) {
+            existing.total += p.total;
+            existing.count += p.count;
+        } else {
+            purchasesByModeMap.set(p.mode_of_payment, { ...p });
+        }
+    });
+    const combinedPurchasesByMode = Array.from(purchasesByModeMap.values()).sort((a, b) => b.total - a.total);
     const totalPurchaseExposure = purchaseTotal + creditPurchases;
     const netPosition = data.net_sales - totalPurchaseExposure;
 
@@ -430,11 +443,11 @@ const SalesSummaryReport: React.FC<SalesSummaryReportProps> = ({ data, financial
                                 <ShoppingBagIcon className="text-purple-500" />
                                 Paid Purchases by Mode
                             </SectionTitle>
-                            {(financial.pe_purchases_by_mode ?? []).length === 0 ? (
+                            {combinedPurchasesByMode.length === 0 ? (
                                 <EmptyState label="No paid purchases today" />
                             ) : (
                                 <div className="space-y-4">
-                                    {(financial.pe_purchases_by_mode ?? []).map((p, idx) => {
+                                    {combinedPurchasesByMode.map((p, idx) => {
                                         const pct = purchaseTotal > 0 ? Math.round((p.total / purchaseTotal) * 100) : 0;
                                         return (
                                             <div key={idx}>

@@ -1348,13 +1348,42 @@ def get_daily_report(report_date=None):
 	je_total = sum(r["amount"] for r in je_detail_rows)
 	je_by_mode = _mode_breakdown_dicts(je_detail_rows)
 
-	# Aggregate by payment mode
+	# Paid-at-invoice Purchase Invoices (is_paid=1): cash purchases settled directly
+	# without a separate Payment Entry — must be fetched here so they're included in
+	# expense_breakdown (→ Cash Flow by Payment Mode) and paid_purchases_by_mode.
+	paid_purchase_invoices = frappe.db.sql("""
+		SELECT pi.name, pi.supplier, pi.grand_total,
+			COALESCE(pi.supplier_name, '') AS supplier_name,
+			COALESCE(pi.cash_bank_account, '') AS cash_bank_account
+		FROM `tabPurchase Invoice` pi
+		WHERE pi.docstatus = 1 AND pi.posting_date = %s AND pi.is_paid = 1
+		ORDER BY pi.grand_total DESC
+	""", (report_date,), as_dict=True)
+	total_paid_purchases = sum(float(inv["grand_total"] or 0) for inv in paid_purchase_invoices)
+
+	# Group paid invoices by their cash/bank account for mode breakdown
+	paid_purchases_mode_map = {}
+	for inv in paid_purchase_invoices:
+		mode = inv.get("cash_bank_account") or "Cash"
+		if mode not in paid_purchases_mode_map:
+			paid_purchases_mode_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
+		paid_purchases_mode_map[mode]["total"] += float(inv.get("grand_total") or 0)
+		paid_purchases_mode_map[mode]["count"] += 1
+	paid_purchases_by_mode = sorted(paid_purchases_mode_map.values(), key=lambda x: x["total"], reverse=True)
+
+	# Aggregate by payment mode — include paid purchase invoice outflows
 	mode_expense_map = {}
 	for e in expense_entries:
 		mode = e.get("mode_of_payment", "Other")
 		if mode not in mode_expense_map:
 			mode_expense_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
 		mode_expense_map[mode]["total"] += float(e.get("amount") or 0)
+		mode_expense_map[mode]["count"] += 1
+	for inv in paid_purchase_invoices:
+		mode = inv.get("cash_bank_account") or "Cash"
+		if mode not in mode_expense_map:
+			mode_expense_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
+		mode_expense_map[mode]["total"] += float(inv.get("grand_total") or 0)
 		mode_expense_map[mode]["count"] += 1
 
 	expense_breakdown = sorted(mode_expense_map.values(), key=lambda x: x["total"], reverse=True)
@@ -1674,6 +1703,16 @@ def get_daily_report(report_date=None):
 			"source": "Purchase Invoice",
 		})
 
+	for inv in paid_purchase_invoices:
+		purchase_entries.append({
+			"id": inv.get("name"),
+			"party_name": inv.get("supplier_name") or inv.get("supplier") or "",
+			"amount": float(inv.get("grand_total") or 0),
+			"payment_status": "Paid",
+			"payment_mode": inv.get("cash_bank_account") or "Cash",
+			"source": "Purchase Invoice",
+		})
+
 	return {
 		"date": report_date,
 		"repair": {
@@ -1735,6 +1774,9 @@ def get_daily_report(report_date=None):
 			"total_credit_sales": total_credit_sales,
 			"credit_purchase_invoices": credit_purchase_invoices,
 			"total_credit_purchases": total_credit_purchases,
+			"paid_purchase_invoices": paid_purchase_invoices,
+			"total_paid_purchases": total_paid_purchases,
+			"paid_purchases_by_mode": paid_purchases_by_mode,
 			"items_purchased": items_purchased,
 			"item_group_profit_summary": item_group_profit_summary if is_executive else [],
 			"item_profit_summary": item_profit_summary if is_executive else [],

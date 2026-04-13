@@ -151,8 +151,9 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const netSalesInCard  = pos.total_retail_sales + repairRevenue;
     const totalIncome     = repairRevenue + salesRevenue + totalCollections;
 
-    const pePurchases     = fin.pe_purchases     ?? [];
-    const peOperating     = fin.pe_operating     ?? [];
+    const pePurchases         = fin.pe_purchases         ?? [];
+    const paidPurchaseInvoices = fin.paid_purchase_invoices ?? [];
+    const peOperating         = fin.pe_operating         ?? [];
     const peReceive       = fin.pe_receive        ?? [];
     const peEntries       = fin.pe_entries        ?? [];
     const jeEntries       = fin.je_entries        ?? [] as JournalEntryRow[];
@@ -160,11 +161,12 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const jeByMode        = fin.je_by_mode        ?? [] as PeModeBreakdown[];
 
     const totalPePurchases  = fin.total_pe_purchases  ?? 0;
+    const totalPaidPurchases = fin.total_paid_purchases ?? 0;
     const totalPeOperating  = fin.total_pe_operating  ?? 0;
     const pePurchasesByMode = fin.pe_purchases_by_mode ?? [] as PeModeBreakdown[];
     const peOperatingByMode = fin.pe_operating_by_mode ?? [] as PeModeBreakdown[];
 
-    const purchaseTotal      = totalPePurchases;
+    const purchaseTotal      = totalPePurchases + totalPaidPurchases;
     const otherExpensesTotal = totalPeOperating + jeTotal;
     const totalOutflow       = purchaseTotal + otherExpensesTotal;
     const balance            = totalIncome - totalOutflow;
@@ -364,28 +366,46 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                         <div className="space-y-4">
                             <div className="rounded-xl border border-orange-100 dark:border-orange-900/30 bg-orange-50/60 dark:bg-orange-900/10 p-4 space-y-3">
                                 <p className="text-xs text-orange-700 dark:text-orange-300 uppercase tracking-wide font-semibold">Purchases</p>
-                                {pePurchases.length === 0 ? (
+                                {pePurchases.length === 0 && paidPurchaseInvoices.length === 0 ? (
                                     <EmptyState label="No purchase payments today" />
                                 ) : (
                                     <>
-                                        <Row label="Payments" value={pePurchases.length} />
+                                        <Row label="Total Purchases" value={formatCurrency(purchaseTotal)} />
                                         {pePurchasesByMode.length > 0 && (
                                             <div>
                                                 <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-2">By Payment Mode</p>
                                                 <ModeList items={pePurchasesByMode} dotColor="bg-orange-400" valueColor="text-rose-600 dark:text-rose-400" formatCurrency={formatCurrency} />
                                             </div>
                                         )}
-                                        <div className="mt-2 pt-2 border-t border-orange-200/70 dark:border-orange-800/40">
-                                            <p className="text-xs text-orange-700 dark:text-orange-300 uppercase tracking-wide font-semibold mb-2">Supplier Payment Entries</p>
-                                            <div className="space-y-1.5">
-                                                {pePurchases.map((p, i) => (
-                                                    <div key={i} className="flex items-center justify-between text-sm py-1 px-2 rounded-md bg-white/80 dark:bg-gray-800/70">
-                                                        <span className="text-gray-700 dark:text-gray-300 truncate max-w-[65%]">{p.party_name || p.party || '\u2014'}</span>
-                                                        <span className="font-semibold text-rose-600 dark:text-rose-400">{formatCurrency(p.amount)}</span>
-                                                    </div>
-                                                ))}
+                                        {pePurchases.length > 0 && (
+                                            <div className="mt-2 pt-2 border-t border-orange-200/70 dark:border-orange-800/40">
+                                                <p className="text-xs text-orange-700 dark:text-orange-300 uppercase tracking-wide font-semibold mb-2">Supplier Payment Entries</p>
+                                                <div className="space-y-1.5">
+                                                    {pePurchases.map((p, i) => (
+                                                        <div key={i} className="flex items-center justify-between text-sm py-1 px-2 rounded-md bg-white/80 dark:bg-gray-800/70">
+                                                            <span className="text-gray-700 dark:text-gray-300 truncate max-w-[65%]">{p.party_name || p.party || '\u2014'}</span>
+                                                            <span className="font-semibold text-rose-600 dark:text-rose-400">{formatCurrency(p.amount)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
-                                        </div>
+                                        )}
+                                        {paidPurchaseInvoices.length > 0 && (
+                                            <div className="mt-2 pt-2 border-t border-orange-200/70 dark:border-orange-800/40">
+                                                <p className="text-xs text-orange-700 dark:text-orange-300 uppercase tracking-wide font-semibold mb-2">Cash Purchase Invoices</p>
+                                                <div className="space-y-1.5">
+                                                    {paidPurchaseInvoices.map((inv, i) => (
+                                                        <div key={i} className="flex items-center justify-between text-sm py-1 px-2 rounded-md bg-white/80 dark:bg-gray-800/70">
+                                                            <div className="flex flex-col min-w-0 max-w-[65%]">
+                                                                <span className="text-gray-700 dark:text-gray-300 truncate">{inv.supplier_name || inv.supplier || '\u2014'}</span>
+                                                                <span className="text-xs text-gray-400 font-mono">{inv.name}</span>
+                                                            </div>
+                                                            <span className="font-semibold text-rose-600 dark:text-rose-400">{formatCurrency(inv.grand_total)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </>
                                 )}
                             </div>
