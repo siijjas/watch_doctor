@@ -1558,7 +1558,13 @@ def get_daily_report(report_date=None):
 	)
 	if profit_invoice_names:
 		profit_placeholders = ", ".join(["%s"] * len(profit_invoice_names))
-		cogs_rate_expr = "CASE WHEN i.is_stock_item = 1 THEN COALESCE(NULLIF(sii.incoming_rate, 0), NULLIF(i.valuation_rate, 0), NULLIF(i.last_purchase_rate, 0), 0) ELSE 0 END"
+		has_last_purchase_rate = frappe.db.has_column("Item", "last_purchase_rate")
+		last_purchase_component = ", NULLIF(i.last_purchase_rate, 0)" if has_last_purchase_rate else ""
+		cogs_rate_expr = (
+			"CASE WHEN i.is_stock_item = 1 "
+			f"THEN COALESCE(NULLIF(sii.incoming_rate, 0), NULLIF(i.valuation_rate, 0){last_purchase_component}, 0) "
+			"ELSE 0 END"
+		)
 		item_group_profit_summary = frappe.db.sql(
 			f"""
 			SELECT
