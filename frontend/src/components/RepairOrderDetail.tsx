@@ -739,7 +739,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           </div>
 
           {/* Info Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mt-4 sm:mt-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-4 sm:mt-6">
             <div className="p-4 bg-gray-50 rounded-xl" style={{ border: '1px solid #F3EFEA' }}>
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#E8EEF9' }}>
@@ -751,6 +751,19 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
                 </div>
               </div>
             </div>
+            {order.reference_number && (
+              <div className="p-4 bg-gray-50 rounded-xl" style={{ border: '1px solid #F3EFEA' }}>
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#FFF4E8' }}>
+                    <span className="text-orange-600 font-bold text-sm">#</span>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Reference</p>
+                    <p className="font-semibold text-gray-900">{order.reference_number}</p>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="p-4 bg-gray-50 rounded-xl" style={{ border: '1px solid #F3EFEA' }}>
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#E9F7EE' }}>

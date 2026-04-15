@@ -101,3 +101,5 @@ trigger_*.py
 *.bak
 *.orig
 .cache/
+# Generated PRD
+watch_doctor_PRD.md

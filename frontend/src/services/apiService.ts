@@ -292,6 +292,7 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
         name: order.name || undefined,
         customer: order.customer,
         contact_person: order.contact_person,
+        reference_number: order.reference_number,
         status: order.status,
         priority: order.priority,
         received_date: order.received_date,

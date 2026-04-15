@@ -54,10 +54,11 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
         return false;
       }
 
-      // Search filter (order ID, customer name, technician, issue)
+      // Search filter (order ID, reference number, customer name, technician, issue)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
         const matchesId = order.name?.toLowerCase().includes(query);
+        const matchesRef = (order.reference_number || '').toLowerCase().includes(query);
         const matchesCustomer = (order.customer_name || order.customer || '').toLowerCase().includes(query);
 
         // Search in items for technician or issues
@@ -69,7 +70,7 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
           item.issues?.some(i => i.issue.toLowerCase().includes(query))
         );
 
-        if (!matchesId && !matchesCustomer && !matchesTechnician && !matchesIssue) {
+        if (!matchesId && !matchesRef && !matchesCustomer && !matchesTechnician && !matchesIssue) {
           return false;
         }
       }
@@ -99,7 +100,7 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
           </div>
           <input
             type="text"
-            placeholder="Search by Order ID or Customer..."
+            placeholder="Search by Order ID, Ref No, or Customer..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-12 pr-4 py-3 rounded-xl bg-white text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-gray-200 shadow-sm"
@@ -142,6 +143,9 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
                 </Badge>
               </div>
               <p className="text-sm font-medium text-slate-800 mb-1">{order.customer_name || order.customer}</p>
+              {order.reference_number && (
+                <p className="text-xs text-slate-500 mb-1">Ref: {order.reference_number}</p>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-400">{order.received_date}</span>
                 <Badge className={`${DREELIO_PRIORITY_STYLES[order.priority] || PRIORITY_COLORS[order.priority]} px-2 py-0.5 text-xs font-medium`}>
@@ -194,7 +198,12 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm font-semibold transition-colors hover:opacity-90" style={{ color: '#6A7288' }}>{order.name}</span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700">{order.customer_name || order.customer}</td>
+                    <td className="px-6 py-4 text-sm text-slate-700">
+                      <div>{order.customer_name || order.customer}</div>
+                      {order.reference_number && (
+                        <div className="text-xs text-slate-500 mt-1">Ref: {order.reference_number}</div>
+                      )}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{order.received_date}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <Badge className={`${DREELIO_STATUS_STYLES[order.status] || STATUS_COLORS[order.status]} px-3 py-1 text-xs font-medium`}>

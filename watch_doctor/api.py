@@ -309,7 +309,7 @@ def list_repair_orders():
 
 	orders = frappe.get_all(
 		"DW Repair Order",
-		fields=["name", "customer", "status", "priority", "received_date"],
+		fields=["name", "customer", "reference_number", "status", "priority", "received_date"],
 		filters=extra_filters,
 		limit_page_length=50,
 		order_by="modified desc",
