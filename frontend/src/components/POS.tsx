@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as apiService from '../services/apiService';
-import type { POSItem, POSCustomer, CartItem, POSDraft } from '../services/apiService';
+import type { POSItem, POSCustomer, CartItem, POSDraft, POSPaymentSplit } from '../services/apiService';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { useToast } from './ui/Toast';
@@ -8,6 +8,10 @@ import { useAppConfig } from '../context/AppConfigContext';
 
 interface POSProps {
     onBack?: () => void;
+}
+
+interface PaymentSplit extends POSPaymentSplit {
+    id: string;
 }
 
 const LAST_POS_CUSTOMER_KEY = 'watch_doctor_last_pos_customer';
@@ -33,7 +37,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
 
     // Payment modal
     const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [selectedPaymentMode, setSelectedPaymentMode] = useState('Cash');
+    const [paymentSplits, setPaymentSplits] = useState<PaymentSplit[]>([]);
     const [discountPercent, setDiscountPercent] = useState(0);
     const [discountAmountInput, setDiscountAmountInput] = useState(0);
     const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
@@ -99,9 +103,6 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         try {
             const modes = await apiService.getPaymentModes();
             setPaymentModes(modes);
-            if (modes.length > 0) {
-                setSelectedPaymentMode(modes[0].mode_of_payment || modes[0].name || 'Cash');
-            }
         } catch (error) {
             console.error('Failed to load payment modes:', error);
         }
@@ -160,6 +161,56 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         return cart.reduce((sum, item) => sum + item.qty, 0);
     }, [cart]);
 
+    const currencyPrecision = Math.max(0, config.decimalPlaces || 2);
+    const amountStep = currencyPrecision > 0 ? 1 / Math.pow(10, currencyPrecision) : 1;
+
+    const roundCurrencyValue = (value: number) => {
+        const factor = Math.pow(10, currencyPrecision);
+        return Math.round((value + Number.EPSILON) * factor) / factor;
+    };
+
+    const defaultPaymentMode = paymentModes[0]?.mode_of_payment || paymentModes[0]?.name || 'Cash';
+
+    const getNextPaymentMode = (existingPayments: PaymentSplit[]) => {
+        const availableModes = paymentModes.map(mode => mode.mode_of_payment || mode.name).filter(Boolean);
+        if (availableModes.length === 0) return 'Cash';
+
+        const usedModes = new Set(existingPayments.map(payment => payment.mode_of_payment));
+        return availableModes.find(mode => !usedModes.has(mode)) || availableModes[existingPayments.length % availableModes.length];
+    };
+
+    const paymentAllocated = useMemo(() => {
+        return roundCurrencyValue(paymentSplits.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0));
+    }, [paymentSplits, currencyPrecision]);
+
+    const paymentRemaining = useMemo(() => {
+        return roundCurrencyValue(cartTotal - paymentAllocated);
+    }, [cartTotal, paymentAllocated, currencyPrecision]);
+
+    const hasInvalidPayments = paymentSplits.some(payment => !payment.mode_of_payment || (Number(payment.amount) || 0) <= 0);
+    const isPaymentBalanced = Math.abs(paymentRemaining) < amountStep / 2 || paymentRemaining === 0;
+
+    useEffect(() => {
+        if (!showPaymentModal) return;
+        setPaymentSplits(prev => {
+            if (prev.length !== 1) return prev;
+
+            const current = prev[0];
+            const nextAmount = roundCurrencyValue(cartTotal);
+            const nextMode = current?.mode_of_payment || defaultPaymentMode;
+
+            if (current && current.mode_of_payment === nextMode && Math.abs((current.amount || 0) - nextAmount) < amountStep / 2) {
+                return prev;
+            }
+
+            return [{
+                id: current?.id || `${Date.now()}`,
+                mode_of_payment: nextMode,
+                amount: nextAmount,
+            }];
+        });
+    }, [showPaymentModal, cartTotal, defaultPaymentMode, amountStep]);
+
     // Cart functions
     const addToCart = (item: POSItem) => {
         setCart(prev => {
@@ -205,6 +256,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     const clearCart = () => {
         setCart([]);
         setCurrentDraftName(null);
+        setPaymentSplits([]);
         setDiscountPercent(0);
         setDiscountAmountInput(0);
         setDiscountType('percent');
@@ -254,6 +306,75 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     };
 
     // Payment functions
+    const updatePaymentSplit = (id: string, field: 'mode_of_payment' | 'amount', value: string | number) => {
+        setPaymentSplits(prev => prev.map(payment => {
+            if (payment.id !== id) return payment;
+
+            if (field === 'amount') {
+                const numericValue = typeof value === 'number' ? value : parseFloat(value) || 0;
+                return { ...payment, amount: roundCurrencyValue(Math.max(0, numericValue)) };
+            }
+
+            return { ...payment, mode_of_payment: String(value) };
+        }));
+    };
+
+    const addPaymentSplit = () => {
+        setPaymentSplits(prev => {
+            if (prev.length === 0) {
+                return [{
+                    id: `${Date.now()}`,
+                    mode_of_payment: defaultPaymentMode,
+                    amount: roundCurrencyValue(cartTotal),
+                }];
+            }
+
+            const lastIndex = prev.length - 1;
+            const lastPayment = prev[lastIndex];
+            const splitAmount = roundCurrencyValue((Number(lastPayment.amount) || 0) / 2);
+            const remainingAmount = roundCurrencyValue((Number(lastPayment.amount) || 0) - splitAmount);
+            const suggestedMode = getNextPaymentMode(prev);
+
+            return [
+                ...prev.slice(0, lastIndex),
+                { ...lastPayment, amount: remainingAmount },
+                {
+                    id: `${Date.now()}-${prev.length}`,
+                    mode_of_payment: suggestedMode,
+                    amount: splitAmount,
+                }
+            ];
+        });
+    };
+
+    const removePaymentSplit = (id: string) => {
+        setPaymentSplits(prev => {
+            if (prev.length === 1) return prev;
+
+            const next = prev.filter(payment => payment.id !== id);
+            if (next.length === 1) {
+                return [{ ...next[0], amount: roundCurrencyValue(cartTotal) }];
+            }
+            return next;
+        });
+    };
+
+    const autoBalancePayments = () => {
+        setPaymentSplits(prev => {
+            if (prev.length === 0) return prev;
+            const lastIndex = prev.length - 1;
+            const lastPayment = prev[lastIndex];
+            const adjustedAmount = roundCurrencyValue((Number(lastPayment.amount) || 0) + paymentRemaining);
+
+            if (adjustedAmount < 0) return prev;
+
+            return [
+                ...prev.slice(0, lastIndex),
+                { ...lastPayment, amount: adjustedAmount }
+            ];
+        });
+    };
+
     const handleOpenPayment = () => {
         if (!selectedCustomer) {
             showToast('Please select a customer', 'error');
@@ -263,22 +384,44 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             showToast('Cart is empty', 'error');
             return;
         }
+
+        setPaymentSplits([{
+            id: `${Date.now()}`,
+            mode_of_payment: defaultPaymentMode,
+            amount: roundCurrencyValue(cartTotal),
+        }]);
         setShowPaymentModal(true);
     };
 
     const handleConfirmPayment = async () => {
+        const normalizedPayments: POSPaymentSplit[] = paymentSplits.map(payment => ({
+            mode_of_payment: payment.mode_of_payment,
+            amount: roundCurrencyValue(Number(payment.amount) || 0),
+        }));
+
+        if (normalizedPayments.length === 0 || normalizedPayments.some(payment => !payment.mode_of_payment || payment.amount <= 0)) {
+            showToast('Enter a valid payment mode and amount for each split', 'error');
+            return;
+        }
+
+        if (!isPaymentBalanced) {
+            const message = paymentRemaining > 0
+                ? `Remaining to allocate: ${formatCurrency(paymentRemaining)}`
+                : `Allocated amount exceeds total by ${formatCurrency(Math.abs(paymentRemaining))}`;
+            showToast(message, 'error');
+            return;
+        }
+
         setIsProcessing(true);
         try {
             let result;
             if (currentDraftName) {
-                // Submit existing draft
-                result = await apiService.submitPosDraft(currentDraftName, selectedPaymentMode, effectiveDiscountPercent);
+                result = await apiService.submitPosDraft(currentDraftName, normalizedPayments, effectiveDiscountPercent);
             } else {
-                // Create new invoice
                 result = await apiService.createPosInvoice(
                     selectedCustomer!.name,
                     cart,
-                    selectedPaymentMode,
+                    normalizedPayments,
                     effectiveDiscountPercent
                 );
             }
@@ -545,22 +688,58 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                         <h2 className="text-xl font-bold text-gray-900 mb-4">Complete Payment</h2>
 
                         <div className="space-y-4">
-                            {/* Payment Mode */}
+                            {/* Payment Splits */}
                             <div>
-                                <label className="text-sm text-gray-600 block mb-2">Payment Method</label>
-                                <select
-                                    value={selectedPaymentMode}
-                                    onChange={(e) => setSelectedPaymentMode(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-xl bg-white"
-                                    style={{ border: '1px solid #E8E8E8' }}
-                                >
-                                    {paymentModes.map(mode => (
-                                        <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
-                                            {mode.mode_of_payment || mode.name}
-                                        </option>
+                                <div className="flex items-center justify-between mb-2">
+                                    <label className="text-sm text-gray-600 block">Payment Methods</label>
+                                    <Button variant="outline" size="sm" onClick={addPaymentSplit} className="text-xs">
+                                        + Add Split
+                                    </Button>
+                                </div>
+                                <div className="space-y-2">
+                                    {paymentSplits.map((payment, index) => (
+                                        <div key={payment.id} className="grid grid-cols-[1fr_120px_auto] gap-2 items-center">
+                                            <select
+                                                value={payment.mode_of_payment}
+                                                onChange={(e) => updatePaymentSplit(payment.id, 'mode_of_payment', e.target.value)}
+                                                className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                                style={{ border: '1px solid #E8E8E8' }}
+                                            >
+                                                {paymentModes.map(mode => (
+                                                    <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
+                                                        {mode.mode_of_payment || mode.name}
+                                                    </option>
+                                                ))}
+                                                {paymentModes.length === 0 && <option value="Cash">Cash</option>}
+                                            </select>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                step={amountStep}
+                                                value={payment.amount}
+                                                onChange={(e) => updatePaymentSplit(payment.id, 'amount', e.target.value)}
+                                                className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                                style={{ border: '1px solid #E8E8E8' }}
+                                            />
+                                            <button
+                                                onClick={() => removePaymentSplit(payment.id)}
+                                                disabled={paymentSplits.length === 1}
+                                                className="text-red-500 text-sm disabled:opacity-40"
+                                                title={index === 0 && paymentSplits.length === 1 ? 'At least one payment row is required' : 'Remove split'}
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
                                     ))}
-                                    {paymentModes.length === 0 && <option value="Cash">Cash</option>}
-                                </select>
+                                </div>
+                                <div className="flex items-center justify-between mt-2">
+                                    <p className="text-xs text-gray-500">Split one sale across multiple payment modes.</p>
+                                    {Math.abs(paymentRemaining) >= amountStep / 2 && (
+                                        <button onClick={autoBalancePayments} className="text-xs font-medium" style={{ color: '#648DDA' }}>
+                                            Auto-balance
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
                             {/* Discount */}
@@ -615,6 +794,14 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                         <span>-{formatCurrency(discountAmount)}</span>
                                     </div>
                                 )}
+                                <div className="flex justify-between mb-2">
+                                    <span className="text-gray-600">Allocated</span>
+                                    <span>{formatCurrency(paymentAllocated)}</span>
+                                </div>
+                                <div className={`flex justify-between mb-2 ${paymentRemaining === 0 ? 'text-green-600' : paymentRemaining > 0 ? 'text-amber-600' : 'text-red-500'}`}>
+                                    <span>Remaining</span>
+                                    <span>{formatCurrency(paymentRemaining)}</span>
+                                </div>
                                 <div className="flex justify-between font-bold text-lg pt-2" style={{ borderTop: '1px solid #E8E8E8' }}>
                                     <span>Total</span>
                                     <span className="text-green-600">{formatCurrency(cartTotal)}</span>
@@ -628,7 +815,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             </Button>
                             <Button
                                 onClick={handleConfirmPayment}
-                                disabled={isProcessing}
+                                disabled={isProcessing || hasInvalidPayments || !isPaymentBalanced}
                                 className="flex-1"
                                 style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
                             >

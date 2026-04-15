@@ -187,7 +187,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
             };
             setFormData(newOrder);
         }
-    }, [order, isOpen, dependencies.customers]); // Added dependencies.customers to ensure default customer is set correctly
+    }, [order, isOpen]); // Note: dependencies.customers must NOT be here — adding a new customer updates that list and would reset the form
 
     if (!formData) return null;
 

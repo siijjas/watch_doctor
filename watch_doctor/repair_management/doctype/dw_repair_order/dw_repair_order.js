@@ -1,8 +1,120 @@
 // Copyright (c) 2025, Watch Doctor and contributors
 // For license information, please see license.txt
 
+// ==================== Customer Auto-Fill ====================
+// Handles both paths Frappe can take when "+ Create" is clicked on the Customer
+// link field:
+//
+//   PATH A – Quick Entry dialog (Customer has quick_entry=1 in ERPNext):
+//   Frappe calls make_quick_entry(doctype, after_insert).  When the dialog
+//   saves it checks frappe._from_link first; if that flag is set, after_insert
+//   is ignored and the deep-cloned control's set_value() is used instead
+//   (which silently fails because the clone has no prototype methods).  Our
+//   fix: call make_quick_entry ourselves WITHOUT setting frappe._from_link, so
+//   after_insert is guaranteed to run and directly sets the field.
+//
+//   PATH B – Full Customer form (user clicks "Edit in Full Page" inside the
+//   dialog, or Customer has quick_entry=0):
+//   We store the repair-order name in sessionStorage before navigating away.
+//   customer.js fires after_save on the Customer form, writes the new customer
+//   name to sessionStorage, and redirects back.  apply_pending_customer_link()
+//   then picks it up on refresh.
+
+const _WD_CUST_KEY = "wd:pending_customer_link";
+const _WD_CUST_TTL = 15 * 60 * 1000;
+
+function _wd_clear_pending() {
+    try { sessionStorage.removeItem(_WD_CUST_KEY); } catch (_) {}
+}
+
+function _wd_get_pending() {
+    try {
+        const raw = sessionStorage.getItem(_WD_CUST_KEY);
+        if (!raw) return null;
+        const d = JSON.parse(raw);
+        if (!d || !d.repair_order) { _wd_clear_pending(); return null; }
+        if (Date.now() - (d.ts || 0) > _WD_CUST_TTL) { _wd_clear_pending(); return null; }
+        return d;
+    } catch (_) { return null; }
+}
+
+function setup_customer_link_auto_fill(frm) {
+    const ctrl = frm.fields_dict && frm.fields_dict.customer;
+    // Only hook once; guard against missing field or Frappe internals changing
+    if (!ctrl || ctrl.__wd_cust_hooked) return;
+    if (typeof ctrl.new_doc !== "function") return;
+    ctrl.__wd_cust_hooked = true;
+
+    ctrl.new_doc = function () {
+        // Pre-fill whatever the user has typed into the link field
+        frappe.route_options = {};
+        const label_val = (typeof ctrl.get_label_value === "function") ? ctrl.get_label_value() : "";
+        if (label_val) {
+            frappe.route_options.name_field = label_val;
+        }
+
+        // Store breadcrumb for PATH B (full-form navigation)
+        try {
+            sessionStorage.setItem(_WD_CUST_KEY, JSON.stringify({
+                repair_order: frm.doc.name,
+                ts: Date.now(),
+            }));
+        } catch (_) {}
+
+        // *** Key change: do NOT set frappe._from_link ***
+        // When frappe._from_link is absent, make_quick_entry uses after_insert
+        // (PATH A).  When the form navigates away instead (PATH B), customer.js
+        // handles the return trip via sessionStorage.
+        frappe.ui.form.make_quick_entry("Customer", function (doc) {
+            // PATH A callback – quick entry dialog was saved
+            _wd_clear_pending();
+            frm.set_value("customer", doc.name);
+        });
+
+        return false;
+    };
+}
+
+function apply_pending_customer_link(frm) {
+    // PATH B – we came back from the full Customer form
+    const d = _wd_get_pending();
+    if (!d || !d.customer || d.repair_order !== frm.doc.name) return;
+
+    _wd_clear_pending();
+    if (frm.doc.customer === d.customer) {
+        // Value already set (e.g. by standard Frappe mechanism); just trigger
+        frm.trigger("customer");
+    } else {
+        frm.set_value("customer", d.customer);
+    }
+}
+
+function sync_customer_contact(frm) {
+    if (!frm.doc.customer) {
+        if (frm.doc.contact_person) {
+            frm.set_value("contact_person", "");
+        }
+        return;
+    }
+
+    frappe.db.get_value("Customer", frm.doc.customer, "customer_primary_contact")
+        .then((r) => {
+            const contact_person = r && r.message ? r.message.customer_primary_contact : "";
+            if ((frm.doc.contact_person || "") !== (contact_person || "")) {
+                frm.set_value("contact_person", contact_person || "");
+            }
+        });
+}
+
 frappe.ui.form.on("DW Repair Order", {
+    setup(frm) {
+        setup_customer_link_auto_fill(frm);
+    },
+
     refresh(frm) {
+        setup_customer_link_auto_fill(frm);
+        apply_pending_customer_link(frm);
+
         // Auto-set promised delivery date
         if (frm.is_new() && frm.doc.received_date && !frm.doc.promised_delivery_date) {
             frm.set_value("promised_delivery_date", frappe.datetime.add_days(frm.doc.received_date, 7));
@@ -13,6 +125,10 @@ frappe.ui.form.on("DW Repair Order", {
             add_quotation_buttons(frm);
             add_billing_buttons(frm);
         }
+    },
+
+    customer(frm) {
+        sync_customer_contact(frm);
     },
 
     received_date(frm) {

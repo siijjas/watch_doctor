@@ -709,6 +709,11 @@ export interface CartItem {
     rate: number;
 }
 
+export interface POSPaymentSplit {
+    mode_of_payment: string;
+    amount: number;
+}
+
 export interface POSDraft {
     name: string;
     customer: string;
@@ -735,18 +740,31 @@ export const getPosCustomers = async (search: string = ""): Promise<POSCustomer[
     return res.message || [];
 };
 
+const normalizePosPayments = (payments: POSPaymentSplit[] | string): POSPaymentSplit[] => {
+    if (typeof payments === 'string') {
+        return [{ mode_of_payment: payments, amount: 0 }];
+    }
+    return payments;
+};
+
 export const createPosInvoice = async (
     customer: string,
     items: CartItem[],
-    paymentMode: string = "Cash",
+    payments: POSPaymentSplit[] | string = "Cash",
     discountPercent: number = 0
 ): Promise<{ invoice_name: string; grand_total: number; customer: string }> => {
+    const normalizedPayments = normalizePosPayments(payments);
+    const primaryMode = typeof payments === 'string'
+        ? payments
+        : (normalizedPayments[0]?.mode_of_payment || 'Cash');
+
     const res = await apiFetch('/api/method/watch_doctor.api.create_pos_invoice', {
         method: 'POST',
         body: JSON.stringify({
             customer,
             items_json: JSON.stringify(items),
-            payment_mode: paymentMode,
+            payment_mode: primaryMode,
+            payments_json: JSON.stringify(normalizedPayments),
             discount_percent: discountPercent,
         }),
     });
@@ -799,15 +817,106 @@ export const deletePosDraft = async (invoiceName: string): Promise<{ success: bo
 
 export const submitPosDraft = async (
     invoiceName: string,
-    paymentMode: string = "Cash",
+    payments: POSPaymentSplit[] | string = "Cash",
     discountPercent: number = 0
 ): Promise<{ invoice_name: string; grand_total: number; customer: string }> => {
+    const normalizedPayments = normalizePosPayments(payments);
+    const primaryMode = typeof payments === 'string'
+        ? payments
+        : (normalizedPayments[0]?.mode_of_payment || 'Cash');
+
     const res = await apiFetch('/api/method/watch_doctor.api.submit_pos_draft', {
         method: 'POST',
         body: JSON.stringify({
             invoice_name: invoiceName,
-            payment_mode: paymentMode,
+            payment_mode: primaryMode,
+            payments_json: JSON.stringify(normalizedPayments),
             discount_percent: discountPercent,
+        }),
+    });
+    return res.message;
+};
+
+// ==================== WhatsApp Notifications ====================
+
+export interface WhatsAppConfig {
+    enabled: boolean;
+    cooldown_minutes: number;
+}
+
+export interface WhatsAppNotificationStatus {
+    status: string;
+    order_status: string;
+    sent_at: string | null;
+    creation: string;
+    message_body: string;
+}
+
+export interface WhatsAppTemplate {
+    name: string;
+    notification_key: string;
+    label: string;
+    message_body: string;
+    is_active: number;
+}
+
+export interface NotificationPreview {
+    customer_name: string;
+    phone_display: string;
+    message_body: string;
+}
+
+export const previewNotification = async (orderName: string): Promise<NotificationPreview> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.preview_notification', {
+        method: 'POST',
+        body: JSON.stringify({ repair_order_name: orderName }),
+    });
+    return res.message;
+};
+
+export const notifyCustomer = async (orderName: string): Promise<{ status: string; log_name: string }> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.notify_customer', {
+        method: 'POST',
+        body: JSON.stringify({ repair_order_name: orderName }),
+    });
+    return res.message;
+};
+
+export const getNotificationStatus = async (orderName: string): Promise<WhatsAppNotificationStatus | null> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.get_notification_status', {
+        method: 'POST',
+        body: JSON.stringify({ repair_order_name: orderName }),
+    });
+    return res.message;
+};
+
+export const getWhatsAppConfig = async (): Promise<WhatsAppConfig> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.get_whatsapp_config', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message;
+};
+
+export const getWhatsAppTemplates = async (): Promise<WhatsAppTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.get_whatsapp_templates', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message || [];
+};
+
+export const saveWhatsAppTemplate = async (
+    notificationKey: string,
+    messageBody: string,
+    isActive: number = 1
+): Promise<{ status: string }> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.save_whatsapp_template', {
+        method: 'POST',
+        body: JSON.stringify({
+            notification_key: notificationKey,
+            message_body: messageBody,
+            is_active: isActive,
         }),
     });
     return res.message;

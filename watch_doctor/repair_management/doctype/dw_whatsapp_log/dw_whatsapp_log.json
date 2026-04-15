@@ -1,0 +1,170 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-04-15 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "repair_order",
+  "customer",
+  "customer_name",
+  "phone_number",
+  "column_break_1",
+  "order_status",
+  "notification_key",
+  "status",
+  "sent_by",
+  "section_break_message",
+  "message_body",
+  "section_break_api",
+  "whapi_message_id",
+  "sent_at",
+  "retry_count",
+  "column_break_2",
+  "idempotency_key",
+  "error_detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "repair_order",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Repair Order",
+   "options": "DW Repair Order",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "label": "Customer Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "phone_number",
+   "fieldtype": "Data",
+   "label": "Phone Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "order_status",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Order Status"
+  },
+  {
+   "fieldname": "notification_key",
+   "fieldtype": "Data",
+   "label": "Notification Key"
+  },
+  {
+   "default": "Queued",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Queued\nSent\nFailed",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sent_by",
+   "fieldtype": "Link",
+   "label": "Sent By",
+   "options": "User"
+  },
+  {
+   "fieldname": "section_break_message",
+   "fieldtype": "Section Break",
+   "label": "Message"
+  },
+  {
+   "fieldname": "message_body",
+   "fieldtype": "Long Text",
+   "label": "Message Body"
+  },
+  {
+   "fieldname": "section_break_api",
+   "fieldtype": "Section Break",
+   "label": "API Details"
+  },
+  {
+   "fieldname": "whapi_message_id",
+   "fieldtype": "Data",
+   "label": "Whapi Message ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "retry_count",
+   "fieldtype": "Int",
+   "label": "Retry Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "idempotency_key",
+   "fieldtype": "Data",
+   "label": "Idempotency Key",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "error_detail",
+   "fieldtype": "Long Text",
+   "label": "Error Detail",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-04-15 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Repair Management",
+ "name": "DW WhatsApp Log",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DW Executive"
+  },
+  {
+   "print": 1,
+   "read": 1,
+   "role": "DW Data Entry"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

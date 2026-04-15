@@ -1,1 +1,2 @@
 watch_doctor.patches.update_dw_ro_bag_label
+watch_doctor.patches.seed_whatsapp_templates

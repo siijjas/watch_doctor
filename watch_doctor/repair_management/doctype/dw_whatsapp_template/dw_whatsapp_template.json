@@ -1,0 +1,89 @@
+{
+ "actions": [],
+ "autoname": "field:notification_key",
+ "creation": "2026-04-15 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "notification_key",
+  "label",
+  "is_active",
+  "section_break_template",
+  "message_body"
+ ],
+ "fields": [
+  {
+   "fieldname": "notification_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Notification Key",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "section_break_template",
+   "fieldtype": "Section Break",
+   "label": "Message Template"
+  },
+  {
+   "description": "Placeholders: {customer_name}, {ref}, {status}, {shop_name}, {promised_date}",
+   "fieldname": "message_body",
+   "fieldtype": "Long Text",
+   "label": "Message Body",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-04-15 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Repair Management",
+ "name": "DW WhatsApp Template",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "DW Executive",
+   "write": 1
+  },
+  {
+   "print": 1,
+   "read": 1,
+   "role": "DW Data Entry"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

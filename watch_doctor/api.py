@@ -595,17 +595,16 @@ def get_employees():
 def get_payment_modes():
 	"""Get configured payment modes for repair workflow."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	# Fetch active payment modes from config
 	payment_modes = frappe.db.sql("""
 		SELECT 
 			pmc.payment_mode as name,
+			pmc.payment_mode as mode_of_payment,
 			mop.type
 		FROM `tabDW Payment Mode Config` pmc
 		INNER JOIN `tabMode of Payment` mop ON pmc.payment_mode = mop.name
 		WHERE pmc.is_active = 1 AND mop.enabled = 1
 		ORDER BY pmc.display_order ASC, pmc.payment_mode ASC
 	""", as_dict=True)
-	
 	return payment_modes
 
 
@@ -792,6 +791,154 @@ def get_aged_pending_orders(limit: int = 5):
 
 # ==================== POS APIs ====================
 
+
+def _get_default_company():
+	"""Return the user's default company or the first available company."""
+	company = frappe.defaults.get_user_default("Company")
+	if company:
+		return company
+
+	companies = frappe.get_all("Company", fields=["name"], limit_page_length=1)
+	if companies:
+		return companies[0].get("name")
+
+	frappe.throw("No Company is configured for POS invoicing")
+
+
+
+def _get_currency_precision(company: str) -> int:
+	"""Return the currency precision for the company."""
+	precision = frappe.get_system_settings("currency_precision")
+	if precision is not None:
+		try:
+			return int(precision)
+		except (TypeError, ValueError):
+			pass
+
+	try:
+		currency = frappe.db.get_value("Company", company, "default_currency")
+		if currency:
+			fraction_units = int(frappe.db.get_value("Currency", currency, "fraction_units") or 100)
+			if fraction_units > 1:
+				import math
+				return int(round(math.log10(fraction_units)))
+			return 0
+	except Exception:
+		pass
+
+	return 2
+
+
+
+def _get_allowed_pos_payment_modes():
+	"""Return all active POS payment modes configured for the app."""
+	rows = frappe.db.sql("""
+		SELECT pmc.payment_mode
+		FROM `tabDW Payment Mode Config` pmc
+		INNER JOIN `tabMode of Payment` mop ON pmc.payment_mode = mop.name
+		WHERE pmc.is_active = 1 AND mop.enabled = 1
+	""", as_dict=True)
+	return {row["payment_mode"] for row in rows}
+
+
+
+def _get_payment_account_for_mode(payment_mode: str, company: str):
+	"""Resolve the default account for a payment mode within the company."""
+	payment_account = None
+	try:
+		mode_of_payment = frappe.get_doc("Mode of Payment", payment_mode)
+		for account in mode_of_payment.accounts:
+			if account.company == company and account.default_account:
+				payment_account = account.default_account
+				break
+	except Exception:
+		payment_account = None
+
+	if payment_account:
+		return payment_account
+
+	fallback_account = frappe.db.get_value(
+		"Account",
+		{"company": company, "account_type": ["in", ["Cash", "Bank"]], "is_group": 0},
+		"name"
+	)
+	if fallback_account and payment_mode.lower() == "cash":
+		return fallback_account
+
+	frappe.throw(f"No default account is configured for payment mode {payment_mode} in company {company}")
+
+
+
+def _parse_pos_payments(payments_json=None, payment_mode: str = "Cash"):
+	"""Normalize split-payment input from the client while preserving row order."""
+	if payments_json:
+		raw_payments = json.loads(payments_json) if isinstance(payments_json, str) else payments_json
+		if not isinstance(raw_payments, list) or not raw_payments:
+			frappe.throw("Payments must be provided as a non-empty list")
+	else:
+		fallback_mode = (payment_mode or "Cash").strip() or "Cash"
+		return [{"mode_of_payment": fallback_mode, "amount": None}]
+
+	allowed_modes = _get_allowed_pos_payment_modes()
+	normalized_payments = []
+
+	for row in raw_payments:
+		mode = str((row or {}).get("mode_of_payment") or (row or {}).get("payment_mode") or "").strip()
+		amount = frappe.utils.flt((row or {}).get("amount") or 0)
+
+		if not mode:
+			frappe.throw("Each payment row must include a payment mode")
+		if allowed_modes and mode not in allowed_modes:
+			frappe.throw(f"Payment mode {mode} is not enabled for POS")
+		if amount <= 0:
+			frappe.throw(f"Payment amount for {mode} must be greater than zero")
+
+		normalized_payments.append({
+			"mode_of_payment": mode,
+			"amount": amount,
+		})
+
+	return normalized_payments
+
+
+
+def _set_invoice_payments(invoice, payments, precision: int):
+	"""Replace the invoice payment rows with validated split payments."""
+	if not payments:
+		frappe.throw("At least one payment method is required")
+
+	invoice.set("payments", [])
+	grand_total = frappe.utils.flt(invoice.grand_total, precision)
+	tolerance = (0.5 / (10 ** precision)) if precision > 0 else 0
+	total_allocated = 0
+
+	for row in payments:
+		mode = row.get("mode_of_payment")
+		amount = row.get("amount")
+		if amount in (None, ""):
+			if len(payments) == 1:
+				amount = grand_total
+			else:
+				frappe.throw("Each split payment row requires an amount")
+
+		amount = frappe.utils.flt(amount, precision)
+		if amount <= 0:
+			frappe.throw(f"Payment amount for {mode} must be greater than zero")
+
+		total_allocated += amount
+		invoice.append("payments", {
+			"mode_of_payment": mode,
+			"account": _get_payment_account_for_mode(mode, invoice.company),
+			"amount": amount,
+		})
+
+	total_allocated = frappe.utils.flt(total_allocated, precision)
+	if abs(total_allocated - grand_total) > tolerance:
+		frappe.throw(
+			f"Allocated payments must equal the invoice total. Allocated: {total_allocated}, Total: {grand_total}"
+		)
+
+
 @frappe.whitelist()
 def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 	"""Get items for POS with stock and pricing info. Only returns enabled items with stock."""
@@ -898,43 +1045,21 @@ def get_pos_customers(search: str = "", limit: int = 20):
 
 
 @frappe.whitelist()
-def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash", discount_percent: float = 0):
-	"""Create a POS Sales Invoice with immediate payment."""
+def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash", discount_percent: float = 0, payments_json=None):
+	"""Create a POS Sales Invoice with immediate single or split payment."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
-	discount_percent = float(discount_percent) if discount_percent else 0
+	payments = _parse_pos_payments(payments_json, payment_mode)
+	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
 	
 	if not customer:
 		frappe.throw("Customer is required")
 	if not items or len(items) == 0:
 		frappe.throw("At least one item is required")
 	
-	# Get company from settings or first company
-	company = frappe.defaults.get_user_default("Company") or frappe.get_all("Company", limit=1)[0].name
+	company = _get_default_company()
+	precision = _get_currency_precision(company)
 	
-	# Get mode of payment account
-	payment_account = None
-	try:
-		mode_of_payment = frappe.get_doc("Mode of Payment", payment_mode)
-		for account in mode_of_payment.accounts:
-			if account.company == company:
-				payment_account = account.default_account
-				break
-	except Exception:
-		pass
-	
-	if not payment_account:
-		# Fallback: get first cash/bank account
-		payment_account = frappe.db.get_value(
-			"Account",
-			{"company": company, "account_type": ["in", ["Cash", "Bank"]], "is_group": 0},
-			"name"
-		)
-	
-	# Calculate total first to set payment amount
-	total_amount = sum(item.get("rate", 0) * item.get("qty", 1) for item in items)
-	
-	# Create Sales Invoice with payment in payments child table (required for POS)
 	invoice = frappe.get_doc({
 		"doctype": "Sales Invoice",
 		"customer": customer,
@@ -944,16 +1069,10 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 		"is_pos": 1,
 		"update_stock": 1,
 		"additional_discount_percentage": discount_percent,
-		"items": [],
-		"payments": [{
-			"mode_of_payment": payment_mode,
-			"account": payment_account,
-			"amount": total_amount
-		}]
+		"items": []
 	})
 	invoice.flags.ignore_permissions = True
 	
-	# Add items
 	for item in items:
 		invoice.append("items", {
 			"item_code": item.get("item_code"),
@@ -962,13 +1081,8 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 		})
 	
 	invoice.insert(ignore_permissions=True)
-	
-	# Update payment amount to match grand_total after insert (which calculates taxes/discount etc)
-	if invoice.payments and len(invoice.payments) > 0:
-		invoice.payments[0].amount = invoice.grand_total
-		invoice.save(ignore_permissions=True)
-	
-	invoice.flags.ignore_permissions = True
+	_set_invoice_payments(invoice, payments, precision)
+	invoice.save(ignore_permissions=True)
 	invoice.submit()
 	
 	frappe.db.commit()
@@ -1095,55 +1209,22 @@ def delete_pos_draft(invoice_name: str):
 
 
 @frappe.whitelist()
-def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_percent: float = 0):
-	"""Submit a draft POS invoice with payment."""
+def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_percent: float = 0, payments_json=None):
+	"""Submit a draft POS invoice with single or split payment."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 	invoice.flags.ignore_permissions = True
-	discount_percent = float(discount_percent) if discount_percent else 0
+	payments = _parse_pos_payments(payments_json, payment_mode)
+	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
 	
 	if invoice.docstatus != 0:
 		frappe.throw("Invoice is not a draft")
 	
-	company = invoice.company
-	
-	# Get mode of payment account
-	payment_account = None
-	try:
-		mode_of_payment = frappe.get_doc("Mode of Payment", payment_mode)
-		for account in mode_of_payment.accounts:
-			if account.company == company:
-				payment_account = account.default_account
-				break
-	except Exception:
-		pass
-	
-	if not payment_account:
-		payment_account = frappe.db.get_value(
-			"Account",
-			{"company": company, "account_type": ["in", ["Cash", "Bank"]], "is_group": 0},
-			"name"
-		)
-	
-	# Apply discount if any
-	if discount_percent > 0:
-		invoice.additional_discount_percentage = discount_percent
-	
-	# Add payment
-	invoice.append("payments", {
-		"mode_of_payment": payment_mode,
-		"account": payment_account,
-		"amount": invoice.grand_total
-	})
-	
+	invoice.additional_discount_percentage = discount_percent
 	invoice.save(ignore_permissions=True)
-	
-	# Update payment amount after save
-	if invoice.payments and len(invoice.payments) > 0:
-		invoice.payments[-1].amount = invoice.grand_total
-		invoice.save(ignore_permissions=True)
-	
-	invoice.flags.ignore_permissions = True
+	precision = _get_currency_precision(invoice.company)
+	_set_invoice_payments(invoice, payments, precision)
+	invoice.save(ignore_permissions=True)
 	invoice.submit()
 	frappe.db.commit()
 	

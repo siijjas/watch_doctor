@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl } from '../services/apiService';
+import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig } from '../services/apiService';
+import type { WhatsAppTemplate, WhatsAppConfig } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
@@ -18,7 +19,8 @@ type SettingsTab =
     | 'task-templates'
     | 'issue-templates'
     | 'watch-brands'
-    | 'watch-models';
+    | 'watch-models'
+    | 'whatsapp';
 
 interface PaymentModeConfig {
     name?: string;
@@ -1306,6 +1308,152 @@ const GeneralSection: React.FC = () => {
 // ─────────────────────────────────────────────────────────────
 // Tab navigation config
 // ─────────────────────────────────────────────────────────────
+// WhatsApp Templates Section
+// ─────────────────────────────────────────────────────────────
+const WhatsAppSection: React.FC = () => {
+    const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
+    const [config, setConfig] = useState<WhatsAppConfig | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [editingKey, setEditingKey] = useState<string | null>(null);
+    const [editBody, setEditBody] = useState('');
+    const [editActive, setEditActive] = useState(1);
+    const [isSaving, setIsSaving] = useState(false);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const [tpls, cfg] = await Promise.all([
+                getWhatsAppTemplates(),
+                getWhatsAppConfig(),
+            ]);
+            setTemplates(tpls);
+            setConfig(cfg);
+        } catch {
+            // feature may not be configured yet
+        }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const handleEdit = (t: WhatsAppTemplate) => {
+        setEditingKey(t.notification_key);
+        setEditBody(t.message_body);
+        setEditActive(t.is_active);
+    };
+
+    const handleSave = async () => {
+        if (!editingKey) return;
+        setIsSaving(true);
+        try {
+            await saveWhatsAppTemplate(editingKey, editBody, editActive);
+            setEditingKey(null);
+            await load();
+        } catch (e: any) {
+            alert(e.message || 'Failed to save template');
+        }
+        setIsSaving(false);
+    };
+
+    if (isLoading) return <LoadingSpinner />;
+
+    return (
+        <div>
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h2 className="text-lg font-bold text-gray-900">WhatsApp Notifications</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Configure message templates sent to customers via WhatsApp.</p>
+                </div>
+            </div>
+
+            {/* Status Banner */}
+            <div className={`mb-6 p-4 rounded-xl border ${config?.enabled ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+                <div className="flex items-center gap-3">
+                    <span className="text-2xl">{config?.enabled ? '✅' : '⚠️'}</span>
+                    <div>
+                        <p className={`font-semibold ${config?.enabled ? 'text-green-800' : 'text-amber-800'}`}>
+                            {config?.enabled ? 'WhatsApp Notifications Enabled' : 'WhatsApp Notifications Disabled'}
+                        </p>
+                        <p className="text-sm text-gray-500">
+                            {config?.enabled
+                                ? `Cooldown: ${config.cooldown_minutes} minutes between duplicate notifications`
+                                : 'Set whatsapp_enabled = true in site_config.json to enable.'}
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Templates */}
+            <div className="space-y-3">
+                {templates.map(t => (
+                    <div key={t.notification_key} className="border rounded-xl p-4" style={{ borderColor: '#F0EEEB' }}>
+                        {editingKey === t.notification_key ? (
+                            <div>
+                                <div className="flex items-center justify-between mb-3">
+                                    <div>
+                                        <span className="font-semibold text-gray-900">{t.label}</span>
+                                        <span className="text-xs text-gray-400 ml-2">({t.notification_key})</span>
+                                    </div>
+                                    <label className="flex items-center gap-2 text-sm">
+                                        <input
+                                            type="checkbox"
+                                            checked={editActive === 1}
+                                            onChange={e => setEditActive(e.target.checked ? 1 : 0)}
+                                            className="rounded"
+                                        />
+                                        Active
+                                    </label>
+                                </div>
+                                <textarea
+                                    value={editBody}
+                                    onChange={e => setEditBody(e.target.value)}
+                                    rows={4}
+                                    className="w-full border rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-purple-300 focus:border-purple-400"
+                                    style={{ borderColor: '#E0DCD7' }}
+                                />
+                                <p className="text-xs text-gray-400 mt-1 mb-3">
+                                    Placeholders: {'{customer_name}'}, {'{ref}'}, {'{status}'}, {'{shop_name}'}, {'{promised_date}'}
+                                </p>
+                                <div className="flex gap-2">
+                                    <Button size="sm" onClick={handleSave} disabled={isSaving}>
+                                        {isSaving ? 'Saving...' : 'Save'}
+                                    </Button>
+                                    <Button size="sm" variant="outline" onClick={() => setEditingKey(null)}>
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex items-start justify-between">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className="font-semibold text-gray-900">{t.label}</span>
+                                        <span className="text-xs text-gray-400">({t.notification_key})</span>
+                                        {t.is_active ? (
+                                            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Active</span>
+                                        ) : (
+                                            <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Inactive</span>
+                                        )}
+                                    </div>
+                                    <p className="text-sm text-gray-600 whitespace-pre-wrap">{t.message_body}</p>
+                                </div>
+                                <Button size="sm" variant="outline" onClick={() => handleEdit(t)} className="ml-3 shrink-0">
+                                    Edit
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                ))}
+
+                {templates.length === 0 && (
+                    <EmptyState message="No WhatsApp templates found. Run bench migrate to seed defaults." />
+                )}
+            </div>
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────
 interface TabDef {
     id: SettingsTab;
     label: string;
@@ -1385,6 +1533,15 @@ const tabs: TabDef[] = [
             </svg>
         ),
     },
+    {
+        id: 'whatsapp',
+        label: 'WhatsApp',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+        ),
+    },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -1444,6 +1601,7 @@ const Settings: React.FC = () => {
                 {activeTab === 'issue-templates' && <IssueTemplatesSection />}
                 {activeTab === 'watch-brands' && <WatchBrandsSection />}
                 {activeTab === 'watch-models' && <WatchModelsSection />}
+                {activeTab === 'whatsapp' && <WhatsAppSection />}
             </div>
         </div>
     );

@@ -41,10 +41,9 @@ export const CreateCustomerModal: React.FC<CreateCustomerModalProps> = ({ isOpen
             try {
                 const codes = await apiService.getCountryCodes();
                 setCountryCodes(codes);
-                // Default to India (+91) if available, else first one
+                // Default to the first code in the list (ordered by Settings)
                 if (codes.length > 0) {
-                    const india = codes.find(c => c.code === '+91');
-                    setSelectedCode(india ? india.code : codes[0].code);
+                    setSelectedCode(codes[0].code);
                 }
             } catch (err) {
                 console.error("Failed to load country codes:", err);

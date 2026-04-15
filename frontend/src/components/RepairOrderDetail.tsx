@@ -28,7 +28,10 @@ import { ViewQuotationModal } from './ViewQuotationModal';
 import { ViewInvoiceModal } from './ViewInvoiceModal';
 import { AddIssueModal } from './AddIssueModal';
 import { AddTaskModal } from './AddTaskModal';
+import { NotifyCustomerModal } from './NotifyCustomerModal';
 import { useAppConfig } from '../context/AppConfigContext';
+import { useAuth } from '../context/AuthContext';
+import type { WhatsAppNotificationStatus } from '../services/apiService';
 
 interface RepairOrderDetailProps {
   order: RepairOrder;
@@ -306,6 +309,7 @@ const WatchCard: React.FC<{
 
 const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, onEdit, onDelete, onRefresh }) => {
   const { formatCurrency } = useAppConfig();
+  const { hasRole } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [allItems, setAllItems] = useState<Item[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<RepairTaskTemplate[]>([]);
@@ -355,6 +359,11 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     invoiceAmount: number;
   }>({ isOpen: false, invoiceName: '', invoiceAmount: 0 });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // WhatsApp notification state
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [whatsappEnabled, setWhatsappEnabled] = useState(false);
+  const [lastNotification, setLastNotification] = useState<WhatsAppNotificationStatus | null>(null);
 
   // Handlers
   const handleAddPart = async (watchIndex: number, initialTaskIndex: number | null, part: RepairPartUsed, markTaskCompleted: boolean = false) => {
@@ -621,6 +630,36 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     fetchData();
   }, [order]);
 
+  // Load WhatsApp config & last notification status
+  useEffect(() => {
+    if (!isErpNext || !hasRole('executive', 'data_entry')) return;
+
+    const loadWhatsApp = async () => {
+      try {
+        const [config, notifStatus] = await Promise.all([
+          apiService.getWhatsAppConfig(),
+          apiService.getNotificationStatus(order.name),
+        ]);
+        setWhatsappEnabled(config.enabled);
+        setLastNotification(notifStatus);
+      } catch {
+        // WhatsApp feature might not be set up yet — silently ignore
+      }
+    };
+    loadWhatsApp();
+  }, [order.name, order.status]);
+
+  const handleNotifyCustomer = () => setShowNotifyModal(true);
+
+  const handleNotifySuccess = async () => {
+    try {
+      const notifStatus = await apiService.getNotificationStatus(order.name);
+      setLastNotification(notifStatus);
+    } catch {
+      // silently ignore — status will refresh on next order reload
+    }
+  };
+
 
   const totalOrderCost = (order.items || []).reduce((total, item) => {
     const itemCost = (item.tasks || []).reduce((sum, task) => {
@@ -672,6 +711,19 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               <span className="hidden sm:inline">Print Label</span>
             </Button>
           )}
+          {hasRole('executive', 'data_entry') && order.docstatus !== 2 && (
+            <Button
+              variant="outline"
+              onClick={handleNotifyCustomer}
+              disabled={!whatsappEnabled}
+              className="flex items-center gap-1.5 text-sm font-medium"
+              style={{ borderColor: '#E8E8E8' }}
+              title={whatsappEnabled ? 'Send WhatsApp notification to customer' : 'Enable WhatsApp in site_config.json first'}
+            >
+              <span className="text-base">📱</span>
+              <span className="hidden sm:inline">Notify Customer</span>
+            </Button>
+          )}
         </div>
         <ActionsDropdown
           items={[
@@ -707,6 +759,14 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               icon: '✏️',
               onClick: () => onEdit?.(order),
               hidden: order.docstatus !== 0 || !onEdit,
+            },
+            // WhatsApp notification
+            {
+              label: whatsappEnabled ? 'Notify Customer' : 'Notify Customer (disabled)',
+              icon: '📱',
+              onClick: handleNotifyCustomer,
+              hidden: !hasRole('executive', 'data_entry') || order.docstatus === 2,
+              disabled: !whatsappEnabled,
             },
           ]}
         />
@@ -787,6 +847,30 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               </div>
             </div>
           </div>
+
+          {/* WhatsApp Notification Status */}
+          {whatsappEnabled && lastNotification && hasRole('executive', 'data_entry') && (
+            <div className="mt-4 flex items-center gap-2 text-sm text-gray-600">
+              <span>📱</span>
+              <span>Last Notification:</span>
+              <Badge className={
+                lastNotification.status === 'Sent'
+                  ? 'bg-green-100 text-green-700'
+                  : lastNotification.status === 'Queued'
+                    ? 'bg-yellow-100 text-yellow-700'
+                    : 'bg-red-100 text-red-700'
+              }>
+                {lastNotification.status}
+              </Badge>
+              <span className="text-gray-400">—</span>
+              <span>{lastNotification.order_status}</span>
+              {lastNotification.sent_at && (
+                <span className="text-gray-400 text-xs">
+                  ({new Date(lastNotification.sent_at).toLocaleString()})
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -969,6 +1053,15 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           onUpdated={() => onRefresh?.(order.name)}
         />
       )}
+
+      {/* WhatsApp Notify Modal */}
+      <NotifyCustomerModal
+        isOpen={showNotifyModal}
+        onClose={() => setShowNotifyModal(false)}
+        orderName={order.name}
+        orderStatus={order.status}
+        onSuccess={handleNotifySuccess}
+      />
 
       {/* Payment Modal */}
       <PaymentModal
