@@ -2,6 +2,12 @@ import frappe
 from frappe import _  # noqa: F401
 import json
 
+from watch_doctor.pos_enhancements import (
+	apply_pos_profile,
+	build_pos_print_url,
+	get_pos_profile_settings,
+)
+
 from watch_doctor.permissions import (
     require_roles,
     can_access_repair_order,
@@ -46,11 +52,13 @@ def get_user_info():
 @frappe.whitelist()
 def get_app_config():
 	"""Return app-level configuration: logo URL, currency symbol, decimal places."""
+	from watch_doctor.pms import get_pms_runtime_configuration
 	config = {
 		"logo_url": "",
-		"currency_code": "USD",
-		"currency_symbol": "$",
-		"decimal_places": 2,
+		"currency_code": "",
+		"currency_symbol": "",
+		"decimal_places": 0,
+		"pms_print_format": "",
 	}
 
 	# Logo stored via frappe defaults (no schema change needed)
@@ -70,7 +78,7 @@ def get_app_config():
 		# Fallback to System Settings
 		if not currency_code:
 			currency_code = frappe.db.get_single_value("System Settings", "currency")
-		currency_code = currency_code or "USD"
+		currency_code = currency_code or ""
 		config["currency_code"] = currency_code
 	except Exception:
 		pass
@@ -89,6 +97,11 @@ def get_app_config():
 	except Exception:
 		pass
 
+	try:
+		config["pms_print_format"] = get_pms_runtime_configuration().get("pms_print_format") or ""
+	except Exception:
+		pass
+
 	return config
 
 
@@ -103,6 +116,132 @@ def save_logo_url(logo_url):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "save_logo_url error")
 		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def get_pms_configuration():
+	"""Return editable PMS/VAT configuration and option lists for the Settings UI."""
+	require_roles(ROLE_EXECUTIVE)
+	from watch_doctor.pms import get_pms_runtime_configuration
+
+	company = _get_default_company()
+	config = get_pms_runtime_configuration()
+
+	item_groups = frappe.get_all(
+		"Item Group",
+		filters={"is_group": 0},
+		pluck="name",
+		order_by="name asc",
+		limit_page_length=500,
+	)
+	tax_accounts = frappe.get_all(
+		"Account",
+		filters={"company": company, "account_type": "Tax", "is_group": 0},
+		pluck="name",
+		order_by="name asc",
+		limit_page_length=500,
+	)
+	sales_taxes_templates = frappe.get_all(
+		"Sales Taxes and Charges Template",
+		filters={"disabled": 0},
+		pluck="name",
+		order_by="name asc",
+		limit_page_length=500,
+	)
+	item_tax_templates = frappe.get_all(
+		"Item Tax Template",
+		pluck="name",
+		order_by="name asc",
+		limit_page_length=500,
+	)
+	print_formats = frappe.get_all(
+		"Print Format",
+		filters={"doc_type": "Sales Invoice", "disabled": 0},
+		pluck="name",
+		order_by="name asc",
+		limit_page_length=200,
+	)
+
+	return {
+		"config": config,
+		"options": {
+			"item_groups": item_groups,
+			"tax_accounts": tax_accounts,
+			"sales_taxes_templates": sales_taxes_templates,
+			"item_tax_templates": item_tax_templates,
+			"print_formats": print_formats,
+		},
+	}
+
+
+@frappe.whitelist()
+def save_pms_configuration(
+	pms_enabled: int = 0,
+	pms_item_group: str = "",
+	pms_vat_account: str = "",
+	pms_disclaimer: str = "",
+	standard_sales_taxes_template: str = "",
+	standard_item_tax_template: str = "",
+	pms_print_format: str = "",
+	pms_vat_divisor: float = 0,
+):
+	"""Persist editable PMS/VAT configuration from the Settings UI."""
+	require_roles(ROLE_EXECUTIVE)
+	from watch_doctor.pms import clear_pms_runtime_configuration_cache
+	from watch_doctor.setup_pms import execute as ensure_pms_setup
+
+	if not frappe.db.exists("DocType", "DW PMS Settings"):
+		ensure_pms_setup()
+
+	validators = [
+		("Item Group", pms_item_group),
+		("Account", pms_vat_account),
+		("Sales Taxes and Charges Template", standard_sales_taxes_template),
+		("Item Tax Template", standard_item_tax_template),
+		("Print Format", pms_print_format),
+	]
+	for doctype, value in validators:
+		if value and not frappe.db.exists(doctype, value):
+			frappe.throw(f"{doctype} {value} does not exist")
+
+	if pms_enabled and float(pms_vat_divisor or 0) <= 0:
+		frappe.throw("PMS VAT Divisor must be greater than zero")
+
+	if pms_enabled:
+		missing_fields = []
+		for value, label in [
+			(pms_item_group, "PMS Item Group"),
+			(pms_vat_account, "PMS VAT Account"),
+			(pms_disclaimer, "PMS Disclaimer"),
+			(standard_sales_taxes_template, "Standard Sales Taxes Template"),
+			(standard_item_tax_template, "Standard Item Tax Template"),
+			(pms_print_format, "PMS Print Format"),
+		]:
+			if not value:
+				missing_fields.append(label)
+		if missing_fields:
+			frappe.throw(
+				"Profit Margin Scheme cannot be enabled until all PMS/VAT settings are configured. "
+				f"Missing fields: {', '.join(missing_fields)}."
+			)
+
+	frappe.db.set_single_value("DW PMS Settings", "pms_enabled", 1 if int(pms_enabled) else 0)
+	frappe.db.set_single_value("DW PMS Settings", "pms_item_group", pms_item_group or "")
+	frappe.db.set_single_value("DW PMS Settings", "pms_vat_account", pms_vat_account or "")
+	frappe.db.set_single_value("DW PMS Settings", "standard_sales_taxes_template", standard_sales_taxes_template or "")
+	frappe.db.set_single_value("DW PMS Settings", "standard_item_tax_template", standard_item_tax_template or "")
+	frappe.db.set_single_value("DW PMS Settings", "pms_print_format", pms_print_format or "")
+	frappe.db.set_single_value("DW PMS Settings", "pms_vat_divisor", float(pms_vat_divisor or 0))
+	frappe.db.set_single_value(
+		"DW PMS Settings",
+		"pms_disclaimer",
+		pms_disclaimer or "",
+	)
+
+	frappe.db.commit()
+	clear_pms_runtime_configuration_cache()
+	frappe.clear_cache()
+	return {"success": True, "config": get_pms_configuration()["config"]}
 
 
 @frappe.whitelist()
@@ -608,6 +747,14 @@ def get_payment_modes():
 	return payment_modes
 
 
+@frappe.whitelist()
+def get_pos_runtime_config(company: str = "", pos_profile: str = ""):
+	"""Return runtime POS defaults and selector options for the custom POS UI."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	resolved_company = company or _get_default_company()
+	return get_pos_profile_settings(resolved_company, pos_profile or None)
+
+
 # ============ DASHBOARD APIs ============
 
 @frappe.whitelist()
@@ -901,6 +1048,13 @@ def _parse_pos_payments(payments_json=None, payment_mode: str = "Cash"):
 	return normalized_payments
 
 
+def _parse_pos_options(options_json=None):
+	"""Normalize POS option payload sent by the React frontend."""
+	if not options_json:
+		return {}
+	return json.loads(options_json) if isinstance(options_json, str) else options_json
+
+
 
 def _set_invoice_payments(invoice, payments, precision: int):
 	"""Replace the invoice payment rows with validated split payments."""
@@ -937,6 +1091,15 @@ def _set_invoice_payments(invoice, payments, precision: int):
 		frappe.throw(
 			f"Allocated payments must equal the invoice total. Allocated: {total_allocated}, Total: {grand_total}"
 		)
+
+
+def _validate_pos_pms_item_mix(items) -> bool:
+	"""Ensure POS carts do not mix PMS items with standard-VAT items."""
+	from watch_doctor.pms import validate_pms_item_mix
+
+	item_codes = [item.get("item_code") for item in (items or []) if item.get("item_code")]
+	pms_item_codes, _non_pms_item_codes = validate_pms_item_mix(item_codes)
+	return bool(pms_item_codes)
 
 
 @frappe.whitelist()
@@ -1015,6 +1178,12 @@ def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 			""", (item['name'],), as_dict=True)
 			item['stock_qty'] = stock[0]['qty'] if stock and stock[0]['qty'] else 0
 	
+	# Enrich with PMS info for items in the configured PMS group
+	from watch_doctor.pms import _get_pms_item_groups
+	pms_groups = _get_pms_item_groups()
+	for item in items:
+		item['is_pms'] = 1 if item.get('item_group') in pms_groups else 0
+
 	return items
 
 
@@ -1045,19 +1214,30 @@ def get_pos_customers(search: str = "", limit: int = 20):
 
 
 @frappe.whitelist()
-def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash", discount_percent: float = 0, payments_json=None):
+def create_pos_invoice(
+	customer: str = "",
+	items_json: str = "[]",
+	payment_mode: str = "Cash",
+	discount_percent: float = 0,
+	payments_json=None,
+	options_json=None,
+):
 	"""Create a POS Sales Invoice with immediate single or split payment."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
 	payments = _parse_pos_payments(payments_json, payment_mode)
+	options = _parse_pos_options(options_json)
 	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
 	
-	if not customer:
-		frappe.throw("Customer is required")
 	if not items or len(items) == 0:
 		frappe.throw("At least one item is required")
+
+	has_pms_items = _validate_pos_pms_item_mix(items)
+	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
+	require_pms_runtime_configuration()
+	standard_sales_taxes_template = get_standard_sales_taxes_template()
 	
-	company = _get_default_company()
+	company = options.get("company") or _get_default_company()
 	precision = _get_currency_precision(company)
 	
 	invoice = frappe.get_doc({
@@ -1079,6 +1259,27 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 			"qty": item.get("qty", 1),
 			"rate": item.get("rate", 0)
 		})
+
+	profile_settings = apply_pos_profile(
+		invoice,
+		has_pms_items=has_pms_items,
+		customer=customer,
+		pos_profile=options.get("pos_profile") or "",
+		sales_person=options.get("sales_person") or "",
+		commission_rate=options.get("commission_rate") or 0,
+		receipt_format=options.get("receipt_format") or "",
+		naming_series=options.get("naming_series") or "",
+	)
+
+	# PMS invoices must NOT have standard Sales Taxes applied —
+	# the PMS VAT is calculated via margin and posted as GL entries on submit.
+	if has_pms_items:
+		invoice.taxes_and_charges = ""
+		invoice.set("taxes", [])
+	elif standard_sales_taxes_template:
+		invoice.taxes_and_charges = standard_sales_taxes_template
+	else:
+		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before creating POS invoices.")
 	
 	invoice.insert(ignore_permissions=True)
 	_set_invoice_payments(invoice, payments, precision)
@@ -1090,23 +1291,32 @@ def create_pos_invoice(customer: str, items_json: str, payment_mode: str = "Cash
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
-		"customer": customer
+		"customer": invoice.customer,
+		"has_pms_items": has_pms_items,
+		"pms_total_vat": invoice.get("dw_pms_total_vat") or 0,
+		"auto_print": profile_settings.get("auto_print") or 0,
+		"print_format": invoice.get("dw_pos_receipt_format") or "",
+		"print_url": build_pos_print_url(invoice, profile_settings),
 	}
 
 
 @frappe.whitelist()
-def save_pos_draft(customer: str, items_json: str):
+def save_pos_draft(customer: str = "", items_json: str = "[]", options_json=None):
 	"""Save POS cart as draft Sales Invoice (not submitted)."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
+	options = _parse_pos_options(options_json)
 	
-	if not customer:
-		frappe.throw("Customer is required")
 	if not items or len(items) == 0:
 		frappe.throw("At least one item is required")
+
+	has_pms_items = _validate_pos_pms_item_mix(items)
+	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
+	require_pms_runtime_configuration()
+	standard_sales_taxes_template = get_standard_sales_taxes_template()
 	
 	# Get company from settings or first company
-	company = frappe.defaults.get_user_default("Company") or frappe.get_all("Company", limit=1)[0].name
+	company = options.get("company") or _get_default_company()
 	
 	# Create draft Sales Invoice (is_pos but not submitted)
 	invoice = frappe.get_doc({
@@ -1128,6 +1338,25 @@ def save_pos_draft(customer: str, items_json: str):
 			"qty": item.get("qty", 1),
 			"rate": item.get("rate", 0)
 		})
+
+	apply_pos_profile(
+		invoice,
+		has_pms_items=has_pms_items,
+		customer=customer,
+		pos_profile=options.get("pos_profile") or "",
+		sales_person=options.get("sales_person") or "",
+		commission_rate=options.get("commission_rate") or 0,
+		receipt_format=options.get("receipt_format") or "",
+		naming_series=options.get("naming_series") or "",
+	)
+
+	if has_pms_items:
+		invoice.taxes_and_charges = ""
+		invoice.set("taxes", [])
+	elif standard_sales_taxes_template:
+		invoice.taxes_and_charges = standard_sales_taxes_template
+	else:
+		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before saving POS drafts.")
 	
 	invoice.insert(ignore_permissions=True)
 	frappe.db.commit()
@@ -1135,7 +1364,7 @@ def save_pos_draft(customer: str, items_json: str):
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
-		"customer": customer
+		"customer": invoice.customer
 	}
 
 
@@ -1189,7 +1418,12 @@ def load_pos_draft(invoice_name: str):
 		"customer": invoice.customer,
 		"customer_name": invoice.customer_name,
 		"items": items,
-		"grand_total": invoice.grand_total
+		"grand_total": invoice.grand_total,
+		"pos_profile": invoice.get("dw_pos_profile") or "",
+		"sales_person": invoice.get("dw_pos_sales_person") or "",
+		"commission_rate": invoice.get("dw_pos_commission_rate") or 0,
+		"receipt_format": invoice.get("dw_pos_receipt_format") or "",
+		"naming_series": invoice.naming_series or "",
 	}
 
 
@@ -1209,18 +1443,46 @@ def delete_pos_draft(invoice_name: str):
 
 
 @frappe.whitelist()
-def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_percent: float = 0, payments_json=None):
+def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_percent: float = 0, payments_json=None, options_json=None):
 	"""Submit a draft POS invoice with single or split payment."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 	invoice.flags.ignore_permissions = True
 	payments = _parse_pos_payments(payments_json, payment_mode)
+	options = _parse_pos_options(options_json)
 	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
 	
 	if invoice.docstatus != 0:
 		frappe.throw("Invoice is not a draft")
 	
 	invoice.additional_discount_percentage = discount_percent
+
+	# Clear standard taxes for PMS invoices (if any PMS item present)
+	from watch_doctor.pms import validate_pms_item_mix, get_standard_sales_taxes_template, require_pms_runtime_configuration
+	require_pms_runtime_configuration()
+	pms_item_codes, _non_pms_item_codes = validate_pms_item_mix(
+		[item.item_code for item in invoice.items if item.item_code]
+	)
+	has_pms_items = bool(pms_item_codes)
+	profile_settings = apply_pos_profile(
+		invoice,
+		has_pms_items=has_pms_items,
+		customer=invoice.customer,
+		pos_profile=options.get("pos_profile") or invoice.get("dw_pos_profile") or "",
+		sales_person=options.get("sales_person") or invoice.get("dw_pos_sales_person") or "",
+		commission_rate=options.get("commission_rate") or invoice.get("dw_pos_commission_rate") or 0,
+		receipt_format=options.get("receipt_format") or invoice.get("dw_pos_receipt_format") or "",
+		naming_series=options.get("naming_series") or invoice.naming_series or "",
+	)
+	standard_sales_taxes_template = get_standard_sales_taxes_template()
+	if has_pms_items:
+		invoice.taxes_and_charges = ""
+		invoice.set("taxes", [])
+	elif standard_sales_taxes_template:
+		invoice.taxes_and_charges = standard_sales_taxes_template
+	else:
+		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before submitting POS drafts.")
+
 	invoice.save(ignore_permissions=True)
 	precision = _get_currency_precision(invoice.company)
 	_set_invoice_payments(invoice, payments, precision)
@@ -1231,7 +1493,12 @@ def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_per
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
-		"customer": invoice.customer
+		"customer": invoice.customer,
+		"has_pms_items": has_pms_items,
+		"pms_total_vat": invoice.get("dw_pms_total_vat") or 0,
+		"auto_print": profile_settings.get("auto_print") or 0,
+		"print_format": invoice.get("dw_pos_receipt_format") or "",
+		"print_url": build_pos_print_url(invoice, profile_settings),
 	}
 
 
@@ -1794,6 +2061,29 @@ def get_daily_report(report_date=None):
 			"source": "Purchase Invoice",
 		})
 
+	# ---- PMS VAT SECTION ----
+	# Collect PMS (Profit Margin Scheme) VAT data for the report date
+	pms_vat_rows = frappe.db.sql("""
+		SELECT
+			si.name AS invoice,
+			si.customer_name,
+			sii.item_code,
+			sii.item_name,
+			sii.amount AS selling_price,
+			sii.dw_pms_purchase_cost AS purchase_cost,
+			sii.dw_pms_margin AS margin,
+			sii.dw_pms_vat AS vat_amount
+		FROM `tabSales Invoice Item` sii
+		INNER JOIN `tabSales Invoice` si ON sii.parent = si.name
+		WHERE si.docstatus = 1
+		  AND si.dw_has_pms_items = 1
+		  AND sii.dw_is_pms_item = 1
+		  AND si.posting_date = %s
+		ORDER BY si.name
+	""", (report_date,), as_dict=True)
+	pms_total_vat = sum(float(r.get("vat_amount") or 0) for r in pms_vat_rows)
+	pms_total_sales = sum(float(r.get("selling_price") or 0) for r in pms_vat_rows)
+
 	return {
 		"date": report_date,
 		"repair": {
@@ -1820,6 +2110,12 @@ def get_daily_report(report_date=None):
 			"items_sold": items_sold,
 			"category_breakdown": category_breakdown,
 			"cashier_breakdown": cashier_breakdown,
+		},
+		"pms": {
+			"total_vat": pms_total_vat,
+			"total_sales": pms_total_sales,
+			"item_count": len(pms_vat_rows),
+			"rows": pms_vat_rows if is_executive else [],
 		},
 		"financial": {
 			"total_expenses": total_expenses,

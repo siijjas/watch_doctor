@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as apiService from '../services/apiService';
-import type { POSItem, POSCustomer, CartItem, POSDraft, POSPaymentSplit } from '../services/apiService';
+import type { POSItem, POSCustomer, CartItem, POSDraft, POSPaymentSplit, POSRuntimeConfig, POSOptions } from '../services/apiService';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { useToast } from './ui/Toast';
@@ -26,6 +26,12 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     const [selectedCustomer, setSelectedCustomer] = useState<POSCustomer | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [paymentModes, setPaymentModes] = useState<any[]>([]);
+    const [runtimeConfig, setRuntimeConfig] = useState<POSRuntimeConfig | null>(null);
+    const [selectedPosProfile, setSelectedPosProfile] = useState('');
+    const [selectedSalesPerson, setSelectedSalesPerson] = useState('');
+    const [commissionRate, setCommissionRate] = useState(0);
+    const [selectedReceiptFormat, setSelectedReceiptFormat] = useState('');
+    const [selectedNamingSeries, setSelectedNamingSeries] = useState('');
     const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
     const [editingItemCode, setEditingItemCode] = useState<string | null>(null);
     const [editingPrice, setEditingPrice] = useState('');
@@ -52,11 +58,20 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
 
     // Load initial data
     useEffect(() => {
+        loadRuntimeConfig();
         loadItems();
         loadCustomers();
         loadPaymentModes();
         loadDrafts();
     }, []);
+
+    useEffect(() => {
+        if (selectedCustomer || !runtimeConfig?.default_customer) return;
+        setSelectedCustomer({
+            name: runtimeConfig.default_customer,
+            customer_name: runtimeConfig.default_customer_name || runtimeConfig.default_customer,
+        });
+    }, [runtimeConfig, selectedCustomer]);
 
     useEffect(() => {
         if (!selectedCustomer) return;
@@ -96,6 +111,20 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             }
         } catch (error) {
             console.error('Failed to load customers:', error);
+        }
+    };
+
+    const loadRuntimeConfig = async () => {
+        try {
+            const data = await apiService.getPosRuntimeConfig();
+            setRuntimeConfig(data);
+            setSelectedPosProfile(data.pos_profile || '');
+            setSelectedSalesPerson(data.default_sales_person || '');
+            setCommissionRate(data.default_commission_rate || 0);
+            setSelectedReceiptFormat(data.default_receipt_format || '');
+            setSelectedNamingSeries(data.allowed_naming_series?.[0] || '');
+        } catch (error) {
+            console.error('Failed to load POS runtime config:', error);
         }
     };
 
@@ -262,9 +291,21 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         setDiscountType('percent');
     };
 
+    const getEffectiveCustomer = () => {
+        return selectedCustomer?.name || runtimeConfig?.default_customer || '';
+    };
+
+    const getPosOptions = (): POSOptions => ({
+        pos_profile: selectedPosProfile,
+        sales_person: selectedSalesPerson,
+        commission_rate: commissionRate,
+        receipt_format: selectedReceiptFormat,
+        naming_series: selectedNamingSeries,
+    });
+
     // Draft functions
     const handleSaveDraft = async () => {
-        if (!selectedCustomer) {
+        if (!getEffectiveCustomer()) {
             showToast('Please select a customer', 'error');
             return;
         }
@@ -274,7 +315,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         }
 
         try {
-            const result = await apiService.savePosDraft(selectedCustomer.name, cart);
+            const result = await apiService.savePosDraft(getEffectiveCustomer(), cart, getPosOptions());
             showToast(`Order held as ${result.invoice_name}`, 'success');
             clearCart();
             loadDrafts();
@@ -289,6 +330,11 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             setCart(data.items);
             setSelectedCustomer({ name: data.customer, customer_name: data.customer_name });
             setCurrentDraftName(data.invoice_name);
+            setSelectedPosProfile(data.pos_profile || runtimeConfig?.pos_profile || '');
+            setSelectedSalesPerson(data.sales_person || runtimeConfig?.default_sales_person || '');
+            setCommissionRate(data.commission_rate || runtimeConfig?.default_commission_rate || 0);
+            setSelectedReceiptFormat(data.receipt_format || runtimeConfig?.default_receipt_format || '');
+            setSelectedNamingSeries(data.naming_series || runtimeConfig?.allowed_naming_series?.[0] || '');
             setShowDrafts(false);
         } catch (error: any) {
             showToast(`Failed to load draft: ${error.message}`, 'error');
@@ -376,7 +422,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     };
 
     const handleOpenPayment = () => {
-        if (!selectedCustomer) {
+        if (!getEffectiveCustomer()) {
             showToast('Please select a customer', 'error');
             return;
         }
@@ -416,14 +462,18 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         try {
             let result;
             if (currentDraftName) {
-                result = await apiService.submitPosDraft(currentDraftName, normalizedPayments, effectiveDiscountPercent);
+                result = await apiService.submitPosDraft(currentDraftName, normalizedPayments, effectiveDiscountPercent, getPosOptions());
             } else {
                 result = await apiService.createPosInvoice(
-                    selectedCustomer!.name,
+                    getEffectiveCustomer(),
                     cart,
                     normalizedPayments,
-                    effectiveDiscountPercent
+                    effectiveDiscountPercent,
+                    getPosOptions()
                 );
+            }
+            if (result.auto_print && result.print_url) {
+                window.open(result.print_url, '_blank', 'noopener,noreferrer');
             }
             showToast(`Invoice ${result.invoice_name} created! Total: ${formatCurrency(result.grand_total)}`, 'success');
             clearCart();
@@ -658,14 +708,14 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             <Button
                                 variant="outline"
                                 onClick={handleSaveDraft}
-                                disabled={cart.length === 0 || !selectedCustomer}
+                                disabled={cart.length === 0 || !getEffectiveCustomer()}
                                 className="flex-1 py-3"
                             >
                                 Hold
                             </Button>
                             <Button
                                 onClick={handleOpenPayment}
-                                disabled={cart.length === 0 || !selectedCustomer}
+                                disabled={cart.length === 0 || !getEffectiveCustomer()}
                                 className="flex-1 py-3"
                                 style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
                             >
@@ -780,6 +830,21 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                         />
                                     )}
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="text-sm text-gray-600 block mb-2">Sales Person</label>
+                                <select
+                                    value={selectedSalesPerson}
+                                    onChange={(e) => setSelectedSalesPerson(e.target.value)}
+                                    className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                    style={{ border: '1px solid #E8E8E8' }}
+                                >
+                                    <option value="">Select sales person…</option>
+                                    {(runtimeConfig?.sales_persons || []).map(person => (
+                                        <option key={person} value={person}>{person}</option>
+                                    ))}
+                                </select>
                             </div>
 
                             {/* Summary */}

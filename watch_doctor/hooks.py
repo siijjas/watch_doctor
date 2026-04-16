@@ -45,6 +45,7 @@ app_license = "mit"
 # include js in doctype views
 doctype_js = {
 	"Customer": "public/js/customer.js",
+	"Sales Invoice": "public/js/sales_invoice_pms.js",
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
@@ -139,13 +140,13 @@ has_permission = {
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Sales Invoice": {
+		"validate": "watch_doctor.pms.si_validate",
+		"on_submit": "watch_doctor.pms.si_on_submit",
+		"on_cancel": "watch_doctor.pms.si_on_cancel",
+	}
+}
 
 # Scheduled Tasks
 # ---------------
@@ -253,6 +254,8 @@ has_permission = {
 after_migrate = [
     "watch_doctor.patches.reload_dw_doctypes.execute",
     "watch_doctor.setup_roles.execute",
+    "watch_doctor.setup_pms.execute",
+    "watch_doctor.setup_pos_enhancements.execute",
 ]
 
 
@@ -268,6 +271,6 @@ fixtures = [
     },
     {
         "doctype": "Print Format",
-        "filters": [["name", "=", "DW RO Bag Label"]],
+        "filters": [["name", "in", ["DW RO Bag Label", "DW PMS Tax Invoice", "DW POS Retail Receipt"]]],
     },
 ]

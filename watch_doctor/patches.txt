@@ -1,2 +1,4 @@
 watch_doctor.patches.update_dw_ro_bag_label
 watch_doctor.patches.seed_whatsapp_templates
+watch_doctor.patches.migrate_whatsapp_placeholders
+watch_doctor.patches.setup_pms_fields

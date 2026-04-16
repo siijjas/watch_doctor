@@ -6,6 +6,25 @@ import random
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 10  # 10s, 20s, 40s
 
+# Ordered list of (placeholder_token, human_label).
+# Position in this list determines the {{N}} number shown to admins.
+PLACEHOLDER_DEFINITIONS = [
+    ("{{1}}", "Customer Name"),
+    ("{{2}}", "Order ID"),
+    ("{{3}}", "Current Status"),
+    ("{{4}}", "Shop Name"),
+    ("{{5}}", "Promised Date"),
+]
+
+# Sample values used for live preview (frontend mirrors these)
+PLACEHOLDER_SAMPLES = {
+    "{{1}}": "Abdullah Al-Rashid",
+    "{{2}}": "RO-2024-0042",
+    "{{3}}": "Ready for Collection",
+    "{{4}}": "Watch Doctor",
+    "{{5}}": "20 Apr 2026",
+}
+
 
 def should_retry(status_code: int) -> bool:
 	return status_code in (429, 500, 502, 503, 504)
@@ -68,8 +87,11 @@ def normalize_phone(mobile_no: str) -> str:
 
 def build_message(order_name: str, notification_key: str) -> dict:
 	"""
-	Resolve template and substitute placeholders.
+	Resolve template and substitute {{N}} placeholders with actual order data.
 	Returns: {"to": "...", "body": "...", "customer_name": "...", "phone_raw": "..."}
+
+	Placeholder mapping (mirrors PLACEHOLDER_DEFINITIONS order):
+	  {{1}} Customer Name  {{2}} Order ID  {{3}} Status  {{4}} Shop Name  {{5}} Promised Date
 	"""
 	order = frappe.get_doc("DW Repair Order", order_name)
 	customer = frappe.get_doc("Customer", order.customer)
@@ -90,13 +112,17 @@ def build_message(order_name: str, notification_key: str) -> dict:
 		else ""
 	)
 
-	body = template.format(
-		customer_name=customer.customer_name,
-		ref=ref,
-		status=order.status,
-		shop_name=shop_name,
-		promised_date=promised,
-	)
+	values = {
+		"{{1}}": customer.customer_name,
+		"{{2}}": str(ref),
+		"{{3}}": order.status,
+		"{{4}}": shop_name,
+		"{{5}}": promised,
+	}
+
+	body = template
+	for token, value in values.items():
+		body = body.replace(token, value)
 
 	phone = normalize_phone(customer.mobile_no or "")
 

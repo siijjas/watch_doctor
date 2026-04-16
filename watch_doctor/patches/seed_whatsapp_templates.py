@@ -2,7 +2,7 @@ import frappe
 
 
 def execute():
-	"""Seed default WhatsApp notification templates."""
+	"""Seed default WhatsApp notification templates using {{N}} numbered placeholders."""
 	frappe.reload_doc("repair_management", "doctype", "dw_whatsapp_template")
 	frappe.reload_doc("repair_management", "doctype", "dw_whatsapp_log")
 
@@ -11,31 +11,31 @@ def execute():
 			"notification_key": "order_received",
 			"label": "Order Received",
 			"is_active": 1,
-			"message_body": "Dear {customer_name}, your repair order #{ref} has been received. We'll update you as work begins. Thank you for choosing {shop_name}.",
+			"message_body": "Dear {{1}}, your repair order #{{2}} has been received. We'll update you as work begins. Thank you for choosing {{4}}.",
 		},
 		{
 			"notification_key": "in_progress",
 			"label": "In Progress",
 			"is_active": 1,
-			"message_body": "Dear {customer_name}, your repair order #{ref} is now being worked on by our technicians. We'll notify you when it's ready.",
+			"message_body": "Dear {{1}}, your repair order #{{2}} is now being worked on by our technicians. We'll notify you when it's ready.",
 		},
 		{
 			"notification_key": "awaiting_parts",
 			"label": "Awaiting Parts",
 			"is_active": 1,
-			"message_body": "Dear {customer_name}, your repair order #{ref} requires parts that are being sourced. We'll update you once work resumes.",
+			"message_body": "Dear {{1}}, your repair order #{{2}} requires parts that are being sourced. We'll update you once work resumes.",
 		},
 		{
 			"notification_key": "ready_for_collection",
 			"label": "Ready for Collection",
 			"is_active": 1,
-			"message_body": "Dear {customer_name}, great news! Your repair order #{ref} is complete and ready for collection. Please visit us at your convenience.",
+			"message_body": "Dear {{1}}, great news! Your repair order #{{2}} is complete and ready for collection. Please visit us at your convenience.",
 		},
 		{
 			"notification_key": "delivered",
 			"label": "Delivered",
 			"is_active": 1,
-			"message_body": "Dear {customer_name}, your repair order #{ref} has been delivered. Thank you for your business! We'd love to see you again at {shop_name}.",
+			"message_body": "Dear {{1}}, your repair order #{{2}} has been delivered. Thank you for your business! We'd love to see you again at {{4}}.",
 		},
 	]
 

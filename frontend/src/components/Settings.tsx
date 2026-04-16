@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig } from '../services/apiService';
-import type { WhatsAppTemplate, WhatsAppConfig } from '../services/apiService';
+import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosRuntimeConfig, getPosCustomers } from '../services/apiService';
+import type { WhatsAppTemplate, WhatsAppConfig, WhatsAppPlaceholder, PmsConfiguration, PmsConfigurationOptions, POSRuntimeConfig } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
@@ -13,6 +13,8 @@ import { ConfirmDialog } from './ui/ConfirmDialog';
 // ─────────────────────────────────────────────────────────────
 type SettingsTab =
     | 'general'
+    | 'pos-config'
+    | 'pms-vat'
     | 'payment-modes'
     | 'technicians'
     | 'country-codes'
@@ -71,6 +73,21 @@ interface WatchModel {
     brand: string;
     model_name: string;
     description: string;
+}
+
+interface PosProfileConfig {
+    name: string;
+    company?: string;
+    warehouse?: string;
+    dw_default_customer?: string;
+    dw_default_receipt_format?: string;
+    dw_enable_auto_print?: number;
+    dw_default_sales_person?: string;
+    dw_default_commission_rate?: number;
+    dw_allowed_naming_series?: string;
+    modified?: string;
+    creation?: string;
+    owner?: string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -327,6 +344,300 @@ const PaymentModesSection: React.FC = () => {
                 confirmText="Delete"
                 variant="danger"
             />
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────
+// Section: POS Configuration
+// ─────────────────────────────────────────────────────────────
+const PosConfigurationSection: React.FC = () => {
+    const [data, setData] = useState<PosProfileConfig[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<PosProfileConfig | null>(null);
+    const [form, setForm] = useState<PosProfileConfig>({ name: '' });
+    const [isSaving, setIsSaving] = useState(false);
+    const [customerOptions, setCustomerOptions] = useState<{ name: string; customer_name?: string }[]>([]);
+    const [customerSearch, setCustomerSearch] = useState('');
+    const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
+    const [printFormatOptions, setPrintFormatOptions] = useState<string[]>([]);
+    const [salesPersonOptions, setSalesPersonOptions] = useState<string[]>([]);
+    const [availableNamingSeries, setAvailableNamingSeries] = useState<string[]>([]);
+
+    const loadCustomerOptions = useCallback(async (search: string = '', selectedCustomer: string = '') => {
+        setIsLoadingCustomers(true);
+        try {
+            const customers = await getPosCustomers(search);
+            let nextCustomers = customers;
+
+            if (selectedCustomer && !customers.some(customer => customer.name === selectedCustomer)) {
+                try {
+                    const fullCustomer = await getDoc('Customer', selectedCustomer);
+                    nextCustomers = [{
+                        name: fullCustomer.name,
+                        customer_name: fullCustomer.customer_name || fullCustomer.name,
+                    }, ...customers];
+                } catch {
+                    nextCustomers = customers;
+                }
+            }
+
+            setCustomerOptions(nextCustomers);
+        } catch (e) {
+            console.error(e);
+            setCustomerOptions([]);
+        }
+        setIsLoadingCustomers(false);
+    }, []);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const [profiles, formats, salesPersons] = await Promise.all([
+                getList('POS Profile', ['name', 'company', 'warehouse', 'dw_default_customer', 'dw_default_receipt_format', 'dw_enable_auto_print', 'dw_default_sales_person', 'dw_default_commission_rate', 'dw_allowed_naming_series'], [], 200),
+                getList('Print Format', ['name'], [['doc_type', '=', 'Sales Invoice'], ['disabled', '=', 0]], 200),
+                getList('Sales Person', ['name'], [['is_group', '=', 0]], 200),
+            ]);
+
+            setData(profiles as PosProfileConfig[]);
+            setPrintFormatOptions(formats.map((row: any) => row.name));
+            setSalesPersonOptions(salesPersons.map((row: any) => row.name));
+        } catch (e) {
+            console.error(e);
+            setData([]);
+        }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    useEffect(() => {
+        if (!isModalOpen) return;
+        const timer = window.setTimeout(() => {
+            loadCustomerOptions(customerSearch, form.dw_default_customer || '');
+        }, 250);
+        return () => window.clearTimeout(timer);
+    }, [isModalOpen, customerSearch, form.dw_default_customer, loadCustomerOptions]);
+
+    const openEdit = async (row: PosProfileConfig) => {
+        try {
+            const [full, runtime] = await Promise.all([
+                getDoc('POS Profile', row.name),
+                getPosRuntimeConfig(row.company || '', row.name),
+            ]);
+
+            setEditRow(full);
+            setForm({
+                name: full.name,
+                company: full.company,
+                warehouse: full.warehouse,
+                dw_default_customer: full.dw_default_customer || '',
+                dw_default_receipt_format: full.dw_default_receipt_format || '',
+                dw_enable_auto_print: full.dw_enable_auto_print || 0,
+                dw_default_sales_person: full.dw_default_sales_person || '',
+                dw_default_commission_rate: full.dw_default_commission_rate || 0,
+                dw_allowed_naming_series: full.dw_allowed_naming_series || '',
+                modified: full.modified,
+                creation: full.creation,
+                owner: full.owner,
+            });
+            setAvailableNamingSeries((runtime as POSRuntimeConfig & { available_naming_series?: string[] }).available_naming_series || runtime.allowed_naming_series || []);
+            setCustomerSearch('');
+            await loadCustomerOptions('', full.dw_default_customer || '');
+        } catch (e) {
+            console.error(e);
+            setEditRow(row);
+            setForm({ ...row });
+            setAvailableNamingSeries([]);
+            setCustomerSearch('');
+            await loadCustomerOptions('', row.dw_default_customer || '');
+        }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editRow) return;
+        setIsSaving(true);
+        try {
+            await saveDoc({
+                ...editRow,
+                doctype: 'POS Profile',
+                dw_default_customer: form.dw_default_customer || '',
+                dw_default_receipt_format: form.dw_default_receipt_format || '',
+                dw_enable_auto_print: form.dw_enable_auto_print ? 1 : 0,
+                dw_default_sales_person: form.dw_default_sales_person || '',
+                dw_default_commission_rate: Number(form.dw_default_commission_rate) || 0,
+                dw_allowed_naming_series: form.dw_allowed_naming_series || '',
+            });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) {
+            console.error(e);
+            alert('Error saving: ' + e);
+        }
+        setIsSaving(false);
+    };
+
+    const columns: Column<PosProfileConfig>[] = [
+        { key: 'name', label: 'POS Profile' },
+        { key: 'company', label: 'Company' },
+        { key: 'dw_default_customer', label: 'Default Customer' },
+        { key: 'dw_default_receipt_format', label: 'Receipt Format', render: r => r.dw_default_receipt_format || 'DW POS Retail Receipt' },
+        { key: 'dw_default_sales_person', label: 'Sales Person', render: r => r.dw_default_sales_person || '—' },
+        { key: 'dw_default_commission_rate', label: 'Commission %', render: r => Number(r.dw_default_commission_rate || 0).toFixed(2) },
+        { key: 'dw_enable_auto_print', label: 'Auto Print', render: r => <ActiveBadge active={!!r.dw_enable_auto_print} /> },
+    ];
+
+    if (isLoading) return <LoadingSpinner />;
+
+    return (
+        <div>
+            <div className="flex items-start justify-between mb-5">
+                <div>
+                    <h3 className="text-lg font-semibold text-gray-800">POS Configuration</h3>
+                    <p className="text-sm text-gray-500 mt-0.5">Configure default customer, receipt format, auto-print, sales commission, and allowed invoice series on each POS Profile.</p>
+                </div>
+            </div>
+
+            <div className="mb-5 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                <p className="text-sm text-emerald-800 font-medium">PMS and normal POS settings stay separate.</p>
+                <p className="text-sm text-emerald-700 mt-1">PMS items will use the same configured POS receipt format; the receipt template itself handles PMS disclaimer injection and tax-row hiding without overriding your normal POS receipt configuration.</p>
+            </div>
+
+            {data.length === 0 ? (
+                <EmptyState message="No POS Profiles found. Create a POS Profile in ERPNext, then return here to configure Watch Doctor POS defaults." />
+            ) : (
+                <div className="overflow-x-auto rounded-xl border border-gray-100 shadow-sm">
+                    <table className="min-w-full divide-y divide-gray-100">
+                        <thead>
+                            <tr className="bg-gray-50">
+                                {columns.map(c => (
+                                    <th key={c.key} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                        {c.label}
+                                    </th>
+                                ))}
+                                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-100">
+                            {data.map(row => (
+                                <tr key={row.name} className="hover:bg-gray-50 transition-colors">
+                                    {columns.map(c => (
+                                        <td key={c.key} className="px-4 py-3 text-sm text-gray-700">
+                                            {c.render ? c.render(row) : String((row as any)[c.key] ?? '')}
+                                        </td>
+                                    ))}
+                                    <td className="px-4 py-3 text-right">
+                                        <button
+                                            onClick={() => openEdit(row)}
+                                            className="text-purple-600 hover:text-purple-800 text-sm font-medium transition-colors"
+                                        >
+                                            Edit
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? `Edit POS Profile — ${editRow.name}` : 'Edit POS Profile'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Input label="POS Profile" value={form.name || ''} disabled onChange={() => {}} />
+                        <Input label="Company" value={form.company || ''} disabled onChange={() => {}} />
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Default Customer</label>
+                        <Input
+                            value={customerSearch}
+                            onChange={e => setCustomerSearch(e.target.value)}
+                            placeholder="Search customer by name or code…"
+                        />
+                        <div className="mt-2" />
+                        <select
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                            value={form.dw_default_customer || ''}
+                            onChange={e => setForm(f => ({ ...f, dw_default_customer: e.target.value }))}
+                        >
+                            <option value="">None</option>
+                            {customerOptions.map(customer => (
+                                <option key={customer.name} value={customer.name}>{customer.customer_name || customer.name}</option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1">
+                            {isLoadingCustomers ? 'Searching customers…' : 'Type above to search and then pick the default customer.'}
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Format</label>
+                        <select
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                            value={form.dw_default_receipt_format || ''}
+                            onChange={e => setForm(f => ({ ...f, dw_default_receipt_format: e.target.value }))}
+                        >
+                            <option value="">DW POS Retail Receipt</option>
+                            {printFormatOptions.map(format => (
+                                <option key={format} value={format}>{format}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="w-4 h-4 text-purple-600 rounded"
+                            checked={!!form.dw_enable_auto_print}
+                            onChange={e => setForm(f => ({ ...f, dw_enable_auto_print: e.target.checked ? 1 : 0 }))}
+                        />
+                        <span className="text-sm font-medium text-gray-700">Enable Auto Print</span>
+                    </label>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Default Sales Person</label>
+                        <select
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                            value={form.dw_default_sales_person || ''}
+                            onChange={e => setForm(f => ({ ...f, dw_default_sales_person: e.target.value }))}
+                        >
+                            <option value="">None</option>
+                            {salesPersonOptions.map(person => (
+                                <option key={person} value={person}>{person}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <Input
+                        label="Commission Rate"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={form.dw_default_commission_rate || 0}
+                        onChange={e => setForm(f => ({ ...f, dw_default_commission_rate: parseFloat(e.target.value) || 0 }))}
+                    />
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Allowed Invoice Series</label>
+                        <textarea
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
+                            rows={4}
+                            value={form.dw_allowed_naming_series || ''}
+                            onChange={e => setForm(f => ({ ...f, dw_allowed_naming_series: e.target.value }))}
+                            placeholder="One Sales Invoice naming series per line"
+                        />
+                        {availableNamingSeries.length > 0 && (
+                            <p className="text-xs text-gray-500 mt-2">Available series: {availableNamingSeries.join(', ')}</p>
+                        )}
+                    </div>
+
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} label="Save POS Configuration" />
+                </form>
+            </Modal>
         </div>
     );
 };
@@ -1305,29 +1616,222 @@ const GeneralSection: React.FC = () => {
     );
 };
 
+const PmsVatSection: React.FC = () => {
+    const [config, setConfig] = useState<PmsConfiguration | null>(null);
+    const [options, setOptions] = useState<PmsConfigurationOptions | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveMsg, setSaveMsg] = useState('');
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        setSaveMsg('');
+        try {
+            const data = await getPmsConfiguration();
+            setConfig(data.config);
+            setOptions(data.options);
+        } catch (e: any) {
+            setSaveMsg(e?.message || 'Failed to load PMS settings.');
+        }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const updateConfig = <K extends keyof PmsConfiguration>(field: K, value: PmsConfiguration[K]) => {
+        setConfig(prev => prev ? { ...prev, [field]: value } : prev);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!config) return;
+        setIsSaving(true);
+        setSaveMsg('');
+        try {
+            const result = await savePmsConfiguration(config);
+            setConfig(result.config);
+            setSaveMsg('PMS/VAT settings saved successfully.');
+        } catch (e: any) {
+            setSaveMsg(e?.message || 'Failed to save PMS/VAT settings.');
+        }
+        setIsSaving(false);
+    };
+
+    if (isLoading) return <LoadingSpinner />;
+    if (!config || !options) return <EmptyState message={saveMsg || 'Unable to load PMS/VAT settings.'} />;
+
+    return (
+        <form onSubmit={handleSave} className="space-y-8">
+            <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-1">PMS & VAT Configuration</h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <label className="flex items-center gap-3 cursor-pointer select-none bg-gray-50 border border-gray-100 rounded-xl p-4 md:col-span-2">
+                    <input
+                        type="checkbox"
+                        className="w-4 h-4 text-purple-600 rounded"
+                        checked={!!config.pms_enabled}
+                        onChange={e => updateConfig('pms_enabled', e.target.checked ? 1 : 0)}
+                    />
+                    <div>
+                        <span className="text-sm font-medium text-gray-800">Enable Profit Margin Scheme</span>
+                        <p className="text-xs text-gray-500 mt-0.5">When enabled, every PMS/VAT field below must be explicitly configured.</p>
+                    </div>
+                </label>
+
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">PMS Item Group</label>
+                    <select
+                        className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                        value={config.pms_item_group}
+                        onChange={e => updateConfig('pms_item_group', e.target.value)}
+                    >
+                        <option value="">Select item group…</option>
+                        {options.item_groups.map(group => <option key={group} value={group}>{group}</option>)}
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">PMS VAT Account</label>
+                    <select
+                        className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                        value={config.pms_vat_account}
+                        onChange={e => updateConfig('pms_vat_account', e.target.value)}
+                    >
+                        <option value="">Select tax account…</option>
+                        {options.tax_accounts.map(account => <option key={account} value={account}>{account}</option>)}
+                    </select>
+                </div>
+
+                <Input
+                    label="PMS VAT Divisor"
+                    type="number"
+                    min={0.000001}
+                    step="0.000001"
+                    value={config.pms_vat_divisor}
+                    onChange={e => updateConfig('pms_vat_divisor', Number(e.target.value) || 0)}
+                />
+
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Standard Sales Taxes Template</label>
+                    <select
+                        className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                        value={config.standard_sales_taxes_template}
+                        onChange={e => updateConfig('standard_sales_taxes_template', e.target.value)}
+                    >
+                        <option value="">Use ERPNext default / none</option>
+                        {options.sales_taxes_templates.map(template => <option key={template} value={template}>{template}</option>)}
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Standard Item Tax Template</label>
+                    <select
+                        className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                        value={config.standard_item_tax_template}
+                        onChange={e => updateConfig('standard_item_tax_template', e.target.value)}
+                    >
+                        <option value="">None</option>
+                        {options.item_tax_templates.map(template => <option key={template} value={template}>{template}</option>)}
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">PMS Print Format</label>
+                    <select
+                        className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                        value={config.pms_print_format}
+                        onChange={e => updateConfig('pms_print_format', e.target.value)}
+                    >
+                        <option value="">Select print format…</option>
+                        {options.print_formats.map(format => <option key={format} value={format}>{format}</option>)}
+                    </select>
+                </div>
+
+                <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">PMS Disclaimer</label>
+                    <textarea
+                        className="w-full min-h-[96px] p-3 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white text-sm"
+                        value={config.pms_disclaimer}
+                        onChange={e => updateConfig('pms_disclaimer', e.target.value)}
+                        placeholder="Enter the customer-facing PMS disclaimer"
+                    />
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[
+                    { label: 'PMS Item Group', value: config.pms_item_group || 'Not set' },
+                    { label: 'PMS VAT Account', value: config.pms_vat_account || 'Not set' },
+                    { label: 'PMS Print Format', value: config.pms_print_format || 'Not set' },
+                ].map(item => (
+                    <div key={item.label} className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">{item.label}</p>
+                        <p className="text-sm font-semibold text-gray-800 break-words">{item.value}</p>
+                    </div>
+                ))}
+            </div>
+
+            <div className="flex items-center justify-between border-t pt-4">
+                <p className={`text-sm ${saveMsg.toLowerCase().includes('fail') ? 'text-red-500' : 'text-green-600'}`}>
+                    {saveMsg || 'Save changes to apply the configured PMS/VAT behavior.'}
+                </p>
+                <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2 rounded-lg transition-colors flex items-center gap-2"
+                >
+                    {isSaving ? <><Spinner size="sm" /> Saving…</> : 'Save PMS/VAT Settings'}
+                </button>
+            </div>
+        </form>
+    );
+};
+
 // ─────────────────────────────────────────────────────────────
 // Tab navigation config
 // ─────────────────────────────────────────────────────────────
 // WhatsApp Templates Section
 // ─────────────────────────────────────────────────────────────
+
+// These must mirror PLACEHOLDER_DEFINITIONS / PLACEHOLDER_SAMPLES in service.py.
+// Used for client-side live preview without a round-trip.
+const DEFAULT_PLACEHOLDERS: WhatsAppPlaceholder[] = [
+    { token: '{{1}}', label: 'Customer Name',    sample: 'Abdullah Al-Rashid' },
+    { token: '{{2}}', label: 'Order ID',         sample: 'RO-2024-0042' },
+    { token: '{{3}}', label: 'Current Status',   sample: 'Ready for Collection' },
+    { token: '{{4}}', label: 'Shop Name',        sample: 'Watch Doctor' },
+    { token: '{{5}}', label: 'Promised Date',    sample: '20 Apr 2026' },
+];
+
+function applyPreview(body: string, placeholders: WhatsAppPlaceholder[]): string {
+    return placeholders.reduce((acc, p) => acc.split(p.token).join(p.sample), body);
+}
+
 const WhatsAppSection: React.FC = () => {
     const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
     const [config, setConfig] = useState<WhatsAppConfig | null>(null);
+    const [placeholders, setPlaceholders] = useState<WhatsAppPlaceholder[]>(DEFAULT_PLACEHOLDERS);
     const [isLoading, setIsLoading] = useState(true);
     const [editingKey, setEditingKey] = useState<string | null>(null);
     const [editBody, setEditBody] = useState('');
     const [editActive, setEditActive] = useState(1);
     const [isSaving, setIsSaving] = useState(false);
+    const [showPreview, setShowPreview] = useState(false);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     const load = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [tpls, cfg] = await Promise.all([
+            const [tpls, cfg, phDefs] = await Promise.allSettled([
                 getWhatsAppTemplates(),
                 getWhatsAppConfig(),
+                getTemplatePlaceholders(),
             ]);
-            setTemplates(tpls);
-            setConfig(cfg);
+            if (tpls.status === 'fulfilled') setTemplates(tpls.value);
+            if (cfg.status === 'fulfilled') setConfig(cfg.value);
+            if (phDefs.status === 'fulfilled' && phDefs.value.length > 0) setPlaceholders(phDefs.value);
         } catch {
             // feature may not be configured yet
         }
@@ -1340,6 +1844,7 @@ const WhatsAppSection: React.FC = () => {
         setEditingKey(t.notification_key);
         setEditBody(t.message_body);
         setEditActive(t.is_active);
+        setShowPreview(false);
     };
 
     const handleSave = async () => {
@@ -1355,6 +1860,23 @@ const WhatsAppSection: React.FC = () => {
         setIsSaving(false);
     };
 
+    const handleInsertPlaceholder = (token: string) => {
+        const el = textareaRef.current;
+        if (!el) {
+            setEditBody(prev => prev + token);
+            return;
+        }
+        const start = el.selectionStart ?? editBody.length;
+        const end = el.selectionEnd ?? editBody.length;
+        const updated = editBody.slice(0, start) + token + editBody.slice(end);
+        setEditBody(updated);
+        // Restore cursor after inserted token
+        requestAnimationFrame(() => {
+            el.selectionStart = el.selectionEnd = start + token.length;
+            el.focus();
+        });
+    };
+
     if (isLoading) return <LoadingSpinner />;
 
     return (
@@ -1367,7 +1889,7 @@ const WhatsAppSection: React.FC = () => {
             </div>
 
             {/* Status Banner */}
-            <div className={`mb-6 p-4 rounded-xl border ${config?.enabled ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+            <div className={`mb-5 p-4 rounded-xl border ${config?.enabled ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
                 <div className="flex items-center gap-3">
                     <span className="text-2xl">{config?.enabled ? '✅' : '⚠️'}</span>
                     <div>
@@ -1383,18 +1905,32 @@ const WhatsAppSection: React.FC = () => {
                 </div>
             </div>
 
+            {/* Placeholder Legend */}
+            <div className="mb-5 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">Available Placeholders</p>
+                <div className="flex flex-wrap gap-2">
+                    {placeholders.map(p => (
+                        <span key={p.token} className="inline-flex items-center gap-1.5 bg-white border border-blue-200 rounded-lg px-2.5 py-1 text-xs">
+                            <code className="font-mono font-semibold text-purple-700">{p.token}</code>
+                            <span className="text-gray-500">= {p.label}</span>
+                        </span>
+                    ))}
+                </div>
+            </div>
+
             {/* Templates */}
             <div className="space-y-3">
                 {templates.map(t => (
                     <div key={t.notification_key} className="border rounded-xl p-4" style={{ borderColor: '#F0EEEB' }}>
                         {editingKey === t.notification_key ? (
                             <div>
+                                {/* Edit header */}
                                 <div className="flex items-center justify-between mb-3">
                                     <div>
                                         <span className="font-semibold text-gray-900">{t.label}</span>
                                         <span className="text-xs text-gray-400 ml-2">({t.notification_key})</span>
                                     </div>
-                                    <label className="flex items-center gap-2 text-sm">
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                                         <input
                                             type="checkbox"
                                             checked={editActive === 1}
@@ -1404,16 +1940,53 @@ const WhatsAppSection: React.FC = () => {
                                         Active
                                     </label>
                                 </div>
+
+                                {/* Quick-insert placeholder chips */}
+                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                    {placeholders.map(p => (
+                                        <button
+                                            key={p.token}
+                                            type="button"
+                                            onClick={() => handleInsertPlaceholder(p.token)}
+                                            title={`Insert ${p.label} (${p.token})`}
+                                            className="inline-flex items-center text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded px-2 py-0.5 font-mono transition-colors"
+                                        >
+                                            + {p.token}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* Textarea */}
                                 <textarea
+                                    ref={textareaRef}
                                     value={editBody}
                                     onChange={e => setEditBody(e.target.value)}
                                     rows={4}
                                     className="w-full border rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-purple-300 focus:border-purple-400"
                                     style={{ borderColor: '#E0DCD7' }}
                                 />
-                                <p className="text-xs text-gray-400 mt-1 mb-3">
-                                    Placeholders: {'{customer_name}'}, {'{ref}'}, {'{status}'}, {'{shop_name}'}, {'{promised_date}'}
-                                </p>
+
+                                {/* Preview toggle */}
+                                <div className="mt-2 mb-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPreview(v => !v)}
+                                        className="text-xs text-purple-600 hover:text-purple-800 font-medium underline underline-offset-2"
+                                    >
+                                        {showPreview ? 'Hide Preview' : 'Show Preview'}
+                                    </button>
+                                </div>
+
+                                {showPreview && (
+                                    <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Live Preview — sample data</p>
+                                        <p className="text-sm text-gray-800 whitespace-pre-wrap">{applyPreview(editBody, placeholders)}</p>
+                                        <p className="text-xs text-gray-400 mt-2 italic">
+                                            Sample: {placeholders.map(p => `${p.token} → "${p.sample}"`).join(' · ')}
+                                        </p>
+                                    </div>
+                                )}
+
                                 <div className="flex gap-2">
                                     <Button size="sm" onClick={handleSave} disabled={isSaving}>
                                         {isSaving ? 'Saving...' : 'Save'}
@@ -1435,7 +2008,7 @@ const WhatsAppSection: React.FC = () => {
                                             <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Inactive</span>
                                         )}
                                     </div>
-                                    <p className="text-sm text-gray-600 whitespace-pre-wrap">{t.message_body}</p>
+                                    <p className="text-sm text-gray-600 whitespace-pre-wrap font-mono">{t.message_body}</p>
                                 </div>
                                 <Button size="sm" variant="outline" onClick={() => handleEdit(t)} className="ml-3 shrink-0">
                                     Edit
@@ -1467,6 +2040,24 @@ const tabs: TabDef[] = [
         icon: (
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'pos-config',
+        label: 'POS Config',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l2 2 4-4m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'pms-vat',
+        label: 'PMS & VAT',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-2.21 0-4 1.12-4 2.5S9.79 13 12 13s4 1.12 4 2.5S14.21 18 12 18m0-10V6m0 12v-2m8-4a8 8 0 11-16 0 8 8 0 0116 0z" />
             </svg>
         ),
     },
@@ -1594,6 +2185,8 @@ const Settings: React.FC = () => {
             {/* Right: section content */}
             <div className="flex-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
                 {activeTab === 'general' && <GeneralSection />}
+                {activeTab === 'pos-config' && <PosConfigurationSection />}
+                {activeTab === 'pms-vat' && <PmsVatSection />}
                 {activeTab === 'payment-modes' && <PaymentModesSection />}
                 {activeTab === 'technicians' && <TechniciansSection />}
                 {activeTab === 'country-codes' && <CountryCodesSection />}

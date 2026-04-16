@@ -27,3 +27,8 @@ def execute():
 		frappe.reload_doc("Repair Management", "print_format", "dw_ro_bag_label")
 	except Exception as exc:  # pragma: no cover - best-effort reload
 		frappe.log_error(frappe.get_traceback(), f"Failed to reload dw_ro_bag_label print format: {exc}")
+
+	try:
+		frappe.reload_doc("Repair Management", "print_format", "dw_pos_retail_receipt")
+	except Exception as exc:  # pragma: no cover - best-effort reload
+		frappe.log_error(frappe.get_traceback(), f"Failed to reload dw_pos_retail_receipt print format: {exc}")

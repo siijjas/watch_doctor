@@ -10,9 +10,9 @@ export interface AppConfig {
 
 const DEFAULT_CONFIG: AppConfig = {
     logoUrl: '',
-    currencyCode: 'USD',
-    currencySymbol: '$',
-    decimalPlaces: 2,
+    currencyCode: '',
+    currencySymbol: '',
+    decimalPlaces: 0,
 };
 
 interface AppConfigContextValue {
@@ -24,7 +24,7 @@ interface AppConfigContextValue {
 const AppConfigContext = createContext<AppConfigContextValue>({
     config: DEFAULT_CONFIG,
     refreshConfig: async () => {},
-    formatCurrency: (n) => `$${n.toFixed(2)}`,
+    formatCurrency: (n) => n.toLocaleString('en-US'),
 });
 
 export const useAppConfig = () => useContext(AppConfigContext);
@@ -43,9 +43,9 @@ export const AppConfigProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (data) {
                 setConfig({
                     logoUrl: data.logo_url || '',
-                    currencyCode: data.currency_code || 'USD',
-                    currencySymbol: data.currency_symbol || '$',
-                    decimalPlaces: typeof data.decimal_places === 'number' ? data.decimal_places : 2,
+                    currencyCode: data.currency_code || '',
+                    currencySymbol: data.currency_symbol || '',
+                    decimalPlaces: typeof data.decimal_places === 'number' ? data.decimal_places : 0,
                 });
             }
         } catch (e) {

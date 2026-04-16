@@ -36,6 +36,12 @@ PERMISSIONS = [
     # ── Mode of Payment (needed by payment modal) ──────────────────────────
     ("Mode of Payment", "DW Executive",   {"read": 1, "write": 1}),
     ("Mode of Payment", "DW Data Entry",  {"read": 1}),
+
+    # ── POS configuration helpers ─────────────────────────────────────────
+    ("POS Profile",     "DW Executive",   {"read": 1}),
+    ("POS Profile",     "DW Data Entry",  {"read": 1}),
+    ("Sales Person",    "DW Executive",   {"read": 1}),
+    ("Sales Person",    "DW Data Entry",  {"read": 1}),
 ]
 
 

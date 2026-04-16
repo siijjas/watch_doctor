@@ -54,17 +54,62 @@ const defaultHeaders = (): Record<string, string> => {
     return csrf ? { 'X-Frappe-CSRF-Token': csrf } : {};
 };
 
+const extractFrappeErrorMessage = (payload: unknown, fallback: string): string => {
+    if (!payload || typeof payload !== 'object') {
+        return fallback;
+    }
+
+    const data = payload as {
+        _server_messages?: string;
+        message?: string;
+        exception?: string;
+    };
+
+    if (data._server_messages) {
+        try {
+            const messages = JSON.parse(data._server_messages);
+            if (Array.isArray(messages) && messages.length > 0) {
+                const first = typeof messages[0] === 'string' ? JSON.parse(messages[0]) : messages[0];
+                if (first?.message) {
+                    return first.message;
+                }
+            }
+        } catch {
+            return data._server_messages;
+        }
+    }
+
+    if (typeof data.message === 'string' && data.message.trim()) {
+        return data.message;
+    }
+
+    if (typeof data.exception === 'string' && data.exception.trim()) {
+        const parts = data.exception.split(':');
+        return parts.length > 1 ? parts.slice(1).join(':').trim() : data.exception;
+    }
+
+    return fallback;
+};
+
 const handleResponse = async (res: Response): Promise<any> => {
     if (!res.ok) {
         const text = await res.text();
+        const fallback = text || res.statusText;
+        let data: unknown = null;
+
         try {
-            const data = JSON.parse(text);
-            throw new Error(data._server_messages || data.message || res.statusText);
+            data = JSON.parse(text);
         } catch (_e) {
-            const plain = text.replace(/<[^>]*>?/gm, '').trim();
-            const snippet = plain ? plain.slice(0, 240) : res.statusText;
-            throw new Error(snippet || res.statusText);
+            data = null;
         }
+
+        if (data) {
+            throw new Error(extractFrappeErrorMessage(data, fallback));
+        }
+
+        const plain = text.replace(/<[^>]*>?/gm, '').trim();
+        const snippet = plain ? plain.slice(0, 240) : res.statusText;
+        throw new Error(snippet || res.statusText);
     }
     return res.json();
 };

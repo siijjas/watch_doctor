@@ -6,6 +6,44 @@ export const isErpNext =
     typeof window !== 'undefined' &&
     (Boolean(window.csrf_token) || (typeof window.frappe !== 'undefined' && Boolean(window.frappe.csrf_token)));
 
+const extractFrappeErrorMessage = (payload: unknown, fallback: string): string => {
+    if (!payload || typeof payload !== 'object') {
+        return fallback;
+    }
+
+    const data = payload as {
+        _server_messages?: string;
+        message?: string;
+        exception?: string;
+        exc_type?: string;
+    };
+
+    if (data._server_messages) {
+        try {
+            const messages = JSON.parse(data._server_messages);
+            if (Array.isArray(messages) && messages.length > 0) {
+                const first = typeof messages[0] === 'string' ? JSON.parse(messages[0]) : messages[0];
+                if (first?.message) {
+                    return first.message;
+                }
+            }
+        } catch {
+            return data._server_messages;
+        }
+    }
+
+    if (typeof data.message === 'string' && data.message.trim()) {
+        return data.message;
+    }
+
+    if (typeof data.exception === 'string' && data.exception.trim()) {
+        const parts = data.exception.split(':');
+        return parts.length > 1 ? parts.slice(1).join(':').trim() : data.exception;
+    }
+
+    return fallback;
+};
+
 const apiFetch = async (path: string, init: RequestInit = {}) => {
     const response = await fetch(path, {
         credentials: 'include',
@@ -18,7 +56,21 @@ const apiFetch = async (path: string, init: RequestInit = {}) => {
     });
     if (!response.ok) {
         const text = await response.text();
-        throw new Error(text || `Request failed: ${response.status}`);
+        const fallback = text || `Request failed: ${response.status}`;
+        let parsed: unknown = null;
+
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            parsed = null;
+        }
+
+        if (parsed) {
+            throw new Error(extractFrappeErrorMessage(parsed, fallback));
+        }
+
+        const plain = text.replace(/<[^>]*>?/gm, '').trim();
+        throw new Error(plain || fallback);
     }
     const data = await response.json();
     return data;
@@ -653,7 +705,7 @@ export const getAppConfig = async (): Promise<{ logo_url: string; currency_code:
         method: 'POST',
         body: JSON.stringify({}),
     });
-    return res.message || { logo_url: '', currency_code: 'USD', currency_symbol: '$', decimal_places: 2 };
+    return res.message || { logo_url: '', currency_code: '', currency_symbol: '', decimal_places: 0 };
 };
 
 export const saveLogoUrl = async (logoUrl: string): Promise<void> => {
@@ -661,6 +713,41 @@ export const saveLogoUrl = async (logoUrl: string): Promise<void> => {
         method: 'POST',
         body: JSON.stringify({ logo_url: logoUrl }),
     });
+};
+
+export interface PmsConfiguration {
+    pms_enabled: number;
+    pms_item_group: string;
+    pms_vat_account: string;
+    pms_disclaimer: string;
+    standard_sales_taxes_template: string;
+    standard_item_tax_template: string;
+    pms_print_format: string;
+    pms_vat_divisor: number;
+}
+
+export interface PmsConfigurationOptions {
+    item_groups: string[];
+    tax_accounts: string[];
+    sales_taxes_templates: string[];
+    item_tax_templates: string[];
+    print_formats: string[];
+}
+
+export const getPmsConfiguration = async (): Promise<{ config: PmsConfiguration; options: PmsConfigurationOptions }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_pms_configuration', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message;
+};
+
+export const savePmsConfiguration = async (config: PmsConfiguration): Promise<{ success: boolean; config: PmsConfiguration }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.save_pms_configuration', {
+        method: 'POST',
+        body: JSON.stringify(config),
+    });
+    return res.message;
 };
 
 export const uploadFile = async (file: File): Promise<string> => {
@@ -714,6 +801,29 @@ export interface POSPaymentSplit {
     amount: number;
 }
 
+export interface POSRuntimeConfig {
+    pos_profile: string;
+    default_customer: string;
+    default_customer_name: string;
+    default_receipt_format: string;
+    auto_print: number;
+    default_sales_person: string;
+    default_commission_rate: number;
+    allowed_naming_series: string[];
+    available_naming_series?: string[];
+    print_formats: string[];
+    sales_persons: string[];
+}
+
+export interface POSOptions {
+    company?: string;
+    pos_profile?: string;
+    sales_person?: string;
+    commission_rate?: number;
+    receipt_format?: string;
+    naming_series?: string;
+}
+
 export interface POSDraft {
     name: string;
     customer: string;
@@ -723,6 +833,26 @@ export interface POSDraft {
     creation: string;
     modified: string;
 }
+
+export const getPosRuntimeConfig = async (company: string = '', posProfile: string = ''): Promise<POSRuntimeConfig> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_pos_runtime_config', {
+        method: 'POST',
+        body: JSON.stringify({ company, pos_profile: posProfile }),
+    });
+    return res.message || {
+        pos_profile: '',
+        default_customer: '',
+        default_customer_name: '',
+        default_receipt_format: '',
+        auto_print: 0,
+        default_sales_person: '',
+        default_commission_rate: 0,
+        allowed_naming_series: [],
+        available_naming_series: [],
+        print_formats: [],
+        sales_persons: [],
+    };
+};
 
 export const getPosItems = async (search: string = ""): Promise<POSItem[]> => {
     const res = await apiFetch('/api/method/watch_doctor.api.get_pos_items', {
@@ -751,8 +881,9 @@ export const createPosInvoice = async (
     customer: string,
     items: CartItem[],
     payments: POSPaymentSplit[] | string = "Cash",
-    discountPercent: number = 0
-): Promise<{ invoice_name: string; grand_total: number; customer: string }> => {
+    discountPercent: number = 0,
+    options: POSOptions = {}
+): Promise<{ invoice_name: string; grand_total: number; customer: string; auto_print: number; print_format?: string; print_url?: string }> => {
     const normalizedPayments = normalizePosPayments(payments);
     const primaryMode = typeof payments === 'string'
         ? payments
@@ -766,6 +897,7 @@ export const createPosInvoice = async (
             payment_mode: primaryMode,
             payments_json: JSON.stringify(normalizedPayments),
             discount_percent: discountPercent,
+            options_json: JSON.stringify(options),
         }),
     });
     return res.message;
@@ -773,13 +905,15 @@ export const createPosInvoice = async (
 
 export const savePosDraft = async (
     customer: string,
-    items: CartItem[]
+    items: CartItem[],
+    options: POSOptions = {}
 ): Promise<{ invoice_name: string; grand_total: number; customer: string }> => {
     const res = await apiFetch('/api/method/watch_doctor.api.save_pos_draft', {
         method: 'POST',
         body: JSON.stringify({
             customer,
             items_json: JSON.stringify(items),
+            options_json: JSON.stringify(options),
         }),
     });
     return res.message;
@@ -799,6 +933,11 @@ export const loadPosDraft = async (invoiceName: string): Promise<{
     customer_name: string;
     items: CartItem[];
     grand_total: number;
+    pos_profile: string;
+    sales_person: string;
+    commission_rate: number;
+    receipt_format: string;
+    naming_series: string;
 }> => {
     const res = await apiFetch('/api/method/watch_doctor.api.load_pos_draft', {
         method: 'POST',
@@ -818,8 +957,9 @@ export const deletePosDraft = async (invoiceName: string): Promise<{ success: bo
 export const submitPosDraft = async (
     invoiceName: string,
     payments: POSPaymentSplit[] | string = "Cash",
-    discountPercent: number = 0
-): Promise<{ invoice_name: string; grand_total: number; customer: string }> => {
+    discountPercent: number = 0,
+    options: POSOptions = {}
+): Promise<{ invoice_name: string; grand_total: number; customer: string; auto_print: number; print_format?: string; print_url?: string }> => {
     const normalizedPayments = normalizePosPayments(payments);
     const primaryMode = typeof payments === 'string'
         ? payments
@@ -832,6 +972,7 @@ export const submitPosDraft = async (
             payment_mode: primaryMode,
             payments_json: JSON.stringify(normalizedPayments),
             discount_percent: discountPercent,
+            options_json: JSON.stringify(options),
         }),
     });
     return res.message;
@@ -900,6 +1041,20 @@ export const getWhatsAppConfig = async (): Promise<WhatsAppConfig> => {
 
 export const getWhatsAppTemplates = async (): Promise<WhatsAppTemplate[]> => {
     const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.get_whatsapp_templates', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message || [];
+};
+
+export interface WhatsAppPlaceholder {
+    token: string;
+    label: string;
+    sample: string;
+}
+
+export const getTemplatePlaceholders = async (): Promise<WhatsAppPlaceholder[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.get_template_placeholders', {
         method: 'POST',
         body: JSON.stringify({}),
     });

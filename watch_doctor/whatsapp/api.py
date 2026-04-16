@@ -130,6 +130,19 @@ def preview_notification(repair_order_name: str):
 
 
 @frappe.whitelist()
+def get_template_placeholders():
+	"""Return the ordered placeholder legend for the Settings UI."""
+	require_roles(ROLE_EXECUTIVE)
+
+	from watch_doctor.whatsapp.service import PLACEHOLDER_DEFINITIONS, PLACEHOLDER_SAMPLES
+
+	return [
+		{"token": token, "label": label, "sample": PLACEHOLDER_SAMPLES[token]}
+		for token, label in PLACEHOLDER_DEFINITIONS
+	]
+
+
+@frappe.whitelist()
 def get_whatsapp_templates():
 	"""Return all WhatsApp notification templates."""
 	require_roles(ROLE_EXECUTIVE)
