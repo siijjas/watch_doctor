@@ -254,7 +254,9 @@ doc_events = {
 after_migrate = [
     "watch_doctor.patches.reload_dw_doctypes.execute",
     "watch_doctor.setup_roles.execute",
+    "watch_doctor.patches.grant_native_doctype_permissions.execute",
     "watch_doctor.setup_pms.execute",
+    "watch_doctor.setup_invoice_settings.execute",
     "watch_doctor.setup_pos_enhancements.execute",
 ]
 

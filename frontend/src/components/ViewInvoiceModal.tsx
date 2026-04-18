@@ -11,11 +11,11 @@ interface ViewInvoiceModalProps {
   onUpdated?: () => void;
 }
 
-const getPrintUrl = (name: string) =>
-  `/app/print/Sales%20Invoice/${encodeURIComponent(name)}`;
+const getPrintUrl = (name: string, format: string) =>
+  `/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(name)}&format=${encodeURIComponent(format)}&no_letterhead=0`;
 
-const getPdfUrl = (name: string) =>
-  `/api/method/frappe.utils.print_format.download_pdf?doctype=Sales%20Invoice&name=${encodeURIComponent(name)}&format=Standard&no_letterhead=0`;
+const getPdfUrl = (name: string, format: string) =>
+  `/api/method/frappe.utils.print_format.download_pdf?doctype=Sales%20Invoice&name=${encodeURIComponent(name)}&format=${encodeURIComponent(format)}&no_letterhead=0`;
 
 const statusColors: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
@@ -36,6 +36,7 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
   onUpdated,
 }) => {
   const [invoice, setInvoice] = useState<any>(null);
+  const [printFormat, setPrintFormat] = useState('Standard');
   const [isLoading, setIsLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editedItems, setEditedItems] = useState<any[]>([]);
@@ -58,8 +59,12 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
   const fetchInvoice = useCallback(async () => {
     setIsLoading(true);
     try {
-      const doc = await apiService.getDoc('Sales Invoice', invoiceName);
+      const [doc, printContext] = await Promise.all([
+        apiService.getDoc('Sales Invoice', invoiceName),
+        apiService.getSalesInvoicePrintContext(invoiceName),
+      ]);
       setInvoice(doc);
+      setPrintFormat(printContext?.print_format || 'Standard');
       setEditedItems(JSON.parse(JSON.stringify(doc.items || [])));
       setEditedPostingDate(doc.posting_date || '');
       setEditedDueDate(doc.due_date || '');
@@ -130,8 +135,8 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
           subject: emailSubject,
           content: emailMessage.replace(/\n/g, '<br>'),
           send_email: 1,
-          print_format: 'Standard',
-          attachments: JSON.stringify([{ print_format_attachment: 1, doctype: 'Sales Invoice', name: invoiceName, print_format: 'Standard' }]),
+          print_format: printFormat,
+          attachments: JSON.stringify([{ print_format_attachment: 1, doctype: 'Sales Invoice', name: invoiceName, print_format: printFormat }]),
         }),
       });
       showToast('Email sent successfully!', 'success');
@@ -190,14 +195,14 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => window.open(getPrintUrl(invoiceName), '_blank')}
+              onClick={() => window.open(getPrintUrl(invoiceName, printFormat), '_blank')}
             >
               🖨️ Print
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => window.open(getPdfUrl(invoiceName), '_blank')}
+              onClick={() => window.open(getPdfUrl(invoiceName, printFormat), '_blank')}
             >
               📥 Download PDF
             </Button>

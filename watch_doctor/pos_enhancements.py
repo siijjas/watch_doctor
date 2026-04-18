@@ -5,6 +5,11 @@ from urllib.parse import quote
 import frappe
 from frappe.utils import cint, flt
 
+from watch_doctor.invoice_settings import (
+	WORKFLOW_POS_STANDARD,
+	apply_pos_workflow_settings,
+	get_workflow_settings,
+)
 from watch_doctor.pms import get_pms_runtime_configuration
 
 
@@ -39,16 +44,17 @@ def get_default_pos_profile(company: str, selected_profile: str | None = None) -
 
 def get_pos_profile_settings(company: str, selected_profile: str | None = None) -> dict:
 	available_naming_series = _get_sales_invoice_naming_series_options()
+	standard_workflow_settings = get_workflow_settings(WORKFLOW_POS_STANDARD)
 	profile_name = get_default_pos_profile(company, selected_profile)
 	profile_settings = {
 		"pos_profile": profile_name,
 		"default_customer": "",
 		"default_customer_name": "",
-		"default_receipt_format": "",
+		"default_receipt_format": standard_workflow_settings.get("print_format") or "",
 		"auto_print": 0,
 		"default_sales_person": "",
 		"default_commission_rate": 0.0,
-		"allowed_naming_series": available_naming_series,
+		"allowed_naming_series": [standard_workflow_settings.get("naming_series")] if standard_workflow_settings.get("naming_series") else [],
 		"available_naming_series": available_naming_series,
 		"print_formats": [],
 		"sales_persons": [],
@@ -81,14 +87,9 @@ def get_pos_profile_settings(company: str, selected_profile: str | None = None) 
 			frappe.get_cached_value("Customer", profile_settings["default_customer"], "customer_name")
 			or profile_settings["default_customer"]
 		)
-	profile_settings["default_receipt_format"] = profile.get("dw_default_receipt_format") or ""
 	profile_settings["auto_print"] = cint(profile.get("dw_enable_auto_print"))
 	profile_settings["default_sales_person"] = profile.get("dw_default_sales_person") or ""
 	profile_settings["default_commission_rate"] = flt(profile.get("dw_default_commission_rate"))
-
-	allowed_naming_series = _parse_multiline_options(profile.get("dw_allowed_naming_series"))
-	if allowed_naming_series:
-		profile_settings["allowed_naming_series"] = allowed_naming_series
 
 	return profile_settings
 
@@ -117,13 +118,11 @@ def apply_pos_profile(invoice, *, has_pms_items: bool, customer: str = "", pos_p
 
 	invoice.customer = resolved_customer
 	invoice.dw_pos_profile = profile_settings.get("pos_profile") or ""
-	invoice.dw_pos_receipt_format = resolve_receipt_format(receipt_format, has_pms_items, profile_settings)
 	invoice.dw_pos_sales_person = sales_person or profile_settings.get("default_sales_person") or ""
 	invoice.dw_pos_commission_rate = flt(commission_rate or profile_settings.get("default_commission_rate") or 0)
-
-	resolved_series = validate_series_selection(naming_series or "", profile_settings)
-	if resolved_series:
-		invoice.naming_series = resolved_series
+	workflow_settings = apply_pos_workflow_settings(invoice, has_pms_items)
+	profile_settings["default_receipt_format"] = workflow_settings.get("print_format") or ""
+	profile_settings["allowed_naming_series"] = [workflow_settings.get("naming_series")] if workflow_settings.get("naming_series") else []
 
 	if invoice.dw_pos_sales_person:
 		invoice.set("sales_team", [])
@@ -140,9 +139,7 @@ def build_pos_print_url(invoice, profile_settings: dict) -> str:
 	print_format = invoice.get("dw_pos_receipt_format") or resolve_receipt_format("", cint(invoice.get("dw_has_pms_items")) == 1, profile_settings)
 	if not print_format:
 		return ""
-	return frappe.utils.get_url(
-		"/printview?doctype=Sales%20Invoice&name={name}&format={fmt}&no_letterhead=1".format(
-			name=quote(invoice.name),
-			fmt=quote(print_format),
-		)
+	return "/printview?doctype=Sales%20Invoice&name={name}&format={fmt}&no_letterhead=1".format(
+		name=quote(invoice.name),
+		fmt=quote(print_format),
 	)

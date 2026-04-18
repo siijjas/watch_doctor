@@ -2,6 +2,14 @@ import frappe
 from frappe import _  # noqa: F401
 import json
 
+from watch_doctor.invoice_settings import (
+	clear_invoice_settings_cache,
+	get_invoice_workflow_options,
+	get_invoice_workflow_settings,
+	get_sales_invoice_print_context,
+	validate_invoice_workflow_settings,
+)
+
 from watch_doctor.pos_enhancements import (
 	apply_pos_profile,
 	build_pos_print_url,
@@ -53,12 +61,15 @@ def get_user_info():
 def get_app_config():
 	"""Return app-level configuration: logo URL, currency symbol, decimal places."""
 	from watch_doctor.pms import get_pms_runtime_configuration
+	invoice_settings = get_invoice_workflow_settings()
 	config = {
 		"logo_url": "",
 		"currency_code": "",
 		"currency_symbol": "",
 		"decimal_places": 0,
-		"pms_print_format": "",
+		"repair_service_print_format": invoice_settings.get("repair_service_print_format") or "Standard",
+		"pos_standard_print_format": invoice_settings.get("pos_standard_print_format") or "DW POS Retail Receipt",
+		"pos_pms_print_format": invoice_settings.get("pos_pms_print_format") or "DW PMS Tax Invoice",
 	}
 
 	# Logo stored via frappe defaults (no schema change needed)
@@ -98,11 +109,67 @@ def get_app_config():
 		pass
 
 	try:
-		config["pms_print_format"] = get_pms_runtime_configuration().get("pms_print_format") or ""
+		pms_runtime = get_pms_runtime_configuration()
+		if not config["pos_pms_print_format"]:
+			config["pos_pms_print_format"] = pms_runtime.get("pms_print_format") or "DW PMS Tax Invoice"
 	except Exception:
 		pass
 
 	return config
+
+
+@frappe.whitelist()
+def get_invoice_workflow_configuration():
+	"""Return centralized invoice workflow settings and selectable options."""
+	require_roles(ROLE_EXECUTIVE)
+	return {
+		"config": get_invoice_workflow_settings(),
+		"options": get_invoice_workflow_options(),
+	}
+
+
+@frappe.whitelist()
+def save_invoice_workflow_configuration(
+	repair_service_naming_series: str = "",
+	repair_service_print_format: str = "",
+	pos_standard_naming_series: str = "",
+	pos_standard_print_format: str = "",
+	pos_pms_naming_series: str = "",
+	pos_pms_print_format: str = "",
+):
+	"""Persist centralized naming series and print formats for invoice workflows."""
+	require_roles(ROLE_EXECUTIVE)
+	from watch_doctor.setup_invoice_settings import execute as ensure_invoice_settings_setup
+
+	if not frappe.db.exists("DocType", "DW Invoice Settings"):
+		ensure_invoice_settings_setup()
+
+	config = {
+		"repair_service_naming_series": repair_service_naming_series or "",
+		"repair_service_print_format": repair_service_print_format or "",
+		"pos_standard_naming_series": pos_standard_naming_series or "",
+		"pos_standard_print_format": pos_standard_print_format or "",
+		"pos_pms_naming_series": pos_pms_naming_series or "",
+		"pos_pms_print_format": pos_pms_print_format or "",
+	}
+	validate_invoice_workflow_settings(config)
+
+	for fieldname, value in config.items():
+		frappe.db.set_single_value("DW Invoice Settings", fieldname, value)
+
+	if frappe.db.exists("DocType", "DW PMS Settings"):
+		frappe.db.set_single_value("DW PMS Settings", "pms_print_format", config.get("pos_pms_print_format") or "")
+
+	frappe.db.commit()
+	clear_invoice_settings_cache()
+	frappe.clear_cache()
+	return {"success": True, "config": get_invoice_workflow_settings()}
+
+
+@frappe.whitelist()
+def get_sales_invoice_print_context_api(invoice_name: str):
+	"""Return workflow-aware print format metadata for a Sales Invoice."""
+	return get_sales_invoice_print_context(invoice_name)
 
 
 @frappe.whitelist()
@@ -126,6 +193,8 @@ def get_pms_configuration():
 
 	company = _get_default_company()
 	config = get_pms_runtime_configuration()
+	invoice_settings = get_invoice_workflow_settings()
+	config["pms_print_format"] = invoice_settings.get("pos_pms_print_format") or config.get("pms_print_format") or ""
 
 	item_groups = frappe.get_all(
 		"Item Group",
@@ -189,9 +258,12 @@ def save_pms_configuration(
 	require_roles(ROLE_EXECUTIVE)
 	from watch_doctor.pms import clear_pms_runtime_configuration_cache
 	from watch_doctor.setup_pms import execute as ensure_pms_setup
+	from watch_doctor.setup_invoice_settings import execute as ensure_invoice_settings_setup
 
 	if not frappe.db.exists("DocType", "DW PMS Settings"):
 		ensure_pms_setup()
+	if not frappe.db.exists("DocType", "DW Invoice Settings"):
+		ensure_invoice_settings_setup()
 
 	validators = [
 		("Item Group", pms_item_group),
@@ -232,6 +304,7 @@ def save_pms_configuration(
 	frappe.db.set_single_value("DW PMS Settings", "standard_item_tax_template", standard_item_tax_template or "")
 	frappe.db.set_single_value("DW PMS Settings", "pms_print_format", pms_print_format or "")
 	frappe.db.set_single_value("DW PMS Settings", "pms_vat_divisor", float(pms_vat_divisor or 0))
+	frappe.db.set_single_value("DW Invoice Settings", "pos_pms_print_format", pms_print_format or "")
 	frappe.db.set_single_value(
 		"DW PMS Settings",
 		"pms_disclaimer",
@@ -240,6 +313,7 @@ def save_pms_configuration(
 
 	frappe.db.commit()
 	clear_pms_runtime_configuration_cache()
+	clear_invoice_settings_cache()
 	frappe.clear_cache()
 	return {"success": True, "config": get_pms_configuration()["config"]}
 

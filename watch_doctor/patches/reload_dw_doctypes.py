@@ -1,6 +1,13 @@
 import frappe
 
 
+PRINT_FORMAT_SEEDS = [
+	("DW RO Bag Label", "dw_ro_bag_label"),
+	("DW POS Retail Receipt", "dw_pos_retail_receipt"),
+	("DW PMS Tax Invoice", "dw_pms_tax_invoice"),
+]
+
+
 def execute():
 	"""Reload DW doctypes to ensure they exist after migrate."""
 	# Ensure module record exists
@@ -22,13 +29,16 @@ def execute():
 		except Exception as exc:  # pragma: no cover - best-effort reload
 			frappe.log_error(frappe.get_traceback(), f"Failed to reload {dt}: {exc}")
 
-	# Import / refresh the bag-label print format bundled with the app
-	try:
-		frappe.reload_doc("Repair Management", "print_format", "dw_ro_bag_label")
-	except Exception as exc:  # pragma: no cover - best-effort reload
-		frappe.log_error(frappe.get_traceback(), f"Failed to reload dw_ro_bag_label print format: {exc}")
+	# Seed bundled print formats only if they do not exist yet.
+	# Once created, keep Desk as the source of truth so admins can customize them.
+	for print_format_name, print_format_slug in PRINT_FORMAT_SEEDS:
+		if frappe.db.exists("Print Format", print_format_name):
+			continue
 
-	try:
-		frappe.reload_doc("Repair Management", "print_format", "dw_pos_retail_receipt")
-	except Exception as exc:  # pragma: no cover - best-effort reload
-		frappe.log_error(frappe.get_traceback(), f"Failed to reload dw_pos_retail_receipt print format: {exc}")
+		try:
+			frappe.reload_doc("Repair Management", "print_format", print_format_slug)
+		except Exception as exc:  # pragma: no cover - best-effort reload
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"Failed to seed {print_format_slug} print format: {exc}",
+			)

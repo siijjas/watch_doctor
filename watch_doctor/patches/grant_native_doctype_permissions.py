@@ -40,7 +40,7 @@ PERMISSIONS = [
     # ── POS configuration helpers ─────────────────────────────────────────
     ("POS Profile",     "DW Executive",   {"read": 1}),
     ("POS Profile",     "DW Data Entry",  {"read": 1}),
-    ("Sales Person",    "DW Executive",   {"read": 1}),
+    ("Sales Person",    "DW Executive",   {"read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1}),
     ("Sales Person",    "DW Data Entry",  {"read": 1}),
 ]
 

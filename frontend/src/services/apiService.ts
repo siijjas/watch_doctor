@@ -637,7 +637,7 @@ export const createInvoice = async (
     sourceType: 'quotation' | 'order',
     paymentType: 'full' | 'advance' | 'balance',
     amount?: number
-): Promise<{ invoice_name: string; invoice_amount: number }> => {
+): Promise<{ invoice_name: string; invoice_amount: number; print_format?: string }> => {
     const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.create_sales_invoice', {
         method: 'POST',
         body: JSON.stringify({
@@ -700,12 +700,65 @@ export const getPaymentModes = async (): Promise<any[]> => {
 
 // ==================== App Config APIs ====================
 
-export const getAppConfig = async (): Promise<{ logo_url: string; currency_code: string; currency_symbol: string; decimal_places: number }> => {
+export interface AppConfigResponse {
+    logo_url: string;
+    currency_code: string;
+    currency_symbol: string;
+    decimal_places: number;
+    repair_service_print_format?: string;
+    pos_standard_print_format?: string;
+    pos_pms_print_format?: string;
+}
+
+export interface InvoiceWorkflowConfiguration {
+    repair_service_naming_series: string;
+    repair_service_print_format: string;
+    pos_standard_naming_series: string;
+    pos_standard_print_format: string;
+    pos_pms_naming_series: string;
+    pos_pms_print_format: string;
+}
+
+export interface InvoiceWorkflowConfigurationOptions {
+    naming_series: string[];
+    print_formats: string[];
+}
+
+export interface SalesInvoicePrintContext {
+    workflow_type: 'repair_service' | 'pos_standard' | 'pos_pms';
+    print_format: string;
+}
+
+export const getAppConfig = async (): Promise<AppConfigResponse> => {
     const res = await apiFetch('/api/method/watch_doctor.api.get_app_config', {
         method: 'POST',
         body: JSON.stringify({}),
     });
     return res.message || { logo_url: '', currency_code: '', currency_symbol: '', decimal_places: 0 };
+};
+
+export const getInvoiceWorkflowConfiguration = async (): Promise<{ config: InvoiceWorkflowConfiguration; options: InvoiceWorkflowConfigurationOptions }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_invoice_workflow_configuration', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message;
+};
+
+export const saveInvoiceWorkflowConfiguration = async (config: InvoiceWorkflowConfiguration): Promise<{ success: boolean; config: InvoiceWorkflowConfiguration }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.save_invoice_workflow_configuration', {
+        method: 'POST',
+        body: JSON.stringify(config),
+    });
+    return res.message;
+};
+
+export const getSalesInvoicePrintContext = async (invoiceName: string): Promise<SalesInvoicePrintContext> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_sales_invoice_print_context_api', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_name: invoiceName }),
+    });
+    return res.message;
 };
 
 export const saveLogoUrl = async (logoUrl: string): Promise<void> => {

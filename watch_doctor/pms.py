@@ -3,6 +3,8 @@
 import frappe
 from frappe.utils import flt
 
+from watch_doctor.invoice_settings import WORKFLOW_POS_PMS, get_workflow_settings
+
 REQUIRED_PMS_CONFIGURATION_FIELDS = (
     ("pms_item_group", "PMS Item Group"),
     ("pms_vat_account", "PMS VAT Account"),
@@ -61,6 +63,13 @@ def get_pms_runtime_configuration() -> dict:
             config["standard_item_tax_template"] = frappe.db.get_single_value("DW PMS Settings", "standard_item_tax_template") or ""
             config["pms_print_format"] = frappe.db.get_single_value("DW PMS Settings", "pms_print_format") or ""
             config["pms_vat_divisor"] = float(frappe.db.get_single_value("DW PMS Settings", "pms_vat_divisor") or 0)
+    except Exception:
+        pass
+
+    try:
+        workflow_settings = get_workflow_settings(WORKFLOW_POS_PMS)
+        if workflow_settings.get("print_format"):
+            config["pms_print_format"] = workflow_settings["print_format"]
     except Exception:
         pass
 

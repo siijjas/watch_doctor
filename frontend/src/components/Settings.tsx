@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosRuntimeConfig, getPosCustomers } from '../services/apiService';
-import type { WhatsAppTemplate, WhatsAppConfig, WhatsAppPlaceholder, PmsConfiguration, PmsConfigurationOptions, POSRuntimeConfig } from '../services/apiService';
+import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosCustomers, getInvoiceWorkflowConfiguration, saveInvoiceWorkflowConfiguration } from '../services/apiService';
+import type { WhatsAppTemplate, WhatsAppConfig, WhatsAppPlaceholder, PmsConfiguration, PmsConfigurationOptions, InvoiceWorkflowConfiguration, InvoiceWorkflowConfigurationOptions } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
@@ -13,10 +13,12 @@ import { ConfirmDialog } from './ui/ConfirmDialog';
 // ─────────────────────────────────────────────────────────────
 type SettingsTab =
     | 'general'
+    | 'invoice-workflows'
     | 'pos-config'
     | 'pms-vat'
     | 'payment-modes'
     | 'technicians'
+    | 'sales-persons'
     | 'country-codes'
     | 'task-templates'
     | 'issue-templates'
@@ -37,6 +39,18 @@ interface Technician {
     email: string;
     phone: string;
     notes: string;
+}
+
+interface SalesPersonConfig {
+    name?: string;
+    sales_person_name: string;
+    parent_sales_person: string;
+    commission_rate: number;
+    enabled: number;
+    is_group?: number;
+    lft?: number;
+    rgt?: number;
+    old_parent?: string;
 }
 
 interface CountryCode {
@@ -80,11 +94,9 @@ interface PosProfileConfig {
     company?: string;
     warehouse?: string;
     dw_default_customer?: string;
-    dw_default_receipt_format?: string;
     dw_enable_auto_print?: number;
     dw_default_sales_person?: string;
     dw_default_commission_rate?: number;
-    dw_allowed_naming_series?: string;
     modified?: string;
     creation?: string;
     owner?: string;
@@ -361,9 +373,7 @@ const PosConfigurationSection: React.FC = () => {
     const [customerOptions, setCustomerOptions] = useState<{ name: string; customer_name?: string }[]>([]);
     const [customerSearch, setCustomerSearch] = useState('');
     const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
-    const [printFormatOptions, setPrintFormatOptions] = useState<string[]>([]);
     const [salesPersonOptions, setSalesPersonOptions] = useState<string[]>([]);
-    const [availableNamingSeries, setAvailableNamingSeries] = useState<string[]>([]);
 
     const loadCustomerOptions = useCallback(async (search: string = '', selectedCustomer: string = '') => {
         setIsLoadingCustomers(true);
@@ -394,14 +404,12 @@ const PosConfigurationSection: React.FC = () => {
     const load = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [profiles, formats, salesPersons] = await Promise.all([
-                getList('POS Profile', ['name', 'company', 'warehouse', 'dw_default_customer', 'dw_default_receipt_format', 'dw_enable_auto_print', 'dw_default_sales_person', 'dw_default_commission_rate', 'dw_allowed_naming_series'], [], 200),
-                getList('Print Format', ['name'], [['doc_type', '=', 'Sales Invoice'], ['disabled', '=', 0]], 200),
+            const [profiles, salesPersons] = await Promise.all([
+                getList('POS Profile', ['name', 'company', 'warehouse', 'dw_default_customer', 'dw_enable_auto_print', 'dw_default_sales_person', 'dw_default_commission_rate'], [], 200),
                 getList('Sales Person', ['name'], [['is_group', '=', 0]], 200),
             ]);
 
             setData(profiles as PosProfileConfig[]);
-            setPrintFormatOptions(formats.map((row: any) => row.name));
             setSalesPersonOptions(salesPersons.map((row: any) => row.name));
         } catch (e) {
             console.error(e);
@@ -422,10 +430,7 @@ const PosConfigurationSection: React.FC = () => {
 
     const openEdit = async (row: PosProfileConfig) => {
         try {
-            const [full, runtime] = await Promise.all([
-                getDoc('POS Profile', row.name),
-                getPosRuntimeConfig(row.company || '', row.name),
-            ]);
+            const full = await getDoc('POS Profile', row.name);
 
             setEditRow(full);
             setForm({
@@ -433,23 +438,19 @@ const PosConfigurationSection: React.FC = () => {
                 company: full.company,
                 warehouse: full.warehouse,
                 dw_default_customer: full.dw_default_customer || '',
-                dw_default_receipt_format: full.dw_default_receipt_format || '',
                 dw_enable_auto_print: full.dw_enable_auto_print || 0,
                 dw_default_sales_person: full.dw_default_sales_person || '',
                 dw_default_commission_rate: full.dw_default_commission_rate || 0,
-                dw_allowed_naming_series: full.dw_allowed_naming_series || '',
                 modified: full.modified,
                 creation: full.creation,
                 owner: full.owner,
             });
-            setAvailableNamingSeries((runtime as POSRuntimeConfig & { available_naming_series?: string[] }).available_naming_series || runtime.allowed_naming_series || []);
             setCustomerSearch('');
             await loadCustomerOptions('', full.dw_default_customer || '');
         } catch (e) {
             console.error(e);
             setEditRow(row);
             setForm({ ...row });
-            setAvailableNamingSeries([]);
             setCustomerSearch('');
             await loadCustomerOptions('', row.dw_default_customer || '');
         }
@@ -465,11 +466,9 @@ const PosConfigurationSection: React.FC = () => {
                 ...editRow,
                 doctype: 'POS Profile',
                 dw_default_customer: form.dw_default_customer || '',
-                dw_default_receipt_format: form.dw_default_receipt_format || '',
                 dw_enable_auto_print: form.dw_enable_auto_print ? 1 : 0,
                 dw_default_sales_person: form.dw_default_sales_person || '',
                 dw_default_commission_rate: Number(form.dw_default_commission_rate) || 0,
-                dw_allowed_naming_series: form.dw_allowed_naming_series || '',
             });
             setIsModalOpen(false);
             await load();
@@ -484,7 +483,6 @@ const PosConfigurationSection: React.FC = () => {
         { key: 'name', label: 'POS Profile' },
         { key: 'company', label: 'Company' },
         { key: 'dw_default_customer', label: 'Default Customer' },
-        { key: 'dw_default_receipt_format', label: 'Receipt Format', render: r => r.dw_default_receipt_format || 'DW POS Retail Receipt' },
         { key: 'dw_default_sales_person', label: 'Sales Person', render: r => r.dw_default_sales_person || '—' },
         { key: 'dw_default_commission_rate', label: 'Commission %', render: r => Number(r.dw_default_commission_rate || 0).toFixed(2) },
         { key: 'dw_enable_auto_print', label: 'Auto Print', render: r => <ActiveBadge active={!!r.dw_enable_auto_print} /> },
@@ -497,13 +495,13 @@ const PosConfigurationSection: React.FC = () => {
             <div className="flex items-start justify-between mb-5">
                 <div>
                     <h3 className="text-lg font-semibold text-gray-800">POS Configuration</h3>
-                    <p className="text-sm text-gray-500 mt-0.5">Configure default customer, receipt format, auto-print, sales commission, and allowed invoice series on each POS Profile.</p>
+                    <p className="text-sm text-gray-500 mt-0.5">Configure default customer, auto-print, and sales commission on each POS Profile.</p>
                 </div>
             </div>
 
             <div className="mb-5 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-                <p className="text-sm text-emerald-800 font-medium">PMS and normal POS settings stay separate.</p>
-                <p className="text-sm text-emerald-700 mt-1">PMS items will use the same configured POS receipt format; the receipt template itself handles PMS disclaimer injection and tax-row hiding without overriding your normal POS receipt configuration.</p>
+                <p className="text-sm text-emerald-800 font-medium">Invoice identity now comes from Invoice Workflows.</p>
+                <p className="text-sm text-emerald-700 mt-1">Use the Invoice Workflows tab for POS naming series and print formats. POS Profile settings here stay focused on operational defaults.</p>
             </div>
 
             {data.length === 0 ? (
@@ -573,21 +571,6 @@ const PosConfigurationSection: React.FC = () => {
                             {isLoadingCustomers ? 'Searching customers…' : 'Type above to search and then pick the default customer.'}
                         </p>
                     </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Format</label>
-                        <select
-                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500"
-                            value={form.dw_default_receipt_format || ''}
-                            onChange={e => setForm(f => ({ ...f, dw_default_receipt_format: e.target.value }))}
-                        >
-                            <option value="">DW POS Retail Receipt</option>
-                            {printFormatOptions.map(format => (
-                                <option key={format} value={format}>{format}</option>
-                            ))}
-                        </select>
-                    </div>
-
                     <label className="flex items-center gap-3 cursor-pointer select-none">
                         <input
                             type="checkbox"
@@ -620,20 +603,6 @@ const PosConfigurationSection: React.FC = () => {
                         value={form.dw_default_commission_rate || 0}
                         onChange={e => setForm(f => ({ ...f, dw_default_commission_rate: parseFloat(e.target.value) || 0 }))}
                     />
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Allowed Invoice Series</label>
-                        <textarea
-                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
-                            rows={4}
-                            value={form.dw_allowed_naming_series || ''}
-                            onChange={e => setForm(f => ({ ...f, dw_allowed_naming_series: e.target.value }))}
-                            placeholder="One Sales Invoice naming series per line"
-                        />
-                        {availableNamingSeries.length > 0 && (
-                            <p className="text-xs text-gray-500 mt-2">Available series: {availableNamingSeries.join(', ')}</p>
-                        )}
-                    </div>
 
                     <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} label="Save POS Configuration" />
                 </form>
@@ -758,6 +727,199 @@ const TechniciansSection: React.FC = () => {
                 onConfirm={handleDelete}
                 title="Delete Technician"
                 message={`Are you sure you want to delete technician "${deleteTarget?.technician_name}"? Orders assigned to this technician will be unaffected but they won't be selectable for new tasks.`}
+                confirmText="Delete"
+                variant="danger"
+            />
+        </div>
+    );
+};
+
+const SalesPersonsSection: React.FC = () => {
+    const [data, setData] = useState<SalesPersonConfig[]>([]);
+    const [groupOptions, setGroupOptions] = useState<Array<{ name: string; sales_person_name?: string }>>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<SalesPersonConfig | null>(null);
+    const [form, setForm] = useState<SalesPersonConfig>({
+        sales_person_name: '',
+        parent_sales_person: '',
+        commission_rate: 0,
+        enabled: 1,
+        is_group: 0,
+    });
+    const [isSaving, setIsSaving] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<SalesPersonConfig | null>(null);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const [salesPeople, groups] = await Promise.all([
+                getList('Sales Person', ['name', 'sales_person_name', 'parent_sales_person', 'commission_rate', 'enabled'], [['is_group', '=', 0]], 200),
+                getList('Sales Person', ['name', 'sales_person_name'], [['is_group', '=', 1]], 200),
+            ]);
+            setData(salesPeople);
+            setGroupOptions(groups);
+        } catch (e) {
+            console.error(e);
+            setData([]);
+            setGroupOptions([]);
+        }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const openAdd = () => {
+        const defaultParent = groupOptions[0]?.name || '';
+        setEditRow(null);
+        setForm({
+            sales_person_name: '',
+            parent_sales_person: defaultParent,
+            commission_rate: 0,
+            enabled: 1,
+            is_group: 0,
+        });
+        setIsModalOpen(true);
+    };
+
+    const openEdit = async (row: SalesPersonConfig) => {
+        try {
+            const full = await getDoc('Sales Person', row.name!);
+            setEditRow(full);
+            setForm({
+                name: full.name,
+                sales_person_name: full.sales_person_name || full.name,
+                parent_sales_person: full.parent_sales_person || '',
+                commission_rate: Number(full.commission_rate || 0),
+                enabled: full.enabled ? 1 : 0,
+                is_group: 0,
+                lft: full.lft,
+                rgt: full.rgt,
+                old_parent: full.parent_sales_person || '',
+            });
+        } catch {
+            setEditRow(row);
+            setForm({
+                ...row,
+                commission_rate: Number(row.commission_rate || 0),
+                enabled: row.enabled ? 1 : 0,
+                is_group: 0,
+                old_parent: row.parent_sales_person || '',
+            });
+        }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await saveDoc({
+                doctype: 'Sales Person',
+                ...form,
+                is_group: 0,
+                enabled: form.enabled ? 1 : 0,
+                commission_rate: Number(form.commission_rate) || 0,
+                ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}),
+            });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) {
+            console.error(e);
+            alert('Error saving: ' + e);
+        }
+        setIsSaving(false);
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget?.name) return;
+        try {
+            await deleteDoc('Sales Person', deleteTarget.name);
+            setDeleteTarget(null);
+            await load();
+        } catch (e) {
+            alert('Error deleting: ' + e);
+        }
+    };
+
+    const getParentLabel = (name: string) => {
+        const option = groupOptions.find(group => group.name === name);
+        return option?.sales_person_name || name || '—';
+    };
+
+    const columns: Column<SalesPersonConfig>[] = [
+        { key: 'name', label: 'ID' },
+        { key: 'sales_person_name', label: 'Sales Person' },
+        { key: 'parent_sales_person', label: 'Parent Group', render: row => getParentLabel(row.parent_sales_person) },
+        { key: 'commission_rate', label: 'Commission %', render: row => Number(row.commission_rate || 0).toFixed(2) },
+        { key: 'enabled', label: 'Status', render: row => <ActiveBadge active={!!row.enabled} /> },
+    ];
+
+    return (
+        <div>
+            <SectionHeader
+                title="Sales Persons"
+                description="Manage ERPNext Sales Person records available for POS defaults and checkout assignment."
+                onAdd={openAdd}
+                addLabel="Add Sales Person"
+            />
+            {groupOptions.length === 0 && !isLoading && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                    No Sales Person groups were found. Create a parent group in ERPNext first, then add sales people here.
+                </div>
+            )}
+            <ConfigTable data={data} isLoading={isLoading} columns={columns} onEdit={openEdit} onDelete={row => setDeleteTarget(row)} />
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? 'Edit Sales Person' : 'Add Sales Person'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <Input
+                        label="Sales Person Name *"
+                        value={form.sales_person_name}
+                        onChange={e => setForm(f => ({ ...f, sales_person_name: e.target.value }))}
+                        placeholder="e.g. Ahmed Al-Khalifa"
+                        required
+                    />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Parent Group *</label>
+                        <select
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                            value={form.parent_sales_person || ''}
+                            onChange={e => setForm(f => ({ ...f, parent_sales_person: e.target.value }))}
+                            required
+                        >
+                            <option value="">Select parent group…</option>
+                            {groupOptions.map(group => (
+                                <option key={group.name} value={group.name}>{group.sales_person_name || group.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <Input
+                        label="Commission Rate"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={form.commission_rate || 0}
+                        onChange={e => setForm(f => ({ ...f, commission_rate: parseFloat(e.target.value) || 0 }))}
+                    />
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="w-4 h-4 text-purple-600 rounded"
+                            checked={!!form.enabled}
+                            onChange={e => setForm(f => ({ ...f, enabled: e.target.checked ? 1 : 0 }))}
+                        />
+                        <span className="text-sm font-medium text-gray-700">Enabled</span>
+                    </label>
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} label="Save Sales Person" />
+                </form>
+            </Modal>
+
+            <ConfirmDialog
+                isOpen={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                onConfirm={handleDelete}
+                title="Delete Sales Person"
+                message={`Are you sure you want to delete sales person "${deleteTarget?.sales_person_name || deleteTarget?.name}"?`}
                 confirmText="Delete"
                 variant="danger"
             />
@@ -1616,6 +1778,181 @@ const GeneralSection: React.FC = () => {
     );
 };
 
+const WORKFLOW_CARD_META: Array<{ key: keyof InvoiceWorkflowConfiguration; label: string; workflow: string; field: 'naming_series' | 'print_format' }> = [
+    { key: 'repair_service_naming_series', workflow: 'Repair / Service Invoice', label: 'Naming Series', field: 'naming_series' },
+    { key: 'repair_service_print_format', workflow: 'Repair / Service Invoice', label: 'Print Format', field: 'print_format' },
+    { key: 'pos_standard_naming_series', workflow: 'POS Invoice - Standard Tax', label: 'Naming Series', field: 'naming_series' },
+    { key: 'pos_standard_print_format', workflow: 'POS Invoice - Standard Tax', label: 'Print Format', field: 'print_format' },
+    { key: 'pos_pms_naming_series', workflow: 'POS Invoice - PMS Scheme', label: 'Naming Series', field: 'naming_series' },
+    { key: 'pos_pms_print_format', workflow: 'POS Invoice - PMS Scheme', label: 'Print Format', field: 'print_format' },
+];
+
+const InvoiceWorkflowsSection: React.FC = () => {
+    const [config, setConfig] = useState<InvoiceWorkflowConfiguration | null>(null);
+    const [options, setOptions] = useState<InvoiceWorkflowConfigurationOptions | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveMsg, setSaveMsg] = useState('');
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        setSaveMsg('');
+        try {
+            const data = await getInvoiceWorkflowConfiguration();
+            setConfig(data.config);
+            setOptions(data.options);
+        } catch (e: any) {
+            setSaveMsg(e?.message || 'Failed to load invoice workflow settings.');
+        }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const updateConfig = <K extends keyof InvoiceWorkflowConfiguration>(field: K, value: InvoiceWorkflowConfiguration[K]) => {
+        setConfig(prev => prev ? { ...prev, [field]: value } : prev);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!config) return;
+        setIsSaving(true);
+        setSaveMsg('');
+        try {
+            const result = await saveInvoiceWorkflowConfiguration(config);
+            setConfig(result.config);
+            setSaveMsg('Invoice workflow settings saved successfully.');
+        } catch (e: any) {
+            setSaveMsg(e?.message || 'Failed to save invoice workflow settings.');
+        }
+        setIsSaving(false);
+    };
+
+    if (isLoading) return <LoadingSpinner />;
+    if (!config || !options) return <EmptyState message={saveMsg || 'Unable to load invoice workflow settings.'} />;
+
+    return (
+        <form onSubmit={handleSave} className="space-y-8">
+            <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-1">Invoice Workflows</h3>
+                <p className="text-sm text-gray-500">Control the naming series and print format used by each Sales Invoice workflow from one place.</p>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-5 space-y-4">
+                    <div>
+                        <h4 className="text-base font-semibold text-gray-900">Repair / Service Invoice</h4>
+                        <p className="text-sm text-gray-500 mt-1">Used when a Sales Invoice is created from a Repair Order.</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Naming Series</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.repair_service_naming_series}
+                            onChange={e => updateConfig('repair_service_naming_series', e.target.value)}
+                        >
+                            <option value="">Use ERPNext default</option>
+                            {options.naming_series.map(series => <option key={series} value={series}>{series}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Print Format</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.repair_service_print_format}
+                            onChange={e => updateConfig('repair_service_print_format', e.target.value)}
+                        >
+                            <option value="Standard">Standard</option>
+                            {options.print_formats.map(format => <option key={format} value={format}>{format}</option>)}
+                        </select>
+                    </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-5 space-y-4">
+                    <div>
+                        <h4 className="text-base font-semibold text-gray-900">POS Invoice - Standard Tax</h4>
+                        <p className="text-sm text-gray-500 mt-1">Applied to normal POS sales that use standard tax handling.</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Naming Series</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.pos_standard_naming_series}
+                            onChange={e => updateConfig('pos_standard_naming_series', e.target.value)}
+                        >
+                            <option value="">Use ERPNext default</option>
+                            {options.naming_series.map(series => <option key={series} value={series}>{series}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Print Format</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.pos_standard_print_format}
+                            onChange={e => updateConfig('pos_standard_print_format', e.target.value)}
+                        >
+                            <option value="Standard">Standard</option>
+                            {options.print_formats.map(format => <option key={format} value={format}>{format}</option>)}
+                        </select>
+                    </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-5 space-y-4">
+                    <div>
+                        <h4 className="text-base font-semibold text-gray-900">POS Invoice - PMS Scheme</h4>
+                        <p className="text-sm text-gray-500 mt-1">Used for POS invoices containing PMS items. PMS tax rules still remain under the PMS & VAT tab.</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Naming Series</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.pos_pms_naming_series}
+                            onChange={e => updateConfig('pos_pms_naming_series', e.target.value)}
+                        >
+                            <option value="">Use ERPNext default</option>
+                            {options.naming_series.map(series => <option key={series} value={series}>{series}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Print Format</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.pos_pms_print_format}
+                            onChange={e => updateConfig('pos_pms_print_format', e.target.value)}
+                        >
+                            <option value="Standard">Standard</option>
+                            {options.print_formats.map(format => <option key={format} value={format}>{format}</option>)}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {WORKFLOW_CARD_META.map(item => (
+                    <div key={item.key} className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">{item.workflow}</p>
+                        <p className="text-xs text-gray-500 mb-2">{item.label}</p>
+                        <p className="text-sm font-semibold text-gray-800 break-words">{config[item.key] || 'ERPNext default / fallback'}</p>
+                    </div>
+                ))}
+            </div>
+
+            <div className="flex items-center justify-between border-t pt-4">
+                <p className={`text-sm ${saveMsg.toLowerCase().includes('fail') ? 'text-red-500' : 'text-green-600'}`}>
+                    {saveMsg || 'Save changes to apply centralized invoice identity and print behavior.'}
+                </p>
+                <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2 rounded-lg transition-colors flex items-center gap-2"
+                >
+                    {isSaving ? <><Spinner size="sm" /> Saving…</> : 'Save Invoice Workflows'}
+                </button>
+            </div>
+        </form>
+    );
+};
+
 const PmsVatSection: React.FC = () => {
     const [config, setConfig] = useState<PmsConfiguration | null>(null);
     const [options, setOptions] = useState<PmsConfigurationOptions | null>(null);
@@ -1739,14 +2076,10 @@ const PmsVatSection: React.FC = () => {
 
                 <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">PMS Print Format</label>
-                    <select
-                        className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
-                        value={config.pms_print_format}
-                        onChange={e => updateConfig('pms_print_format', e.target.value)}
-                    >
-                        <option value="">Select print format…</option>
-                        {options.print_formats.map(format => <option key={format} value={format}>{format}</option>)}
-                    </select>
+                    <div className="w-full p-2.5 border border-gray-200 rounded-xl bg-gray-50 text-sm text-gray-700">
+                        {config.pms_print_format || 'Configured in Invoice Workflows'}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Manage the PMS invoice print format in the Invoice Workflows tab.</p>
                 </div>
 
                 <div className="md:col-span-2">
@@ -1764,7 +2097,7 @@ const PmsVatSection: React.FC = () => {
                 {[
                     { label: 'PMS Item Group', value: config.pms_item_group || 'Not set' },
                     { label: 'PMS VAT Account', value: config.pms_vat_account || 'Not set' },
-                    { label: 'PMS Print Format', value: config.pms_print_format || 'Not set' },
+                    { label: 'PMS Print Format', value: config.pms_print_format || 'Configured in Invoice Workflows' },
                 ].map(item => (
                     <div key={item.label} className="bg-gray-50 border border-gray-100 rounded-xl p-4">
                         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">{item.label}</p>
@@ -2044,6 +2377,15 @@ const tabs: TabDef[] = [
         ),
     },
     {
+        id: 'invoice-workflows',
+        label: 'Invoice Workflows',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z" />
+            </svg>
+        ),
+    },
+    {
         id: 'pos-config',
         label: 'POS Config',
         icon: (
@@ -2076,6 +2418,15 @@ const tabs: TabDef[] = [
         icon: (
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'sales-persons',
+        label: 'Sales Persons',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
         ),
     },
@@ -2185,10 +2536,12 @@ const Settings: React.FC = () => {
             {/* Right: section content */}
             <div className="flex-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
                 {activeTab === 'general' && <GeneralSection />}
+                {activeTab === 'invoice-workflows' && <InvoiceWorkflowsSection />}
                 {activeTab === 'pos-config' && <PosConfigurationSection />}
                 {activeTab === 'pms-vat' && <PmsVatSection />}
                 {activeTab === 'payment-modes' && <PaymentModesSection />}
                 {activeTab === 'technicians' && <TechniciansSection />}
+                {activeTab === 'sales-persons' && <SalesPersonsSection />}
                 {activeTab === 'country-codes' && <CountryCodesSection />}
                 {activeTab === 'task-templates' && <TaskTemplatesSection />}
                 {activeTab === 'issue-templates' && <IssueTemplatesSection />}

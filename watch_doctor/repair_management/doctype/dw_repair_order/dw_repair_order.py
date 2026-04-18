@@ -5,6 +5,12 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import add_days, getdate
+
+from watch_doctor.invoice_settings import (
+	WORKFLOW_REPAIR_SERVICE,
+	apply_workflow_naming_series,
+	get_workflow_settings,
+)
 from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
 
 
@@ -432,6 +438,7 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 	invoice.posting_date = frappe.utils.nowdate()
 	invoice.due_date = frappe.utils.add_days(None, 30)  # Net 30 payment terms
 	invoice.is_pos = 1  # Mark as POS invoice to enable payment tracking
+	apply_workflow_naming_series(invoice, WORKFLOW_REPAIR_SERVICE)
 	
 	# Determine source of items
 	if source_type == "quotation" and repair_order.quotation:
@@ -524,7 +531,8 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 	
 	return {
 		"invoice_name": invoice.name,
-		"invoice_amount": invoice.grand_total or invoice.total or 0
+		"invoice_amount": invoice.grand_total or invoice.total or 0,
+		"print_format": get_workflow_settings(WORKFLOW_REPAIR_SERVICE).get("print_format") or "Standard",
 	}
 
 
