@@ -207,35 +207,39 @@ def _ensure_pms_settings():
 
 def _ensure_pms_settings_fields():
     """Add newly introduced PMS settings fields for existing sites."""
-    custom_fields = {
-        "DW PMS Settings": [
-            {
-                "fieldname": "standard_sales_taxes_template",
-                "fieldtype": "Link",
-                "label": "Standard Sales Taxes Template",
-                "options": "Sales Taxes and Charges Template",
-                "insert_after": "pms_vat_account",
-            },
-            {
-                "fieldname": "standard_item_tax_template",
-                "fieldtype": "Link",
-                "label": "Standard Item Tax Template",
-                "options": "Item Tax Template",
-                "insert_after": "standard_sales_taxes_template",
-            },
-            {
-                "fieldname": "pms_vat_divisor",
-                "fieldtype": "Float",
-                "label": "PMS VAT Divisor",
-                "insert_after": "standard_item_tax_template",
-            },
-            {
-                "fieldname": "pms_print_format",
-                "fieldtype": "Link",
-                "label": "PMS Print Format",
-                "options": "Print Format",
-                "insert_after": "sb_print",
-            },
-        ],
-    }
-    create_custom_fields(custom_fields, update=True)
+    field_definitions = [
+        {
+            "fieldname": "standard_sales_taxes_template",
+            "fieldtype": "Link",
+            "label": "Standard Sales Taxes Template",
+            "options": "Sales Taxes and Charges Template",
+            "insert_after": "pms_vat_account",
+        },
+        {
+            "fieldname": "standard_item_tax_template",
+            "fieldtype": "Link",
+            "label": "Standard Item Tax Template",
+            "options": "Item Tax Template",
+            "insert_after": "standard_sales_taxes_template",
+        },
+        {
+            "fieldname": "pms_vat_divisor",
+            "fieldtype": "Float",
+            "label": "PMS VAT Divisor",
+            "insert_after": "standard_item_tax_template",
+        },
+        {
+            "fieldname": "pms_print_format",
+            "fieldtype": "Link",
+            "label": "PMS Print Format",
+            "options": "Print Format",
+            "insert_after": "sb_print",
+        },
+    ]
+
+    meta = frappe.get_meta("DW PMS Settings")
+    missing_fields = [field for field in field_definitions if not meta.get_field(field["fieldname"])]
+    if not missing_fields:
+        return
+
+    create_custom_fields({"DW PMS Settings": missing_fields}, update=True)
