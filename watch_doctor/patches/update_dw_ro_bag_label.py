@@ -46,7 +46,7 @@ LABEL_HTML = """<style>
     gap: 2px;
   }
   .dw-lbl .ro-id {
-    font-size: 9pt;
+    font-size: 15pt;
     font-weight: bold;
     display: block;
     text-align: center;
@@ -56,7 +56,7 @@ LABEL_HTML = """<style>
     text-overflow: ellipsis;
   }
   .dw-lbl .cust-name {
-    font-size: 7pt;
+    font-size: 10pt;
     font-weight: bold;
     display: block;
     text-align: center;
@@ -65,7 +65,7 @@ LABEL_HTML = """<style>
     text-overflow: ellipsis;
   }
   .dw-lbl .mobile {
-    font-size: 7pt;
+    font-size: 10pt;
     display: block;
     text-align: center;
     letter-spacing: 0.02em;
