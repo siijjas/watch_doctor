@@ -556,11 +556,8 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
 
   const handlePrintLabel = async () => {
     try {
-      const response = await apiService.apiFetch('/api/method/watch_doctor.api.get_ro_label_print_format', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      const printFormat = response.message?.print_format || 'DW RO Bag Label';
+      const response = await apiService.getRepairOrderLabelPrintFormat();
+      const printFormat = response.print_format || 'DW RO Bag Label';
       const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(order.name)}&format=${encodeURIComponent(printFormat)}&no_letterhead=1`;
       const win = window.open(url, '_blank', 'width=400,height=320,menubar=no,toolbar=no,location=no,status=no');
       if (win) {

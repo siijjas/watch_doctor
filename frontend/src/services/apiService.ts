@@ -731,6 +731,10 @@ export interface SalesInvoicePrintContext {
     print_format: string;
 }
 
+export interface RepairOrderLabelPrintFormat {
+    print_format: string;
+}
+
 export const getAppConfig = async (): Promise<AppConfigResponse> => {
     const res = await apiFetch('/api/method/watch_doctor.api.get_app_config', {
         method: 'POST',
@@ -761,6 +765,14 @@ export const getSalesInvoicePrintContext = async (invoiceName: string): Promise<
         body: JSON.stringify({ invoice_name: invoiceName }),
     });
     return res.message;
+};
+
+export const getRepairOrderLabelPrintFormat = async (): Promise<RepairOrderLabelPrintFormat> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_ro_label_print_format', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message || { print_format: 'DW RO Bag Label' };
 };
 
 export const saveLogoUrl = async (logoUrl: string): Promise<void> => {
