@@ -72,6 +72,18 @@ def _ensure_invoice_settings():
 				"label": "Print Format",
 				"options": "Print Format",
 			},
+			{
+				"fieldname": "ro_section",
+				"fieldtype": "Section Break",
+				"label": "Repair Order",
+			},
+			{
+				"fieldname": "ro_label_print_format",
+				"fieldtype": "Link",
+				"label": "Bag Label Print Format",
+				"options": "Print Format",
+				"description": "Print format used for repair order bag labels (thermal label 1.5in × 1in).",
+			},
 		],
 		"permissions": [
 			{"role": "System Manager", "read": 1, "write": 1, "create": 1},
@@ -84,3 +96,4 @@ def _ensure_invoice_settings():
 	frappe.db.set_single_value("DW Invoice Settings", "repair_service_print_format", "Standard")
 	frappe.db.set_single_value("DW Invoice Settings", "pos_standard_print_format", "DW POS Retail Receipt")
 	frappe.db.set_single_value("DW Invoice Settings", "pos_pms_print_format", "DW PMS Tax Invoice")
+	frappe.db.set_single_value("DW Invoice Settings", "ro_label_print_format", "DW RO Bag Label")

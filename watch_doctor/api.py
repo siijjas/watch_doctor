@@ -136,6 +136,7 @@ def save_invoice_workflow_configuration(
 	pos_standard_print_format: str = "",
 	pos_pms_naming_series: str = "",
 	pos_pms_print_format: str = "",
+	ro_label_print_format: str = "",
 ):
 	"""Persist centralized naming series and print formats for invoice workflows."""
 	require_roles(ROLE_EXECUTIVE)
@@ -151,6 +152,7 @@ def save_invoice_workflow_configuration(
 		"pos_standard_print_format": pos_standard_print_format or "",
 		"pos_pms_naming_series": pos_pms_naming_series or "",
 		"pos_pms_print_format": pos_pms_print_format or "",
+		"ro_label_print_format": ro_label_print_format or "",
 	}
 	validate_invoice_workflow_settings(config)
 
@@ -170,6 +172,13 @@ def save_invoice_workflow_configuration(
 def get_sales_invoice_print_context_api(invoice_name: str):
 	"""Return workflow-aware print format metadata for a Sales Invoice."""
 	return get_sales_invoice_print_context(invoice_name)
+
+
+@frappe.whitelist()
+def get_ro_label_print_format():
+	"""Return the configured repair order label print format."""
+	from watch_doctor.invoice_settings import get_ro_label_print_format
+	return {"print_format": get_ro_label_print_format()}
 
 
 @frappe.whitelist()

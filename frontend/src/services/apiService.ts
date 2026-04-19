@@ -717,11 +717,13 @@ export interface InvoiceWorkflowConfiguration {
     pos_standard_print_format: string;
     pos_pms_naming_series: string;
     pos_pms_print_format: string;
+    ro_label_print_format: string;
 }
 
 export interface InvoiceWorkflowConfigurationOptions {
     naming_series: string[];
     print_formats: string[];
+    repair_order_print_formats: string[];
 }
 
 export interface SalesInvoicePrintContext {

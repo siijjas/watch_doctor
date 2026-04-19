@@ -1925,6 +1925,24 @@ const InvoiceWorkflowsSection: React.FC = () => {
                         </select>
                     </div>
                 </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-5 space-y-4">
+                    <div>
+                        <h4 className="text-base font-semibold text-gray-900">Repair Order</h4>
+                        <p className="text-sm text-gray-500 mt-1">Print format for thermal bag labels (1.5in × 1in) used to track repair jobs.</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Bag Label Print Format</label>
+                        <select
+                            className="w-full p-2.5 border border-gray-300 rounded-xl shadow-sm focus:ring-purple-500 focus:border-purple-500 bg-white"
+                            value={config.ro_label_print_format}
+                            onChange={e => updateConfig('ro_label_print_format', e.target.value)}
+                        >
+                            <option value="">Select format…</option>
+                            {options.repair_order_print_formats.map(format => <option key={format} value={format}>{format}</option>)}
+                        </select>
+                    </div>
+                </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

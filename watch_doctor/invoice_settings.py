@@ -16,6 +16,7 @@ DEFAULT_INVOICE_SETTINGS = {
 	"pos_standard_print_format": "DW POS Retail Receipt",
 	"pos_pms_naming_series": "",
 	"pos_pms_print_format": "DW PMS Tax Invoice",
+	"ro_label_print_format": "DW RO Bag Label",
 }
 
 
@@ -53,6 +54,23 @@ def get_sales_invoice_print_format_options() -> list[str]:
 	)
 
 
+def get_repair_order_print_format_options() -> list[str]:
+	"""Return active Repair Order print formats."""
+	return frappe.get_all(
+		"Print Format",
+		filters={"doc_type": "DW Repair Order", "disabled": 0},
+		pluck="name",
+		order_by="name asc",
+		limit_page_length=200,
+	)
+
+
+def get_ro_label_print_format() -> str:
+	"""Return the configured repair order label print format."""
+	config = get_invoice_workflow_settings()
+	return config.get("ro_label_print_format") or "DW RO Bag Label"
+
+
 def get_invoice_workflow_settings() -> dict:
 	"""Return centralized workflow settings with safe defaults."""
 	cached = getattr(frappe.local, "dw_invoice_settings", None)
@@ -77,6 +95,7 @@ def get_invoice_workflow_options() -> dict:
 	return {
 		"naming_series": get_sales_invoice_naming_series_options(),
 		"print_formats": get_sales_invoice_print_format_options(),
+		"repair_order_print_formats": get_repair_order_print_format_options(),
 	}
 
 
@@ -103,6 +122,7 @@ def validate_invoice_workflow_settings(config: dict):
 	"""Validate centralized workflow settings before save."""
 	available_series = set(get_sales_invoice_naming_series_options())
 	active_print_formats = set(get_sales_invoice_print_format_options())
+	active_ro_formats = set(get_repair_order_print_format_options())
 
 	for fieldname in (
 		"repair_service_naming_series",
@@ -123,6 +143,11 @@ def validate_invoice_workflow_settings(config: dict):
 			continue
 		if value and value not in active_print_formats:
 			frappe.throw(f"Print Format {value} is not an active Sales Invoice print format")
+
+	# Validate repair order label print format
+	ro_format = (config.get("ro_label_print_format") or "").strip()
+	if ro_format and ro_format not in active_ro_formats:
+		frappe.throw(f"Print Format {ro_format} is not an active DW Repair Order print format")
 
 
 def get_pos_invoice_workflow(has_pms_items: bool) -> str:
