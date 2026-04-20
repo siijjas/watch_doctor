@@ -605,7 +605,7 @@ def get_watch_brands(txt: str = ""):
 		"DW Watch Brand",
 		fields=["name", "brand_name", "description"],
 		filters=filters,
-		limit_page_length=100,
+		limit_page_length=500,
 		order_by="brand_name asc"
 	)
 	

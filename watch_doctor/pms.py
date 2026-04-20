@@ -226,13 +226,12 @@ def si_validate(doc, method=None):
 
     This runs on validate so the data is always fresh before submission.
     """
-    config = require_pms_runtime_configuration()
-
     pms_item_codes, _non_pms_item_codes = validate_pms_item_mix(
         [item.item_code for item in doc.items if item.item_code]
     )
 
     has_pms = bool(pms_item_codes)
+    config = require_pms_runtime_configuration() if has_pms else {}
     total_pms_vat = 0.0
 
     for item in doc.items:

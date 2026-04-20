@@ -519,6 +519,11 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                                 });
                                             }
                                         }}
+                                        onSearch={async (query) => {
+                                            if (!isErpNext) return;
+                                            const results = await apiService.getWatchBrands(query);
+                                            setDependencies(prev => ({ ...prev, brands: results }));
+                                        }}
                                         onCreate={(query) => {
                                             setCreateBrandQuery(query);
                                             setActiveBrandIndex(itemIndex);
@@ -537,6 +542,12 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                             }))}
                                         value={formData.items[itemIndex]?.watch_model || ''}
                                         onChange={(value) => handleItemChange(itemIndex, 'watch_model', value)}
+                                        onSearch={async (query) => {
+                                            const brand = formData.items[itemIndex]?.watch_brand;
+                                            if (!isErpNext || !brand) return;
+                                            const results = await apiService.getWatchModels(brand, query);
+                                            setDependencies(prev => ({ ...prev, models: results }));
+                                        }}
                                         onCreate={(query) => {
                                             setCreateModelQuery(query);
                                             setCreateModelBrand(formData.items[itemIndex].watch_brand);

@@ -81,7 +81,10 @@ def get_invoice_workflow_settings() -> dict:
 
 	try:
 		if frappe.db.exists("DocType", "DW Invoice Settings"):
+			meta = frappe.get_meta("DW Invoice Settings")
 			for fieldname in DEFAULT_INVOICE_SETTINGS:
+				if not meta.get_field(fieldname):
+					continue
 				config[fieldname] = frappe.db.get_single_value("DW Invoice Settings", fieldname) or config[fieldname]
 	except Exception:
 		pass
