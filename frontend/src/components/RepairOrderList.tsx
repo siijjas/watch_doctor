@@ -10,12 +10,13 @@ interface RepairOrderListProps {
   initialSearch?: string;
 }
 
-const STATUS_OPTIONS = ['All', 'Pending', 'In Progress', 'Awaiting Parts', 'Repaired', 'Delivered', 'Cancelled'];
+const STATUS_OPTIONS = ['All', 'Pending', 'In Progress', 'Create Estimate', 'Awaiting Parts', 'Repaired', 'Delivered', 'Cancelled'];
 
 const DREELIO_STATUS_STYLES: { [key: string]: string } = {
   'Pending': 'bg-stone-200 text-stone-700',
   'In Progress': 'bg-blue-200 text-blue-700',
   'In Repair': 'bg-blue-200 text-blue-700',
+  'Create Estimate': 'bg-orange-200 text-orange-700',
   'Awaiting Parts': 'bg-amber-200 text-amber-700',
   'Repaired': 'bg-emerald-200 text-emerald-700',
   'Delivered': 'bg-violet-200 text-violet-700',
@@ -50,7 +51,11 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
       // Status filter
-      if (statusFilter !== 'All' && order.status !== statusFilter) {
+      if (statusFilter === 'In Progress') {
+        if (!['In Progress', 'Create Estimate'].includes(order.status)) {
+          return false;
+        }
+      } else if (statusFilter !== 'All' && order.status !== statusFilter) {
         return false;
       }
 

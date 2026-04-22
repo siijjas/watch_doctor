@@ -202,9 +202,10 @@ class DWRepairOrder(Document):
 	
 	# Define valid status transitions
 	VALID_TRANSITIONS = {
-		"Pending": ["In Progress", "Repaired"],
-		"In Progress": ["Repaired", "Pending"],
-		"Repaired": ["In Progress", "Delivered"],
+		"Pending": ["In Progress", "Create Estimate", "Repaired"],
+		"In Progress": ["Create Estimate", "Repaired", "Pending"],
+		"Create Estimate": ["In Progress", "Repaired", "Pending"],
+		"Repaired": ["In Progress", "Create Estimate", "Delivered"],
 		"Delivered": ["Repaired"]  # Allow undoing delivery if needed (with care)
 	}
 	
@@ -304,12 +305,15 @@ class DWRepairOrder(Document):
 		# All items Completed/Delivered → Repaired
 		if all(s in {WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED} for s in item_statuses):
 			return "Repaired"
+
+		# If any watch is awaiting estimate approval, bubble the order to Create Estimate.
+		if any(s == WATCH_STATUS_APPROVAL_FOR_ESTIMATE for s in item_statuses):
+			return WATCH_STATUS_APPROVAL_FOR_ESTIMATE
 		
 		# Any active item beyond intake/diagnosis → In Progress
 		if any(s in {
 			WATCH_STATUS_UNDER_DIAGNOSIS,
 			WATCH_STATUS_DIAGNOSED,
-			WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
 			WATCH_STATUS_QUOTED,
 			WATCH_STATUS_IN_REPAIR,
 			WATCH_STATUS_COMPLETED,

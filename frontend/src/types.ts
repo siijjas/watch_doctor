@@ -1,6 +1,7 @@
 export enum OrderStatus {
     Pending = 'Pending',
     InProgress = 'In Progress',
+    CreateEstimate = 'Create Estimate',
     AwaitingParts = 'Awaiting Parts',
     Repaired = 'Repaired',
     Delivered = 'Delivered',

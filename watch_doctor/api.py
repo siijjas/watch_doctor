@@ -810,10 +810,11 @@ def save_repair_order(doc_json):
 	if item_statuses:
 		if all(status in {WATCH_STATUS_COMPLETED, 'Delivered'} for status in item_statuses):
 			doc_dict['status'] = 'Repaired'
+		elif any(status == WATCH_STATUS_APPROVAL_FOR_ESTIMATE for status in item_statuses):
+			doc_dict['status'] = WATCH_STATUS_APPROVAL_FOR_ESTIMATE
 		elif any(status in {
 			WATCH_STATUS_UNDER_DIAGNOSIS,
 			WATCH_STATUS_DIAGNOSED,
-			WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
 			WATCH_STATUS_QUOTED,
 			WATCH_STATUS_IN_REPAIR,
 			WATCH_STATUS_COMPLETED,
@@ -1426,7 +1427,7 @@ def get_dashboard_stats(days: int = 7):
 	return {
 		"total_orders": total_orders,
 		"pending": status_map.get("Pending", 0),
-		"in_progress": status_map.get("In Progress", 0),
+		"in_progress": status_map.get("In Progress", 0) + status_map.get("Create Estimate", 0),
 		"awaiting_parts": status_map.get("Awaiting Parts", 0),
 		"repaired": status_map.get("Repaired", 0),
 		"delivered": status_map.get("Delivered", 0),

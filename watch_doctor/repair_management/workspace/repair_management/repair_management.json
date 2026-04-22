@@ -12,7 +12,7 @@
  "is_hidden": 0,
  "label": "Repair Management",
  "links": [],
- "modified": "2025-12-21 20:35:10.384076",
+ "modified": "2026-04-22 20:28:15.854388",
  "modified_by": "Administrator",
  "module": "Repair Management",
  "name": "Repair Management",
@@ -22,6 +22,14 @@
  "quick_lists": [],
  "roles": [],
  "sequence_id": 1.0,
- "shortcuts": [],
+ "shortcuts": [
+  {
+   "doc_view": "",
+   "label": "Create Estimate Queue",
+   "link_to": "DW Create Estimate Queue",
+   "report_ref_doctype": "DW Repair Order",
+   "type": "Report"
+  }
+ ],
  "title": "Repair Management"
 }

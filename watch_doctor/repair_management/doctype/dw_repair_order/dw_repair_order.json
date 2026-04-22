@@ -65,7 +65,7 @@
             "fieldname": "status",
             "fieldtype": "Select",
             "label": "Status",
-            "options": "\nPending\nIn Progress\nAwaiting Parts\nRepaired\nDelivered",
+            "options": "\nPending\nIn Progress\nCreate Estimate\nAwaiting Parts\nRepaired\nDelivered",
             "default": "Pending",
             "in_list_view": 1
         },
