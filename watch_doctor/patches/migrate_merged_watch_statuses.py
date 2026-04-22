@@ -5,6 +5,7 @@ import frappe
 
 def execute():
 	from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import DWRepairOrder
+	has_diagnosis_status_column = frappe.db.has_column("DW Repair Item", "diagnosis_status")
 
 	order_names = frappe.get_all("DW Repair Order", filters={"docstatus": 0}, pluck="name")
 	for order_name in order_names:
@@ -26,13 +27,16 @@ def execute():
 			continue
 
 		for item in (order.items or []):
+			item_values = {
+				"status": item.status or "",
+			}
+			if has_diagnosis_status_column:
+				item_values["diagnosis_status"] = getattr(item, "diagnosis_status", "") or ""
+
 			frappe.db.set_value(
 				"DW Repair Item",
 				item.name,
-				{
-					"status": item.status or "",
-					"diagnosis_status": getattr(item, "diagnosis_status", "") or "",
-				},
+				item_values,
 				update_modified=False,
 			)
 
