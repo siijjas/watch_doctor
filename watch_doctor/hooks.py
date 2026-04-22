@@ -255,6 +255,12 @@ after_migrate = [
     "watch_doctor.patches.reload_dw_doctypes.execute",
     "watch_doctor.setup_roles.execute",
     "watch_doctor.patches.grant_native_doctype_permissions.execute",
+    "watch_doctor.setup_general_configuration.execute",
+    "watch_doctor.setup_diagnosis_summary_templates.execute",
+    "watch_doctor.setup_movement_type_templates.execute",
+    "watch_doctor.setup_movement_caliber_templates.execute",
+    "watch_doctor.setup_movement_info_templates.execute",
+    "watch_doctor.setup_watch_condition_templates.execute",
     "watch_doctor.setup_pms.execute",
     "watch_doctor.setup_invoice_settings.execute",
     "watch_doctor.setup_pos_enhancements.execute",
@@ -265,7 +271,7 @@ after_migrate = [
 fixtures = [
     {
         "doctype": "DocType",
-        "filters": [["name", "in", ["DW Technician", "DW Repair Order", "DW Repair Item", "DW Repair Task", "DW Repair Part Used", "DW Task Template", "DW Test"]]],
+        "filters": [["name", "in", ["DW Technician", "DW Repair Order", "DW Repair Item", "DW Repair Task", "DW Repair Part Used", "DW Task Template", "DW Watch Condition Template", "DW Diagnosis Summary Template", "DW Movement Information Template", "DW Movement Type Template", "DW Movement Caliber Template", "DW Test"]]],
     },
     {
         "doctype": "Role",

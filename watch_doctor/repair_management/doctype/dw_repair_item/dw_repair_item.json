@@ -8,6 +8,15 @@
         "serial_number",
         "issues",
         "issue_description",
+        "pre_existing_condition",
+        "diagnosis_status",
+        "diagnosis_summary",
+        "movement_type",
+        "movement_caliber",
+        "movement_information",
+        "recommended_work",
+        "diagnosed_by",
+        "diagnosis_date",
         "technician",
         "status",
         "intake_checklist",
@@ -48,6 +57,57 @@
             "label": "Issue Description (Auto-generated)"
         },
         {
+            "fieldname": "pre_existing_condition",
+            "fieldtype": "Small Text",
+            "label": "Pre-Existing Watch Condition"
+        },
+        {
+            "fieldname": "diagnosis_status",
+            "fieldtype": "Select",
+            "label": "Diagnosis Status",
+            "options": "\nPending Diagnosis\nDiagnosed\nNot Repairable\nAwaiting Approval\nQuoted\nDeclined",
+            "default": "Pending Diagnosis"
+        },
+        {
+            "fieldname": "diagnosis_summary",
+            "fieldtype": "Small Text",
+            "label": "Diagnosis Summary"
+        },
+        {
+            "fieldname": "movement_type",
+            "fieldtype": "Small Text",
+            "label": "Movement Type"
+        },
+        {
+            "fieldname": "movement_caliber",
+            "fieldtype": "Small Text",
+            "label": "Movement Caliber"
+        },
+        {
+            "fieldname": "movement_information",
+            "fieldtype": "Small Text",
+            "hidden": 1,
+            "label": "Movement Information"
+        },
+        {
+            "fieldname": "recommended_work",
+            "fieldtype": "Small Text",
+            "label": "Recommended Work"
+        },
+        {
+            "fieldname": "diagnosed_by",
+            "fieldtype": "Link",
+            "label": "Diagnosed By",
+            "options": "DW Technician",
+            "read_only": 1
+        },
+        {
+            "fieldname": "diagnosis_date",
+            "fieldtype": "Datetime",
+            "label": "Diagnosis Date",
+            "read_only": 1
+        },
+        {
             "fieldname": "technician",
             "fieldtype": "Link",
             "label": "Technician",
@@ -57,7 +117,7 @@
             "fieldname": "status",
             "fieldtype": "Select",
             "label": "Watch Status",
-            "options": "\nPending\nIn Repair\nAwaiting Parts\nOn Hold\nRepaired\nDelivered",
+            "options": "\nPending\nUnder Diagnosis\nDiagnosed\nCreate Estimate\nQuoted\nIn Repair\nCompleted\nNot Repairable\nDeclined\nDelivered",
             "default": "Pending",
             "in_list_view": 1
         },

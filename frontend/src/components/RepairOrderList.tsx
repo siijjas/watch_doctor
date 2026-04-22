@@ -54,12 +54,13 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
         return false;
       }
 
-      // Search filter (order ID, reference number, customer name, technician, issue)
+      // Search filter (order ID, reference number, customer name/mobile, technician, issue)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
         const matchesId = order.name?.toLowerCase().includes(query);
         const matchesRef = (order.reference_number || '').toLowerCase().includes(query);
         const matchesCustomer = (order.customer_name || order.customer || '').toLowerCase().includes(query);
+        const matchesMobile = (order.customer_mobile || '').toLowerCase().includes(query);
 
         // Search in items for technician or issues
         const matchesTechnician = order.items?.some(item =>
@@ -67,10 +68,11 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
         );
         const matchesIssue = order.items?.some(item =>
           (item.issue_description || '').toLowerCase().includes(query) ||
+          (item.pre_existing_condition || []).some(condition => condition.toLowerCase().includes(query)) ||
           item.issues?.some(i => i.issue.toLowerCase().includes(query))
         );
 
-        if (!matchesId && !matchesRef && !matchesCustomer && !matchesTechnician && !matchesIssue) {
+        if (!matchesId && !matchesRef && !matchesCustomer && !matchesMobile && !matchesTechnician && !matchesIssue) {
           return false;
         }
       }
@@ -100,7 +102,7 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
           </div>
           <input
             type="text"
-            placeholder="Search by Order ID, Ref No, or Customer..."
+            placeholder="Search by Order ID, Ref No, Customer, or Mobile..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-12 pr-4 py-3 rounded-xl bg-white text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-gray-200 shadow-sm"

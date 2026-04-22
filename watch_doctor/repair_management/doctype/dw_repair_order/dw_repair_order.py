@@ -14,6 +14,158 @@ from watch_doctor.invoice_settings import (
 from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
 
 
+WATCH_STATUS_PENDING = "Pending"
+WATCH_STATUS_UNDER_DIAGNOSIS = "Under Diagnosis"
+WATCH_STATUS_DIAGNOSED = "Diagnosed"
+WATCH_STATUS_APPROVAL_FOR_ESTIMATE = "Create Estimate"
+WATCH_STATUS_QUOTED = "Quoted"
+WATCH_STATUS_IN_REPAIR = "In Repair"
+WATCH_STATUS_COMPLETED = "Completed"
+WATCH_STATUS_DELIVERED = "Delivered"
+WATCH_STATUS_NOT_REPAIRABLE = "Not Repairable"
+WATCH_STATUS_DECLINED = "Declined"
+
+LEGACY_WATCH_STATUS_MAP = {
+	"Awaiting Approval": WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+	"Approval for Estimate": WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+	"Awaiting Parts": WATCH_STATUS_IN_REPAIR,
+	"On Hold": WATCH_STATUS_UNDER_DIAGNOSIS,
+	"Pending Diagnosis": WATCH_STATUS_UNDER_DIAGNOSIS,
+	"Repaired": WATCH_STATUS_COMPLETED,
+}
+
+FINAL_ITEM_STATUSES = {
+	WATCH_STATUS_COMPLETED,
+	WATCH_STATUS_DELIVERED,
+	WATCH_STATUS_NOT_REPAIRABLE,
+	WATCH_STATUS_DECLINED,
+}
+
+MANUAL_ITEM_STATUSES = {
+	WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+	WATCH_STATUS_QUOTED,
+	WATCH_STATUS_IN_REPAIR,
+	WATCH_STATUS_COMPLETED,
+	WATCH_STATUS_DELIVERED,
+	WATCH_STATUS_NOT_REPAIRABLE,
+	WATCH_STATUS_DECLINED,
+}
+
+DIAGNOSIS_TO_WATCH_STATUS = {
+	"Pending Diagnosis": WATCH_STATUS_UNDER_DIAGNOSIS,
+	"Diagnosed": WATCH_STATUS_DIAGNOSED,
+	"Awaiting Approval": WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+	"Quoted": WATCH_STATUS_QUOTED,
+	"Not Repairable": WATCH_STATUS_NOT_REPAIRABLE,
+	"Declined": WATCH_STATUS_DECLINED,
+}
+
+WATCH_TO_DIAGNOSIS_STATUS = {
+	WATCH_STATUS_PENDING: "Pending Diagnosis",
+	WATCH_STATUS_UNDER_DIAGNOSIS: "Pending Diagnosis",
+	WATCH_STATUS_DIAGNOSED: "Diagnosed",
+	WATCH_STATUS_APPROVAL_FOR_ESTIMATE: "Awaiting Approval",
+	WATCH_STATUS_QUOTED: "Quoted",
+	WATCH_STATUS_NOT_REPAIRABLE: "Not Repairable",
+	WATCH_STATUS_DECLINED: "Declined",
+}
+
+
+def normalize_repair_item_status(status):
+	status = str(status or "").strip()
+	if not status:
+		return WATCH_STATUS_PENDING
+	return LEGACY_WATCH_STATUS_MAP.get(status, status)
+
+
+def normalize_diagnosis_status(status):
+	status = str(status or "").strip()
+	if not status:
+		return ""
+	return WATCH_TO_DIAGNOSIS_STATUS.get(status, status)
+
+
+def _normalize_string_list(value):
+	if not value:
+		return []
+	if isinstance(value, list):
+		return [str(entry).strip() for entry in value if str(entry).strip()]
+	if isinstance(value, str):
+		value = value.strip()
+		if not value:
+			return []
+		if value.startswith("[") and value.endswith("]"):
+			try:
+				import json
+
+				parsed = json.loads(value)
+				if isinstance(parsed, list):
+					return [str(entry).strip() for entry in parsed if str(entry).strip()]
+			except Exception:
+				pass
+		return [value]
+	return [str(value).strip()]
+
+
+def has_repair_item_diagnosis_content(item):
+	return any([
+		_normalize_string_list(getattr(item, "diagnosis_summary", None)),
+		_normalize_string_list(getattr(item, "movement_type", None)),
+		_normalize_string_list(getattr(item, "movement_caliber", None)),
+		_normalize_string_list(getattr(item, "recommended_work", None)),
+	])
+
+
+def resolve_repair_item_status(current_status=None, diagnosis_status=None, technician=None, recommended_work=None, task_statuses=None):
+	status = normalize_repair_item_status(current_status)
+	diagnosis_status = normalize_diagnosis_status(diagnosis_status)
+	task_statuses = [str(task_status).strip() for task_status in (task_statuses or []) if str(task_status).strip()]
+	has_recommended_work = bool(_normalize_string_list(recommended_work))
+	has_technician = bool(str(technician or "").strip())
+
+	if status == WATCH_STATUS_DELIVERED:
+		return WATCH_STATUS_DELIVERED
+
+	if task_statuses:
+		if all(task_status == "Completed" for task_status in task_statuses):
+			return WATCH_STATUS_COMPLETED
+		if any(task_status in {"In Progress", "Completed"} for task_status in task_statuses):
+			return WATCH_STATUS_IN_REPAIR
+
+	if status in FINAL_ITEM_STATUSES:
+		return status
+
+	diagnosis_mapped_status = DIAGNOSIS_TO_WATCH_STATUS.get(diagnosis_status)
+	if diagnosis_mapped_status in {WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED, WATCH_STATUS_QUOTED, WATCH_STATUS_APPROVAL_FOR_ESTIMATE}:
+		return diagnosis_mapped_status
+
+	if status in MANUAL_ITEM_STATUSES:
+		return status
+
+	if diagnosis_mapped_status == WATCH_STATUS_DIAGNOSED or has_recommended_work:
+		return WATCH_STATUS_DIAGNOSED
+
+	if has_technician:
+		return WATCH_STATUS_UNDER_DIAGNOSIS
+
+	return WATCH_STATUS_PENDING
+
+
+def resolve_repair_item_diagnosis_status(item_status, current_diagnosis_status=None, has_diagnosis_content=False):
+	item_status = normalize_repair_item_status(item_status)
+	current_diagnosis_status = normalize_diagnosis_status(current_diagnosis_status)
+
+	if item_status in WATCH_TO_DIAGNOSIS_STATUS:
+		return WATCH_TO_DIAGNOSIS_STATUS[item_status]
+
+	if item_status in {WATCH_STATUS_IN_REPAIR, WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED}:
+		if current_diagnosis_status in {"Quoted", "Awaiting Approval", "Not Repairable", "Declined"}:
+			return current_diagnosis_status
+		return "Diagnosed" if has_diagnosis_content else "Pending Diagnosis"
+
+	return "Diagnosed" if has_diagnosis_content else "Pending Diagnosis"
+
+
 class DWRepairOrder(Document):
 	"""DW Repair Order - Main doctype for managing watch repair orders."""
 	DEFAULT_NAMING_SERIES = "YY.MM.####"
@@ -50,10 +202,9 @@ class DWRepairOrder(Document):
 	
 	# Define valid status transitions
 	VALID_TRANSITIONS = {
-		"Pending": ["In Progress", "Awaiting Parts", "Repaired"], # Added Repaired for quick completion
-		"In Progress": ["Awaiting Parts", "Repaired", "Pending"], # Added Pending for corrections
-		"Awaiting Parts": ["In Progress", "Repaired"],
-		"Repaired": ["In Progress", "Awaiting Parts", "Delivered"], # Added backward paths
+		"Pending": ["In Progress", "Repaired"],
+		"In Progress": ["Repaired", "Pending"],
+		"Repaired": ["In Progress", "Delivered"],
 		"Delivered": ["Repaired"]  # Allow undoing delivery if needed (with care)
 	}
 	
@@ -70,11 +221,8 @@ class DWRepairOrder(Document):
 		# Store current status before auto-updates
 		status_before_auto_update = self.status
 		
-		# Auto-update item statuses based on task completion
-		self.update_item_statuses_from_tasks()
-		
-		# Auto-update item statuses based on technician assignment
-		self.update_item_statuses_from_technician()
+		# Auto-update item and diagnosis statuses from the merged workflow.
+		self.update_item_statuses_from_workflow()
 		
 		# Auto-update order status based on item statuses
 		self.update_order_status_from_items()
@@ -93,11 +241,11 @@ class DWRepairOrder(Document):
 	
 	def before_submit(self):
 		"""Validate before submitting the order."""
-		# Check all items are Repaired or Delivered
+		# Check all items are Completed or Delivered
 		for item in self.items:
-			if item.status not in ["Repaired", "Delivered"]:
+			if normalize_repair_item_status(item.status) not in [WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED]:
 				frappe.throw(
-					_("Cannot submit: Item '{0}' is still in '{1}' status. All items must be Repaired or Delivered.").format(
+					_("Cannot submit: Item '{0}' is still in '{1}' status. All items must be Completed or Delivered.").format(
 						f"{item.watch_brand} {item.watch_model}", item.status
 					)
 				)
@@ -146,21 +294,26 @@ class DWRepairOrder(Document):
 		"""Calculate what the order status should be based on item statuses."""
 		if not item_statuses:
 			return "Pending"
+
+		item_statuses = [normalize_repair_item_status(status) for status in item_statuses]
 		
 		# All items Delivered → Delivered (but this requires submit)
-		if all(s == "Delivered" for s in item_statuses):
+		if all(s == WATCH_STATUS_DELIVERED for s in item_statuses):
 			return "Repaired"  # Will become Delivered on submit
 		
-		# All items Repaired → Repaired
-		if all(s == "Repaired" for s in item_statuses):
+		# All items Completed/Delivered → Repaired
+		if all(s in {WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED} for s in item_statuses):
 			return "Repaired"
 		
-		# Any item Awaiting Parts → Awaiting Parts
-		if any(s == "Awaiting Parts" for s in item_statuses):
-			return "Awaiting Parts"
-		
-		# Any item In Repair → In Progress
-		if any(s == "In Repair" for s in item_statuses):
+		# Any active item beyond intake/diagnosis → In Progress
+		if any(s in {
+			WATCH_STATUS_UNDER_DIAGNOSIS,
+			WATCH_STATUS_DIAGNOSED,
+			WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+			WATCH_STATUS_QUOTED,
+			WATCH_STATUS_IN_REPAIR,
+			WATCH_STATUS_COMPLETED,
+		} for s in item_statuses):
 			return "In Progress"
 		
 		# Otherwise Pending
@@ -195,8 +348,8 @@ class DWRepairOrder(Document):
 		allowed = self.VALID_TRANSITIONS.get(from_status, [])
 		return to_status in allowed
 	
-	def update_item_statuses_from_tasks(self):
-		"""Auto-update item statuses based on task completion."""
+	def update_item_statuses_from_workflow(self):
+		"""Auto-update item and diagnosis statuses using the merged workflow."""
 		# Get all tasks grouped by repair_item_key
 		tasks_by_item = {}
 		for task in self.all_tasks:
@@ -210,41 +363,19 @@ class DWRepairOrder(Document):
 			# Use idx as the key (1-based index)
 			item_key = str(item.idx)
 			item_tasks = tasks_by_item.get(item_key, [])
-			
-			if not item_tasks:
-				# No tasks for this item, skip auto-update
-				continue
-			
-			# Get all task statuses
 			task_statuses = [task.status for task in item_tasks]
-			
-			# Don't update if item is already Delivered
-			if item.status == "Delivered":
-				continue
-			
-			# LOGIC:
-			# 1. All Tasks Completed -> Repaired
-			# 2. Any Task In Progress/Completed AND Not All Completed -> In Repair
-			# 3. All Tasks Pending -> Pending (Optional, but good for total reset)
-			
-			# If all tasks are completed, mark item as Repaired
-			if all(status == "Completed" for status in task_statuses):
-				item.status = "Repaired"
-				
-			# If any task is running/done but NOT ALL are done
-			elif any(status in ["In Progress", "Completed"] for status in task_statuses):
-				# Force to In Repair, even if it was previously Repaired or Pending
-				item.status = "In Repair"
-				
-			# If all tasks are Pending, we might arguably revert to Pending,
-			# but usually once technician is assigned/parts added we stay In Repair.
-			# Let's leave Pending logic to manual or technician assignment.
-	
-	def update_item_statuses_from_technician(self):
-		"""Auto-update item status when a technician is assigned."""
-		for item in self.items:
-			if item.technician and item.status == "Pending":
-				item.status = "In Repair"
+			item.status = resolve_repair_item_status(
+				current_status=item.status,
+				diagnosis_status=getattr(item, "diagnosis_status", None),
+				technician=getattr(item, "technician", None),
+				recommended_work=getattr(item, "recommended_work", None),
+				task_statuses=task_statuses,
+			)
+			item.diagnosis_status = resolve_repair_item_diagnosis_status(
+				item.status,
+				current_diagnosis_status=getattr(item, "diagnosis_status", None),
+				has_diagnosis_content=has_repair_item_diagnosis_content(item),
+			)
 
 
 # Quotation Generation Methods
@@ -287,55 +418,64 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	quotation.quotation_to = "Customer"
 	quotation.order_type = "Sales"
 	
-	# Add description
-	watch_desc = f"All {len(selected_items)} watches" if watch_indices is None else f"{len(selected_items)} selected watch(es)"
 	quotation.title = f"{quotation_type} Quotation for {repair_order.name}"
 	
-	# Add items from tasks and parts
+	# Add ONE item per watch (total cost; recommended_work as description)
 	total_amount = 0
-	
+
 	# Ensure we have a generic service item for tasks
 	service_item_code = get_or_create_service_item()
-	
+
 	for item in selected_items:
-		# Get tasks for this item (using repair_item_key matching)
+		# Get tasks and parts for this watch
 		item_key = str(item.idx)
 		item_tasks = [task for task in repair_order.all_tasks if task.repair_item_key == item_key]
 		item_parts = [part for part in repair_order.all_parts if part.repair_item_key == item_key]
 
 		model_name = frappe.db.get_value("DW Watch Model", item.watch_model, "model_name") or item.watch_model
-		watch_label = f"{item.watch_brand} {model_name} (S/N: {item.serial_number})"
+		watch_item_name = f"Repair - {item.watch_brand} {model_name}"
 
-		# Add tasks as quotation items
+		# Calculate total cost for this watch
+		tasks_cost = 0
 		for task in item_tasks:
-			# Fetch task template for default rate
 			task_template = frappe.get_doc("DW Task Template", task.service)
-			effective_rate = task.rate if task.rate else (task_template.default_rate or 0)
-			
-			quotation_item = quotation.append("items", {})
-			quotation_item.item_code = service_item_code  # Use generic service item
-			quotation_item.item_name = task_template.task_name
-			quotation_item.description = f"{watch_label} - {task_template.task_name}"
-			quotation_item.qty = 1
-			quotation_item.rate = effective_rate
-			quotation_item.uom = "Nos"
-			
-			total_amount += effective_rate
-		
-		# Add parts as quotation items
+			tasks_cost += task.rate if task.rate else (task_template.default_rate or 0)
+
+		parts_cost = 0
 		for part in item_parts:
 			item_doc = frappe.get_doc("Item", part.part)
-			effective_rate = part.rate if part.rate else (item_doc.standard_rate or 0)
-			
-			quotation_item = quotation.append("items", {})
-			quotation_item.item_code = part.part
-			quotation_item.item_name = item_doc.item_name
-			quotation_item.description = f"{watch_label} - {item_doc.item_name}"
-			quotation_item.qty = part.quantity
-			quotation_item.rate = effective_rate
-			quotation_item.uom = part.uom
-			
-			total_amount += (effective_rate * part.quantity)
+			parts_cost += (part.rate if part.rate else (item_doc.standard_rate or 0)) * part.quantity
+
+		watch_total = tasks_cost + parts_cost
+
+		# Build description from recommended_work (JSON array stored in field)
+		try:
+			rw_raw = item.recommended_work or "[]"
+			rw_items = json.loads(rw_raw) if isinstance(rw_raw, str) else (rw_raw or [])
+			if isinstance(rw_items, str):
+				rw_items = [rw_items] if rw_items.strip() else []
+		except Exception:
+			rw_items = []
+
+		if not rw_items and item_tasks:
+			# Fallback: use task names from templates
+			rw_items = [
+				(frappe.db.get_value("DW Task Template", task.service, "task_name") or task.service)
+				for task in item_tasks
+			]
+
+		desc_lines = "<br>".join(line for line in rw_items if str(line).strip())
+
+		# One quotation item per watch
+		quotation_item = quotation.append("items", {})
+		quotation_item.item_code = service_item_code
+		quotation_item.item_name = watch_item_name
+		quotation_item.description = desc_lines or watch_item_name
+		quotation_item.qty = 1
+		quotation_item.rate = watch_total
+		quotation_item.uom = "Nos"
+
+		total_amount += watch_total
 	
 	# Save quotation
 	quotation.insert(ignore_permissions=True)
@@ -457,50 +597,60 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 		
 		total_amount = quotation.grand_total
 	else:
-		# Create directly from repair order
+		# Create directly from repair order – ONE item per watch
 		total_amount = 0
-		
+
 		# Ensure we have a generic service item for tasks
 		service_item_code = get_or_create_service_item()
-		
+
 		for item in repair_order.items:
 			model_name = frappe.db.get_value("DW Watch Model", item.watch_model, "model_name") or item.watch_model
-			watch_label = f"{item.watch_brand} {model_name} (S/N: {item.serial_number})"
-			
-			# Get tasks and parts for this item
+			watch_item_name = f"Repair - {item.watch_brand} {model_name}"
+
+			# Get tasks and parts for this watch
 			item_key = str(item.idx)
 			item_tasks = [task for task in repair_order.all_tasks if task.repair_item_key == item_key]
 			item_parts = [part for part in repair_order.all_parts if part.repair_item_key == item_key]
-			
-			# Add tasks as invoice items
+
+			# Calculate total cost for this watch
+			tasks_cost = 0
 			for task in item_tasks:
 				task_template = frappe.get_doc("DW Task Template", task.service)
-				effective_rate = task.rate if task.rate else (task_template.default_rate or 0)
-				
-				invoice_item = invoice.append("items", {})
-				invoice_item.item_code = service_item_code  # Use generic service item
-				invoice_item.item_name = task_template.task_name
-				invoice_item.description = f"{watch_label} - {task_template.task_name}"
-				invoice_item.qty = 1
-				invoice_item.rate = effective_rate
-				invoice_item.uom = "Nos"
-				
-				total_amount += effective_rate
-			
-			# Add parts as invoice items
+				tasks_cost += task.rate if task.rate else (task_template.default_rate or 0)
+
+			parts_cost = 0
 			for part in item_parts:
 				item_doc = frappe.get_doc("Item", part.part)
-				effective_rate = part.rate if part.rate else (item_doc.standard_rate or 0)
-				
-				invoice_item = invoice.append("items", {})
-				invoice_item.item_code = part.part
-				invoice_item.item_name = item_doc.item_name
-				invoice_item.description = f"{watch_label} - {item_doc.item_name}"
-				invoice_item.qty = part.quantity
-				invoice_item.rate = effective_rate
-				invoice_item.uom = part.uom
-				
-				total_amount += (effective_rate * part.quantity)
+				parts_cost += (part.rate if part.rate else (item_doc.standard_rate or 0)) * part.quantity
+
+			watch_total = tasks_cost + parts_cost
+
+			# Build description from recommended_work
+			try:
+				rw_raw = item.recommended_work or "[]"
+				rw_items = json.loads(rw_raw) if isinstance(rw_raw, str) else (rw_raw or [])
+				if isinstance(rw_items, str):
+					rw_items = [rw_items] if rw_items.strip() else []
+			except Exception:
+				rw_items = []
+
+			if not rw_items and item_tasks:
+				rw_items = [
+					(frappe.db.get_value("DW Task Template", task.service, "task_name") or task.service)
+					for task in item_tasks
+				]
+
+			desc_lines = "<br>".join(line for line in rw_items if str(line).strip())
+
+			invoice_item = invoice.append("items", {})
+			invoice_item.item_code = service_item_code
+			invoice_item.item_name = watch_item_name
+			invoice_item.description = desc_lines or watch_item_name
+			invoice_item.qty = 1
+			invoice_item.rate = watch_total
+			invoice_item.uom = "Nos"
+
+			total_amount += watch_total
 	
 	# Handle partial payments
 	if payment_type == "advance" or payment_type == "balance":

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosCustomers, getInvoiceWorkflowConfiguration, saveInvoiceWorkflowConfiguration } from '../services/apiService';
-import type { WhatsAppTemplate, WhatsAppConfig, WhatsAppPlaceholder, PmsConfiguration, PmsConfigurationOptions, InvoiceWorkflowConfiguration, InvoiceWorkflowConfigurationOptions } from '../services/apiService';
+import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getGeneralConfiguration, saveGeneralConfiguration, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosCustomers, getInvoiceWorkflowConfiguration, saveInvoiceWorkflowConfiguration } from '../services/apiService';
+import type { WhatsAppTemplate, WhatsAppConfig, WhatsAppPlaceholder, PmsConfiguration, PmsConfigurationOptions, GeneralConfiguration, InvoiceWorkflowConfiguration, InvoiceWorkflowConfigurationOptions } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
@@ -22,6 +22,10 @@ type SettingsTab =
     | 'country-codes'
     | 'task-templates'
     | 'issue-templates'
+    | 'watch-condition-templates'
+    | 'diagnosis-summary-templates'
+    | 'movement-type-templates'
+    | 'movement-caliber-templates'
     | 'watch-brands'
     | 'watch-models'
     | 'whatsapp';
@@ -73,6 +77,34 @@ interface IssueTemplate {
     issue_name: string;
     description: string;
     suggested_task: string;
+    is_active: number;
+}
+
+interface WatchConditionTemplate {
+    name?: string;
+    condition_name: string;
+    description: string;
+    is_active: number;
+}
+
+interface DiagnosisSummaryTemplate {
+    name?: string;
+    summary_name: string;
+    description: string;
+    is_active: number;
+}
+
+interface MovementTypeTemplate {
+    name?: string;
+    movement_type: string;
+    description: string;
+    is_active: number;
+}
+
+interface MovementCaliberTemplate {
+    name?: string;
+    caliber_code: string;
+    description: string;
     is_active: number;
 }
 
@@ -1387,6 +1419,394 @@ const IssueTemplatesSection: React.FC = () => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// Section: Watch Condition Templates
+// ─────────────────────────────────────────────────────────────
+const WatchConditionTemplatesSection: React.FC = () => {
+    const [data, setData] = useState<WatchConditionTemplate[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<WatchConditionTemplate | null>(null);
+    const [form, setForm] = useState<WatchConditionTemplate>({ condition_name: '', description: '', is_active: 1 });
+    const [isSaving, setIsSaving] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<WatchConditionTemplate | null>(null);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const templates = await getList('DW Watch Condition Template', ['name', 'condition_name', 'description', 'is_active'], [], 250);
+            setData(templates);
+        } catch (e) { console.error(e); }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const openAdd = () => {
+        setEditRow(null);
+        setForm({ condition_name: '', description: '', is_active: 1 });
+        setIsModalOpen(true);
+    };
+
+    const openEdit = async (row: WatchConditionTemplate) => {
+        try {
+            const full = await getDoc('DW Watch Condition Template', row.name!);
+            setEditRow(full);
+            setForm({ condition_name: full.condition_name, description: full.description || '', is_active: full.is_active, name: full.name });
+        } catch { setEditRow(row); setForm({ ...row }); }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await saveDoc({ doctype: 'DW Watch Condition Template', ...form, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) { console.error(e); alert('Error saving: ' + e); }
+        setIsSaving(false);
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget?.name) return;
+        try {
+            await deleteDoc('DW Watch Condition Template', deleteTarget.name);
+            setDeleteTarget(null);
+            await load();
+        } catch (e) { alert('Error deleting: ' + e); }
+    };
+
+    const columns: Column<WatchConditionTemplate>[] = [
+        { key: 'condition_name', label: 'Condition Name' },
+        { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
+        { key: 'is_active', label: 'Status', render: r => <ActiveBadge active={!!r.is_active} /> },
+    ];
+
+    return (
+        <div>
+            <SectionHeader
+                title="Watch Condition Templates"
+                description="Pre-existing watch condition presets shown in the intake checklist for repair orders."
+                onAdd={openAdd}
+                addLabel="Add Condition"
+            />
+            <ConfigTable data={data} isLoading={isLoading} columns={columns} onEdit={openEdit} onDelete={r => setDeleteTarget(r)} />
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? 'Edit Watch Condition Template' : 'Add Watch Condition Template'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <Input
+                        label="Condition Name *"
+                        value={form.condition_name}
+                        onChange={e => setForm(f => ({ ...f, condition_name: e.target.value }))}
+                        placeholder="e.g. Scratches on crystal"
+                        required
+                    />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <textarea
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
+                            rows={2}
+                            value={form.description}
+                            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                            placeholder="Optional guidance for staff using this condition..."
+                        />
+                    </div>
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="w-4 h-4 text-purple-600 rounded"
+                            checked={!!form.is_active}
+                            onChange={e => setForm(f => ({ ...f, is_active: e.target.checked ? 1 : 0 }))}
+                        />
+                        <span className="text-sm font-medium text-gray-700">Active</span>
+                    </label>
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} />
+                </form>
+            </Modal>
+
+            <ConfirmDialog
+                isOpen={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                onConfirm={handleDelete}
+                title="Delete Watch Condition Template"
+                message={`Are you sure you want to delete watch condition template "${deleteTarget?.condition_name}"?`}
+                confirmText="Delete"
+                variant="danger"
+            />
+        </div>
+    );
+};
+
+const DiagnosisSummaryTemplatesSection: React.FC = () => {
+    const [data, setData] = useState<DiagnosisSummaryTemplate[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<DiagnosisSummaryTemplate | null>(null);
+    const [form, setForm] = useState<DiagnosisSummaryTemplate>({ summary_name: '', description: '', is_active: 1 });
+    const [isSaving, setIsSaving] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<DiagnosisSummaryTemplate | null>(null);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const templates = await getList('DW Diagnosis Summary Template', ['name', 'summary_name', 'description', 'is_active'], [], 250);
+            setData(templates);
+        } catch (e) { console.error(e); }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const openAdd = () => {
+        setEditRow(null);
+        setForm({ summary_name: '', description: '', is_active: 1 });
+        setIsModalOpen(true);
+    };
+
+    const openEdit = async (row: DiagnosisSummaryTemplate) => {
+        try {
+            const full = await getDoc('DW Diagnosis Summary Template', row.name!);
+            setEditRow(full);
+            setForm({ summary_name: full.summary_name, description: full.description || '', is_active: full.is_active, name: full.name });
+        } catch { setEditRow(row); setForm({ ...row }); }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await saveDoc({ doctype: 'DW Diagnosis Summary Template', ...form, is_active: 1, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) { console.error(e); alert('Error saving: ' + e); }
+        setIsSaving(false);
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget?.name) return;
+        try {
+            await deleteDoc('DW Diagnosis Summary Template', deleteTarget.name);
+            setDeleteTarget(null);
+            await load();
+        } catch (e) { alert('Error deleting: ' + e); }
+    };
+
+    const columns: Column<DiagnosisSummaryTemplate>[] = [
+        { key: 'summary_name', label: 'Summary Name' },
+        { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
+        { key: 'is_active', label: 'Status', render: r => <ActiveBadge active={!!r.is_active} /> },
+    ];
+
+    return (
+        <div>
+            <SectionHeader
+                title="Diagnosis Summary Templates"
+                description="Diagnosis summary chips shown in technician diagnosis sections."
+                onAdd={openAdd}
+                addLabel="Add Summary"
+            />
+            <ConfigTable data={data} isLoading={isLoading} columns={columns} onEdit={openEdit} onDelete={r => setDeleteTarget(r)} />
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? 'Edit Diagnosis Summary Template' : 'Add Diagnosis Summary Template'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <Input label="Summary Name *" value={form.summary_name} onChange={e => setForm(f => ({ ...f, summary_name: e.target.value }))} placeholder="e.g. Circuit Damage" required />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <textarea className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional guidance for technicians..." />
+                    </div>
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} />
+                </form>
+            </Modal>
+
+            <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete} title="Delete Diagnosis Summary Template" message={`Are you sure you want to delete diagnosis summary template "${deleteTarget?.summary_name}"?`} confirmText="Delete" variant="danger" />
+        </div>
+    );
+};
+
+const MovementTypeTemplatesSection: React.FC = () => {
+    const [data, setData] = useState<MovementTypeTemplate[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<MovementTypeTemplate | null>(null);
+    const [form, setForm] = useState<MovementTypeTemplate>({ movement_type: '', description: '', is_active: 1 });
+    const [isSaving, setIsSaving] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<MovementTypeTemplate | null>(null);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const templates = await getList('DW Movement Type Template', ['name', 'movement_type', 'description', 'is_active'], [], 250);
+            setData(templates);
+        } catch (e) { console.error(e); }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const openAdd = () => {
+        setEditRow(null);
+        setForm({ movement_type: '', description: '', is_active: 1 });
+        setIsModalOpen(true);
+    };
+
+    const openEdit = async (row: MovementTypeTemplate) => {
+        try {
+            const full = await getDoc('DW Movement Type Template', row.name!);
+            setEditRow(full);
+            setForm({ movement_type: full.movement_type, description: full.description || '', is_active: full.is_active, name: full.name });
+        } catch { setEditRow(row); setForm({ ...row }); }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await saveDoc({ doctype: 'DW Movement Type Template', ...form, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) { console.error(e); alert('Error saving: ' + e); }
+        setIsSaving(false);
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget?.name) return;
+        try {
+            await deleteDoc('DW Movement Type Template', deleteTarget.name);
+            setDeleteTarget(null);
+            await load();
+        } catch (e) { alert('Error deleting: ' + e); }
+    };
+
+    const columns: Column<MovementTypeTemplate>[] = [
+        { key: 'movement_type', label: 'Movement Type' },
+        { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
+        { key: 'is_active', label: 'Status', render: r => <ActiveBadge active={!!r.is_active} /> },
+    ];
+
+    return (
+        <div>
+            <SectionHeader
+                title="Movement Type Templates"
+                description="Movement type chips shown in technician diagnosis sections."
+                onAdd={openAdd}
+                addLabel="Add Movement Type"
+            />
+            <ConfigTable data={data} isLoading={isLoading} columns={columns} onEdit={openEdit} onDelete={r => setDeleteTarget(r)} />
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? 'Edit Movement Type Template' : 'Add Movement Type Template'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <Input label="Movement Type *" value={form.movement_type} onChange={e => setForm(f => ({ ...f, movement_type: e.target.value }))} placeholder="e.g. Quartz movement" required />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <textarea className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional guidance for technicians..." />
+                    </div>
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input type="checkbox" className="w-4 h-4 text-purple-600 rounded" checked={!!form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked ? 1 : 0 }))} />
+                        <span className="text-sm font-medium text-gray-700">Active</span>
+                    </label>
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} />
+                </form>
+            </Modal>
+
+            <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete} title="Delete Movement Type Template" message={`Are you sure you want to delete movement type template "${deleteTarget?.movement_type}"?`} confirmText="Delete" variant="danger" />
+        </div>
+    );
+};
+
+const MovementCaliberTemplatesSection: React.FC = () => {
+    const [data, setData] = useState<MovementCaliberTemplate[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<MovementCaliberTemplate | null>(null);
+    const [form, setForm] = useState<MovementCaliberTemplate>({ caliber_code: '', description: '', is_active: 1 });
+    const [isSaving, setIsSaving] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<MovementCaliberTemplate | null>(null);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const templates = await getList('DW Movement Caliber Template', ['name', 'caliber_code', 'description', 'is_active'], [], 400);
+            setData(templates);
+        } catch (e) { console.error(e); }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const openAdd = () => {
+        setEditRow(null);
+        setForm({ caliber_code: '', description: '', is_active: 1 });
+        setIsModalOpen(true);
+    };
+
+    const openEdit = async (row: MovementCaliberTemplate) => {
+        try {
+            const full = await getDoc('DW Movement Caliber Template', row.name!);
+            setEditRow(full);
+            setForm({ caliber_code: full.caliber_code, description: full.description || '', is_active: full.is_active, name: full.name });
+        } catch { setEditRow(row); setForm({ ...row }); }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await saveDoc({ doctype: 'DW Movement Caliber Template', ...form, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) { console.error(e); alert('Error saving: ' + e); }
+        setIsSaving(false);
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget?.name) return;
+        try {
+            await deleteDoc('DW Movement Caliber Template', deleteTarget.name);
+            setDeleteTarget(null);
+            await load();
+        } catch (e) { alert('Error deleting: ' + e); }
+    };
+
+    const columns: Column<MovementCaliberTemplate>[] = [
+        { key: 'caliber_code', label: 'Caliber Code' },
+        { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
+        { key: 'is_active', label: 'Status', render: r => <ActiveBadge active={!!r.is_active} /> },
+    ];
+
+    return (
+        <div>
+            <SectionHeader
+                title="Movement Caliber Templates"
+                description="Caliber chips shown in technician diagnosis sections."
+                onAdd={openAdd}
+                addLabel="Add Caliber"
+            />
+            <ConfigTable data={data} isLoading={isLoading} columns={columns} onEdit={openEdit} onDelete={r => setDeleteTarget(r)} />
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? 'Edit Movement Caliber Template' : 'Add Movement Caliber Template'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <Input label="Caliber Code *" value={form.caliber_code} onChange={e => setForm(f => ({ ...f, caliber_code: e.target.value }))} placeholder="e.g. 2235" required />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <textarea className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional guidance for technicians..." />
+                    </div>
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input type="checkbox" className="w-4 h-4 text-purple-600 rounded" checked={!!form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked ? 1 : 0 }))} />
+                        <span className="text-sm font-medium text-gray-700">Active</span>
+                    </label>
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} />
+                </form>
+            </Modal>
+
+            <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete} title="Delete Movement Caliber Template" message={`Are you sure you want to delete movement caliber template "${deleteTarget?.caliber_code}"?`} confirmText="Delete" variant="danger" />
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────
 // Section: Watch Brands
 // ─────────────────────────────────────────────────────────────
 const WatchBrandsSection: React.FC = () => {
@@ -1657,10 +2077,38 @@ const GeneralSection: React.FC = () => {
     const { config, refreshConfig } = useAppConfig();
     const [logoPreview, setLogoPreview] = useState<string>(config.logoUrl);
     const [isUploading, setIsUploading] = useState(false);
+    const [isLoadingGeneralConfig, setIsLoadingGeneralConfig] = useState(true);
+    const [isSavingGeneralConfig, setIsSavingGeneralConfig] = useState(false);
+    const [generalConfig, setGeneralConfig] = useState<GeneralConfiguration>({
+        company_name: '',
+        company_phone: '',
+        company_email: '',
+        company_website: '',
+        company_address: '',
+        cr_number: '',
+        vat_registration_number: '',
+        repair_receipt_subtitle: '',
+    });
     const [saveMsg, setSaveMsg] = useState('');
     const fileRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => { setLogoPreview(config.logoUrl); }, [config.logoUrl]);
+
+    const loadGeneralConfig = useCallback(async () => {
+        setIsLoadingGeneralConfig(true);
+        setSaveMsg('');
+        try {
+            const response = await getGeneralConfiguration();
+            setGeneralConfig(response.config);
+        } catch (err: any) {
+            setSaveMsg(err?.message || 'Failed to load general configuration.');
+        }
+        setIsLoadingGeneralConfig(false);
+    }, []);
+
+    useEffect(() => {
+        loadGeneralConfig();
+    }, [loadGeneralConfig]);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -1690,6 +2138,25 @@ const GeneralSection: React.FC = () => {
             setSaveMsg('Logo removed.');
         } catch { setSaveMsg('Failed to remove logo.'); }
         setIsUploading(false);
+    };
+
+    const updateGeneralConfig = <K extends keyof GeneralConfiguration>(field: K, value: GeneralConfiguration[K]) => {
+        setGeneralConfig(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleSaveGeneralConfig = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSavingGeneralConfig(true);
+        setSaveMsg('');
+        try {
+            const response = await saveGeneralConfiguration(generalConfig);
+            setGeneralConfig(response.config);
+            setSaveMsg('General configuration saved successfully.');
+            await refreshConfig();
+        } catch (err: any) {
+            setSaveMsg(err?.message || 'Failed to save general configuration.');
+        }
+        setIsSavingGeneralConfig(false);
     };
 
     return (
@@ -1774,6 +2241,86 @@ const GeneralSection: React.FC = () => {
                     ))}
                 </div>
             </div>
+
+            <form onSubmit={handleSaveGeneralConfig} className="space-y-6">
+                <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-1">General Configuration</h3>
+                    <p className="text-sm text-gray-500 mb-5">
+                        These values are used by the app's customer-facing print formats.
+                    </p>
+                </div>
+
+                {isLoadingGeneralConfig ? <LoadingSpinner /> : (
+                    <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <Input
+                                label="Company Name"
+                                value={generalConfig.company_name}
+                                onChange={(e) => updateGeneralConfig('company_name', e.target.value)}
+                                required
+                            />
+                            <Input
+                                label="Phone Number"
+                                value={generalConfig.company_phone}
+                                onChange={(e) => updateGeneralConfig('company_phone', e.target.value)}
+                            />
+                            <Input
+                                label="Email"
+                                value={generalConfig.company_email}
+                                onChange={(e) => updateGeneralConfig('company_email', e.target.value)}
+                            />
+                            <Input
+                                label="Website"
+                                value={generalConfig.company_website}
+                                onChange={(e) => updateGeneralConfig('company_website', e.target.value)}
+                            />
+                            <Input
+                                label="CR Number"
+                                value={generalConfig.cr_number}
+                                onChange={(e) => updateGeneralConfig('cr_number', e.target.value)}
+                            />
+                            <Input
+                                label="VAT Registration Number"
+                                value={generalConfig.vat_registration_number}
+                                onChange={(e) => updateGeneralConfig('vat_registration_number', e.target.value)}
+                            />
+                            <div className="md:col-span-2">
+                                <Input
+                                    label="Repair Receipt Subtitle"
+                                    value={generalConfig.repair_receipt_subtitle}
+                                    onChange={(e) => updateGeneralConfig('repair_receipt_subtitle', e.target.value)}
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
+                                <textarea
+                                    value={generalConfig.company_address}
+                                    onChange={(e) => updateGeneralConfig('company_address', e.target.value)}
+                                    rows={4}
+                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-y"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-4 pt-2 border-t border-gray-100">
+                            {saveMsg && (
+                                <p className={`text-sm ${saveMsg.includes('Failed') || saveMsg.includes('failed') ? 'text-red-500' : 'text-green-600'}`}>
+                                    {saveMsg}
+                                </p>
+                            )}
+                            <div className="ml-auto">
+                                <button
+                                    type="submit"
+                                    disabled={isSavingGeneralConfig}
+                                    className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+                                >
+                                    {isSavingGeneralConfig ? <><Spinner size="sm" /> Saving…</> : 'Save General Configuration'}
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
+            </form>
         </div>
     );
 };
@@ -2154,6 +2701,9 @@ const DEFAULT_PLACEHOLDERS: WhatsAppPlaceholder[] = [
     { token: '{{3}}', label: 'Current Status',   sample: 'Ready for Collection' },
     { token: '{{4}}', label: 'Shop Name',        sample: 'Watch Doctor' },
     { token: '{{5}}', label: 'Promised Date',    sample: '20 Apr 2026' },
+    { token: '{{6}}', label: 'Watch Details',    sample: 'Omega Seamaster (SN: A12345)' },
+    { token: '{{7}}', label: 'Recommended Works', sample: 'Movement service, Gasket replacement' },
+    { token: '{{8}}', label: 'Estimate Total',   sample: 'BHD 68.000' },
 ];
 
 function applyPreview(body: string, placeholders: WhatsAppPlaceholder[]): string {
@@ -2476,6 +3026,42 @@ const tabs: TabDef[] = [
         ),
     },
     {
+        id: 'watch-condition-templates',
+        label: 'Watch Conditions',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-9 8h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2zm3-13h6" />
+            </svg>
+        ),
+    },
+    {
+        id: 'diagnosis-summary-templates',
+        label: 'Diagnosis Summaries',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h8M8 14h5M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'movement-type-templates',
+        label: 'Movement Types',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'movement-caliber-templates',
+        label: 'Movement Calibers',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-7 4h8m-9 4h10a2 2 0 002-2V6a2 2 0 00-2-2H7a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+        ),
+    },
+    {
         id: 'watch-brands',
         label: 'Watch Brands',
         icon: (
@@ -2563,6 +3149,10 @@ const Settings: React.FC = () => {
                 {activeTab === 'country-codes' && <CountryCodesSection />}
                 {activeTab === 'task-templates' && <TaskTemplatesSection />}
                 {activeTab === 'issue-templates' && <IssueTemplatesSection />}
+                {activeTab === 'watch-condition-templates' && <WatchConditionTemplatesSection />}
+                {activeTab === 'diagnosis-summary-templates' && <DiagnosisSummaryTemplatesSection />}
+                {activeTab === 'movement-type-templates' && <MovementTypeTemplatesSection />}
+                {activeTab === 'movement-caliber-templates' && <MovementCaliberTemplatesSection />}
                 {activeTab === 'watch-brands' && <WatchBrandsSection />}
                 {activeTab === 'watch-models' && <WatchModelsSection />}
                 {activeTab === 'whatsapp' && <WhatsAppSection />}

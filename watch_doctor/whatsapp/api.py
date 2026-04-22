@@ -9,6 +9,8 @@ STATUS_TO_NOTIFICATION_KEY = {
 	"Delivered": "delivered",
 }
 
+WATCH_ESTIMATE_NOTIFICATION_KEY = "watch_estimate_ready"
+
 
 @frappe.whitelist()
 def notify_customer(repair_order_name: str):
@@ -126,6 +128,99 @@ def preview_notification(repair_order_name: str):
 		"customer_name": msg["customer_name"],
 		"phone_display": msg["phone_raw"] or "",
 		"message_body": msg["body"],
+	}
+
+
+@frappe.whitelist()
+def preview_estimate_notification(repair_order_name: str, repair_item_name: str):
+	"""Return watch-specific estimate WhatsApp message preview without sending."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	from watch_doctor.whatsapp.service import build_watch_estimate_message
+
+	msg = build_watch_estimate_message(repair_order_name, repair_item_name, WATCH_ESTIMATE_NOTIFICATION_KEY)
+
+	return {
+		"customer_name": msg["customer_name"],
+		"phone_display": msg["phone_raw"] or "",
+		"message_body": msg["body"],
+		"watch_label": msg.get("watch_label") or "",
+		"estimate_total": msg.get("estimate_total") or "",
+		"recommended_work": msg.get("recommended_work") or [],
+	}
+
+
+@frappe.whitelist()
+def notify_estimate_customer(repair_order_name: str, repair_item_name: str):
+	"""Send watch-specific estimate WhatsApp message on demand."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	if not frappe.conf.get("whatsapp_enabled"):
+		frappe.throw("WhatsApp notifications are not enabled.")
+
+	order = frappe.get_doc("DW Repair Order", repair_order_name)
+	customer = frappe.get_doc("Customer", order.customer)
+
+	if not customer.mobile_no:
+		frappe.throw(f"Customer {customer.customer_name} has no mobile number.")
+
+	item = next((row for row in (order.items or []) if row.name == repair_item_name), None)
+	if not item:
+		frappe.throw("Repair item not found in this order")
+
+	watch_log_status = f"Estimate:{repair_item_name}"
+
+	cooldown = int(frappe.conf.get("whatsapp_cooldown_minutes", 60))
+	cutoff = frappe.utils.add_to_date(frappe.utils.now_datetime(), minutes=-cooldown)
+	existing = frappe.db.exists(
+		"DW WhatsApp Log",
+		{
+			"repair_order": repair_order_name,
+			"notification_key": WATCH_ESTIMATE_NOTIFICATION_KEY,
+			"order_status": watch_log_status,
+			"status": ["in", ["Queued", "Sent"]],
+			"creation": [">=", cutoff],
+		},
+	)
+	if existing:
+		frappe.throw(
+			f"Customer was already notified about this watch estimate within the last {cooldown} minutes."
+		)
+
+	from watch_doctor.whatsapp.service import build_watch_estimate_message
+
+	msg = build_watch_estimate_message(repair_order_name, repair_item_name, WATCH_ESTIMATE_NOTIFICATION_KEY)
+
+	log = frappe.get_doc(
+		{
+			"doctype": "DW WhatsApp Log",
+			"repair_order": repair_order_name,
+			"customer": order.customer,
+			"customer_name": msg["customer_name"],
+			"phone_number": msg["to"],
+			"order_status": watch_log_status,
+			"notification_key": WATCH_ESTIMATE_NOTIFICATION_KEY,
+			"message_body": msg["body"],
+			"status": "Queued",
+			"sent_by": frappe.session.user,
+			"retry_count": 0,
+		}
+	)
+	log.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	frappe.enqueue(
+		"watch_doctor.whatsapp.service.send_whatsapp_message",
+		log_name=log.name,
+		queue="short",
+		is_async=True,
+	)
+
+	return {
+		"status": "queued",
+		"log_name": log.name,
+		"watch_label": msg.get("watch_label") or "",
+		"estimate_total": msg.get("estimate_total") or "",
 	}
 
 

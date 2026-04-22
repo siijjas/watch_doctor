@@ -23,6 +23,12 @@ def execute():
 		"dw_repair_task",
 		"dw_repair_part_used",
 		"dw_task_template",
+		"dw_watch_condition_template",
+		"dw_diagnosis_summary_template",
+		"dw_movement_information_template",
+		"dw_movement_type_template",
+		"dw_movement_caliber_template",
+		"dw_movement_note_template",
 	]:
 		try:
 			frappe.reload_doc("watch_doctor", "doctype", dt)

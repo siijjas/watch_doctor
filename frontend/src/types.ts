@@ -14,6 +14,7 @@ export interface UserInfo {
     technician?: {
         name: string;
         technician_name: string;
+        email?: string;
     } | null;
 }
 
@@ -25,10 +26,14 @@ export enum Priority {
 
 export enum WatchStatus {
     Pending = 'Pending',
+    UnderDiagnosis = 'Under Diagnosis',
+    Diagnosed = 'Diagnosed',
+    CreateEstimate = 'Create Estimate',
+    Quoted = 'Quoted',
     InRepair = 'In Repair',
-    AwaitingParts = 'Awaiting Parts',
-    OnHold = 'On Hold',
-    Repaired = 'Repaired',
+    Completed = 'Completed',
+    NotRepairable = 'Not Repairable',
+    Declined = 'Declined',
     Delivered = 'Delivered',
 }
 
@@ -37,6 +42,57 @@ export enum TaskStatus {
     InProgress = 'In Progress',
     Completed = 'Completed'
 }
+
+export type DiagnosisStatus =
+    | 'Pending Diagnosis'
+    | 'Diagnosed'
+    | 'Not Repairable'
+    | 'Awaiting Approval'
+    | 'Quoted'
+    | 'Declined';
+
+export interface DiagnosisContentFields {
+    diagnosis_summary?: string[];
+    movement_type?: string[];
+    movement_caliber?: string[];
+    recommended_work?: string[];
+}
+
+const DIAGNOSIS_MANUAL_STATUSES: DiagnosisStatus[] = [
+    'Not Repairable',
+    'Awaiting Approval',
+    'Quoted',
+    'Declined',
+];
+
+export const hasDiagnosisContent = (fields: DiagnosisContentFields): boolean => {
+    const listFields = [
+        fields.diagnosis_summary,
+        fields.movement_type,
+        fields.movement_caliber,
+    ];
+
+    if (listFields.some((entries) => Array.isArray(entries) && entries.some((entry) => entry.trim()))) {
+        return true;
+    }
+
+    return (fields.recommended_work || []).some(e => e.trim());
+};
+
+export const resolveDiagnosisStatus = (
+    currentStatus: DiagnosisStatus | '' | undefined,
+    fields: DiagnosisContentFields,
+): DiagnosisStatus => {
+    if (!hasDiagnosisContent(fields)) {
+        return 'Pending Diagnosis';
+    }
+
+    if (currentStatus && DIAGNOSIS_MANUAL_STATUSES.includes(currentStatus as DiagnosisStatus)) {
+        return currentStatus as DiagnosisStatus;
+    }
+
+    return 'Diagnosed';
+};
 
 // Represents a DocType record from Frappe
 interface FrappeDoc {
@@ -103,6 +159,15 @@ export interface RepairItem {
     serial_number: string;
     issues: RepairItemIssue[];
     issue_description: string;
+    pre_existing_condition: string[];
+    diagnosis_status: DiagnosisStatus;
+    diagnosis_summary: string[];
+    movement_type: string[];
+    movement_caliber: string[];
+    movement_information: string[];
+    recommended_work: string[];
+    diagnosed_by?: string;
+    diagnosis_date?: string;
     technician: string; // Link to Employee name
     status: WatchStatus;
     // Frappe doesn't have a direct checklist field like this,
@@ -139,6 +204,7 @@ export interface RepairOrder extends FrappeDoc {
     balance_amount?: number;
     // For frontend display
     customer_name?: string;
+    customer_mobile?: string;
 }
 
 export interface QuotationSummary {
@@ -184,6 +250,36 @@ export interface IssueTemplate {
     issue_name: string;
     description?: string;
     suggested_task?: string;
+}
+
+export interface WatchConditionTemplate {
+    name: string;
+    condition_name: string;
+    description?: string;
+}
+
+export interface DiagnosisSummaryTemplate {
+    name: string;
+    summary_name: string;
+    description?: string;
+}
+
+export interface MovementInfoTemplate {
+    name: string;
+    movement_info: string;
+    description?: string;
+}
+
+export interface MovementTypeTemplate {
+    name: string;
+    movement_type: string;
+    description?: string;
+}
+
+export interface MovementCaliberTemplate {
+    name: string;
+    caliber_code: string;
+    description?: string;
 }
 
 export interface RepairItemIssue {

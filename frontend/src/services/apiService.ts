@@ -1,4 +1,5 @@
-import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, QuotationSummary, InvoiceSummary, UserInfo } from '../types';
+import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, MovementInfoTemplate, MovementTypeTemplate, MovementCaliberTemplate, DiagnosisStatus, QuotationSummary, InvoiceSummary, UserInfo } from '../types';
+import { resolveDiagnosisStatus } from '../types';
 
 declare const window: any;
 
@@ -174,6 +175,107 @@ export const getUserInfo = async (): Promise<UserInfo> => {
 // Specific API functions for the Watch Repair App
 // NOTE: We transform the frontend's nested structure into the backend's flat structure here.
 
+const normalizeStringList = (value: unknown): string[] => {
+    if (Array.isArray(value)) {
+        return Array.from(new Set(
+            value
+                .map(entry => typeof entry === 'string' ? entry.trim() : '')
+                .filter(Boolean)
+        ));
+    }
+
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            return [];
+        }
+
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+                return normalizeStringList(parsed);
+            }
+        } catch {
+            // Older records may store a plain text note. Keep it as a single entry.
+        }
+
+        return [trimmed];
+    }
+
+    return [];
+};
+
+export interface RepairItemDiagnosisPayload {
+    diagnosis_status: DiagnosisStatus;
+    diagnosis_summary: string[];
+    movement_type: string[];
+    movement_caliber: string[];
+    movement_information: string[];
+    recommended_work: string[];
+}
+
+const MOVEMENT_TYPE_VALUES = new Set([
+    'quartz movement',
+    'automatic movement',
+    'manual-wind movement',
+    'chronograph movement',
+    'gmt movement',
+    'day-date movement',
+    'moonphase movement',
+    'co-axial movement',
+    'solar movement',
+    'kinetic movement',
+    'eco-drive movement',
+    'mecha-quartz movement',
+    'vintage movement',
+    'swiss movement',
+    'japanese movement',
+]);
+
+const dedupeStringList = (values: string[]): string[] => Array.from(new Set(values.map(value => value.trim()).filter(Boolean)));
+
+const isLikelyCaliberCode = (value: string): boolean => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    return /\d/.test(trimmed) && /^[A-Za-z0-9.-]+(?: [A-Za-z0-9.-]+)?$/.test(trimmed);
+};
+
+const splitLegacyMovementInformation = (values: string[]) => {
+    const movementType: string[] = [];
+    const movementCaliber: string[] = [];
+
+    values.forEach((entry) => {
+        const normalized = entry.trim();
+        const lower = normalized.toLowerCase();
+
+        if (!normalized) {
+            return;
+        }
+
+        if (MOVEMENT_TYPE_VALUES.has(lower)) {
+            movementType.push(normalized);
+            return;
+        }
+
+        if (isLikelyCaliberCode(normalized)) {
+            movementCaliber.push(normalized);
+            return;
+        }
+    });
+
+    return {
+        movement_type: dedupeStringList(movementType),
+        movement_caliber: dedupeStringList(movementCaliber),
+    };
+};
+
+const combineMovementInformation = (movementType: string[], movementCaliber: string[]) => (
+    dedupeStringList([...movementType, ...movementCaliber])
+);
+
 const unflattenRepairOrder = (order: any): RepairOrder => {
     const items = (order.items || []).map((item: any, index: number) => {
         // CRITICAL: We use idx (1-based index) as the repair_item_key during save.
@@ -186,8 +288,42 @@ const unflattenRepairOrder = (order: any): RepairOrder => {
         const parts_used = (order.all_parts || []).filter((p: any) => p.repair_item_key === itemKey).map((p: any) => ({ ...p, doctype: 'DW Repair Part Used' }));
         const issues = (order.all_issues || []).filter((i: any) => i.repair_item_key === itemKey).map((i: any) => ({ ...i, doctype: 'DW Repair Item Issue' }));
 
+        const diagnosisSummary = normalizeStringList(item.diagnosis_summary);
+        const movementType = normalizeStringList(item.movement_type);
+        const movementCaliber = normalizeStringList(item.movement_caliber);
+        const recommendedWork = normalizeStringList(item.recommended_work);
+
         return {
             ...item,
+            pre_existing_condition: normalizeStringList(item.pre_existing_condition),
+            diagnosis_status: resolveDiagnosisStatus(item.diagnosis_status, {
+                diagnosis_summary: diagnosisSummary,
+                movement_type: movementType,
+                movement_caliber: movementCaliber,
+                recommended_work: recommendedWork,
+            }),
+            diagnosis_summary: diagnosisSummary,
+            ...(() => {
+                const movementInformation = normalizeStringList(item.movement_information);
+                const fallback = !movementType.length && !movementCaliber.length
+                    ? splitLegacyMovementInformation(movementInformation)
+                    : {
+                        movement_type: movementType,
+                        movement_caliber: movementCaliber,
+                    };
+
+                return {
+                    movement_type: fallback.movement_type,
+                    movement_caliber: fallback.movement_caliber,
+                    movement_information: combineMovementInformation(
+                        fallback.movement_type,
+                        fallback.movement_caliber,
+                    ),
+                };
+            })(),
+            recommended_work: recommendedWork,
+            diagnosed_by: item.diagnosed_by || '',
+            diagnosis_date: item.diagnosis_date || '',
             tasks,
             parts_used,
             issues,
@@ -329,6 +465,23 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
             watch_model: item.watch_model,
             serial_number: item.serial_number,
             issue_description: item.issue_description,
+            pre_existing_condition: JSON.stringify(normalizeStringList(item.pre_existing_condition)),
+            diagnosis_status: resolveDiagnosisStatus(item.diagnosis_status, {
+                diagnosis_summary: normalizeStringList(item.diagnosis_summary),
+                movement_type: normalizeStringList(item.movement_type),
+                movement_caliber: normalizeStringList(item.movement_caliber),
+                recommended_work: item.recommended_work,
+            }),
+            diagnosis_summary: JSON.stringify(normalizeStringList(item.diagnosis_summary)),
+            movement_type: JSON.stringify(normalizeStringList(item.movement_type)),
+            movement_caliber: JSON.stringify(normalizeStringList(item.movement_caliber)),
+            movement_information: JSON.stringify(combineMovementInformation(
+                normalizeStringList(item.movement_type),
+                normalizeStringList(item.movement_caliber),
+            )),
+            recommended_work: JSON.stringify(normalizeStringList(item.recommended_work)),
+            diagnosed_by: item.diagnosed_by,
+            diagnosis_date: item.diagnosis_date,
             technician: item.technician,
             status: item.status,
             intake_checklist: item.intake_checklist,
@@ -513,6 +666,49 @@ export const getIssueTemplates = async (): Promise<IssueTemplate[]> => {
         method: 'POST',
     });
     return res.message || [];
+};
+
+export const getWatchConditionTemplates = async (): Promise<WatchConditionTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_watch_condition_templates', {
+        method: 'POST',
+    });
+    return res.message || [];
+};
+
+export const getDiagnosisSummaryTemplates = async (): Promise<DiagnosisSummaryTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_diagnosis_summary_templates', {
+        method: 'POST',
+    });
+    return res.message || [];
+};
+
+export const getMovementInfoTemplates = async (): Promise<MovementInfoTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_movement_info_templates', {
+        method: 'POST',
+    });
+    return res.message || [];
+};
+
+export const getMovementTypeTemplates = async (): Promise<MovementTypeTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_movement_type_templates', {
+        method: 'POST',
+    });
+    return res.message || [];
+};
+
+export const getMovementCaliberTemplates = async (): Promise<MovementCaliberTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_movement_caliber_templates', {
+        method: 'POST',
+    });
+    return res.message || [];
+};
+
+export const updateRepairItemDiagnosis = async (itemName: string, diagnosis: RepairItemDiagnosisPayload): Promise<any> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.update_repair_item_diagnosis', {
+        method: 'POST',
+        body: JSON.stringify({ item_name: itemName, diagnosis_json: JSON.stringify(diagnosis) }),
+    });
+    return res.message;
 };
 
 export const getCountryCodes = async (): Promise<{ name: string, country_name: string, code: string }[]> => {
@@ -705,9 +901,21 @@ export interface AppConfigResponse {
     currency_code: string;
     currency_symbol: string;
     decimal_places: number;
+    general_configuration?: GeneralConfiguration;
     repair_service_print_format?: string;
     pos_standard_print_format?: string;
     pos_pms_print_format?: string;
+}
+
+export interface GeneralConfiguration {
+    company_name: string;
+    company_phone: string;
+    company_email: string;
+    company_website: string;
+    company_address: string;
+    cr_number: string;
+    vat_registration_number: string;
+    repair_receipt_subtitle: string;
 }
 
 export interface InvoiceWorkflowConfiguration {
@@ -780,6 +988,22 @@ export const saveLogoUrl = async (logoUrl: string): Promise<void> => {
         method: 'POST',
         body: JSON.stringify({ logo_url: logoUrl }),
     });
+};
+
+export const getGeneralConfiguration = async (): Promise<{ config: GeneralConfiguration }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_general_configuration_api', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return res.message;
+};
+
+export const saveGeneralConfiguration = async (config: GeneralConfiguration): Promise<{ success: boolean; config: GeneralConfiguration }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.save_general_configuration', {
+        method: 'POST',
+        body: JSON.stringify(config),
+    });
+    return res.message;
 };
 
 export interface PmsConfiguration {
@@ -1074,6 +1298,12 @@ export interface NotificationPreview {
     message_body: string;
 }
 
+export interface EstimateNotificationPreview extends NotificationPreview {
+    watch_label: string;
+    estimate_total: string;
+    recommended_work: string[];
+}
+
 export const previewNotification = async (orderName: string): Promise<NotificationPreview> => {
     const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.preview_notification', {
         method: 'POST',
@@ -1086,6 +1316,28 @@ export const notifyCustomer = async (orderName: string): Promise<{ status: strin
     const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.notify_customer', {
         method: 'POST',
         body: JSON.stringify({ repair_order_name: orderName }),
+    });
+    return res.message;
+};
+
+export const previewEstimateNotification = async (
+    orderName: string,
+    repairItemName: string,
+): Promise<EstimateNotificationPreview> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.preview_estimate_notification', {
+        method: 'POST',
+        body: JSON.stringify({ repair_order_name: orderName, repair_item_name: repairItemName }),
+    });
+    return res.message;
+};
+
+export const notifyEstimateCustomer = async (
+    orderName: string,
+    repairItemName: string,
+): Promise<{ status: string; log_name: string; watch_label: string; estimate_total: string }> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.api.notify_estimate_customer', {
+        method: 'POST',
+        body: JSON.stringify({ repair_order_name: orderName, repair_item_name: repairItemName }),
     });
     return res.message;
 };

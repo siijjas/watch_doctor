@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { RepairOrder, RepairItem, RepairTask, RepairPartUsed, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, RepairItemIssue } from '../types';
-import { OrderStatus, Priority, WatchStatus, TaskStatus } from '../types';
+import type { RepairOrder, RepairItem, RepairTask, RepairPartUsed, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, MovementTypeTemplate, MovementCaliberTemplate, RepairItemIssue } from '../types';
+import { OrderStatus, Priority, WatchStatus, TaskStatus, resolveDiagnosisStatus } from '../types';
 import * as apiService from '../services/apiService';
 import { isErpNext } from '../services/apiService';
 import { mockCustomers, mockEmployees, mockRepairServices, mockSpareParts } from '../services/mockData';
@@ -16,6 +16,90 @@ import { PlusIcon } from './icons/PlusIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { Autocomplete } from './ui/Autocomplete';
 import { useAppConfig } from '../context/AppConfigContext';
+
+const DEFAULT_WATCH_CONDITION_TEMPLATES: WatchConditionTemplate[] = [
+    { name: 'Scratches on crystal', condition_name: 'Scratches on crystal', description: 'Visible crystal scratching noted at intake.' },
+    { name: 'Cracked crystal', condition_name: 'Cracked crystal', description: 'Crystal already cracked before service.' },
+    { name: 'Case scratches', condition_name: 'Case scratches', description: 'Visible scratching on case surfaces.' },
+    { name: 'Case dents', condition_name: 'Case dents', description: 'Case has dents or impact marks.' },
+    { name: 'Bezel scratched', condition_name: 'Bezel scratched', description: 'Bezel or bezel insert shows cosmetic wear.' },
+    { name: 'Bezel loose', condition_name: 'Bezel loose', description: 'Bezel feels loose or has excess play.' },
+    { name: 'Crown worn', condition_name: 'Crown worn', description: 'Crown shows visible wear or cosmetic damage.' },
+    { name: 'Crown loose', condition_name: 'Crown loose', description: 'Crown is loose or does not feel secure.' },
+    { name: 'Pusher damaged', condition_name: 'Pusher damaged', description: 'Pushers show visible damage or wear.' },
+    { name: 'Dial stained', condition_name: 'Dial stained', description: 'Dial has visible staining, spotting, or discoloration.' },
+    { name: 'Hands corroded', condition_name: 'Hands corroded', description: 'Hands show corrosion, oxidation, or finish damage.' },
+    { name: 'Bracelet scratched', condition_name: 'Bracelet scratched', description: 'Bracelet has visible scratches or surface wear.' },
+    { name: 'Bracelet stretched', condition_name: 'Bracelet stretched', description: 'Bracelet shows stretch or excessive slack.' },
+    { name: 'Bracelet link missing', condition_name: 'Bracelet link missing', description: 'One or more bracelet links are missing.' },
+    { name: 'Clasp loose', condition_name: 'Clasp loose', description: 'Clasp does not close firmly or has excess movement.' },
+    { name: 'Strap worn', condition_name: 'Strap worn', description: 'Strap shows visible wear from prior use.' },
+    { name: 'Strap cracked', condition_name: 'Strap cracked', description: 'Strap is cracked, split, or dried out.' },
+    { name: 'Strap torn', condition_name: 'Strap torn', description: 'Strap is torn or structurally damaged.' },
+    { name: 'Strap stitching damaged', condition_name: 'Strap stitching damaged', description: 'Strap stitching is loose, frayed, or broken.' },
+    { name: 'Spring bar loose', condition_name: 'Spring bar loose', description: 'Spring bar is loose or not seated securely.' },
+    { name: 'Spring bar missing', condition_name: 'Spring bar missing', description: 'One or more spring bars are missing.' },
+    { name: 'Moisture under crystal', condition_name: 'Moisture under crystal', description: 'Condensation or moisture is visible beneath the crystal.' },
+    { name: 'Water damage signs', condition_name: 'Water damage signs', description: 'Visible indicators suggest prior water ingress.' },
+    { name: 'Rust visible', condition_name: 'Rust visible', description: 'Rust is visible externally at intake.' },
+    { name: 'Corrosion visible', condition_name: 'Corrosion visible', description: 'Visible corrosion is present on external parts.' },
+    { name: 'Screw missing', condition_name: 'Screw missing', description: 'One or more visible screws are missing.' },
+    { name: 'Screw mismatched', condition_name: 'Screw mismatched', description: 'A visible screw appears non-matching or previously replaced.' },
+    { name: 'Previous repair marks', condition_name: 'Previous repair marks', description: 'Marks indicate prior opening or repair attempts.' },
+    { name: 'Non-original parts visible', condition_name: 'Non-original parts visible', description: 'Visible external parts appear aftermarket or non-original.' },
+    { name: 'Heavy cosmetic wear', condition_name: 'Heavy cosmetic wear', description: 'Watch shows heavy pre-existing cosmetic wear.' },
+    { name: 'Impact damage visible', condition_name: 'Impact damage visible', description: 'Impact damage is visible on the watch exterior.' },
+    { name: 'Other cosmetic condition', condition_name: 'Other cosmetic condition', description: 'Use when another cosmetic condition needs to be documented.' },
+    { name: 'Other physical condition', condition_name: 'Other physical condition', description: 'Use when another physical condition needs to be documented.' },
+];
+
+const DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES: DiagnosisSummaryTemplate[] = [
+    { name: 'Circuit Damage', summary_name: 'Circuit Damage', description: 'Circuit damage found.' },
+    { name: 'Movement Damage', summary_name: 'Movement Damage', description: 'Movement damage found.' },
+    { name: 'Hour Wheel Damage', summary_name: 'Hour Wheel Damage', description: 'Hour wheel damage found.' },
+    { name: 'Minute Wheel Damage', summary_name: 'Minute Wheel Damage', description: 'Minute wheel damage found.' },
+    { name: 'Lever Damage', summary_name: 'Lever Damage', description: 'Lever damage found.' },
+    { name: 'Main Spring Damage', summary_name: 'Main Spring Damage', description: 'Main spring damage found.' },
+    { name: 'Automatic Rotor Damage', summary_name: 'Automatic Rotor Damage', description: 'Automatic rotor damage found.' },
+    { name: 'Escape Wheel Damage', summary_name: 'Escape Wheel Damage', description: 'Escape wheel damage found.' },
+    { name: 'Third Wheel Damage', summary_name: 'Third Wheel Damage', description: 'Third wheel damage found.' },
+    { name: 'Fourth Wheel Damage', summary_name: 'Fourth Wheel Damage', description: 'Fourth wheel damage found.' },
+    { name: 'Balance Staff Damage', summary_name: 'Balance Staff Damage', description: 'Balance staff damage found.' },
+    { name: 'Balance Pivot Damage', summary_name: 'Balance Pivot Damage', description: 'Balance pivot damage found.' },
+    { name: 'Pallet Fork Damage', summary_name: 'Pallet Fork Damage', description: 'Pallet fork damage found.' },
+    { name: 'Barrel Arbor Damage', summary_name: 'Barrel Arbor Damage', description: 'Barrel arbor damage found.' },
+    { name: 'Cannon Pinion Damage', summary_name: 'Cannon Pinion Damage', description: 'Cannon pinion damage found.' },
+    { name: 'Setting Lever Damage', summary_name: 'Setting Lever Damage', description: 'Setting lever damage found.' },
+    { name: 'Stem Damage', summary_name: 'Stem Damage', description: 'Stem damage found.' },
+    { name: 'Crown Wheel Damage', summary_name: 'Crown Wheel Damage', description: 'Crown wheel damage found.' },
+    { name: 'Ratchet Wheel Damage', summary_name: 'Ratchet Wheel Damage', description: 'Ratchet wheel damage found.' },
+    { name: 'Keyless Works Damage', summary_name: 'Keyless Works Damage', description: 'Keyless works damage found.' },
+    { name: 'Gear Train Damage', summary_name: 'Gear Train Damage', description: 'Gear train damage found.' },
+    { name: 'Calendar Mechanism Damage', summary_name: 'Calendar Mechanism Damage', description: 'Calendar mechanism damage found.' },
+    { name: 'Chronograph Module Damage', summary_name: 'Chronograph Module Damage', description: 'Chronograph module damage found.' },
+    { name: 'Battery Contact Damage', summary_name: 'Battery Contact Damage', description: 'Battery contact damage found.' },
+    { name: 'Coil Damage', summary_name: 'Coil Damage', description: 'Coil damage found.' },
+    { name: 'Step Motor Damage', summary_name: 'Step Motor Damage', description: 'Step motor damage found.' },
+    { name: 'Dial Train Damage', summary_name: 'Dial Train Damage', description: 'Dial train damage found.' },
+];
+
+const DEFAULT_MOVEMENT_TYPE_TEMPLATES: MovementTypeTemplate[] = [
+    { name: 'Quartz movement', movement_type: 'Quartz movement', description: 'Watch uses a quartz movement.' },
+    { name: 'Automatic movement', movement_type: 'Automatic movement', description: 'Watch uses an automatic self-winding movement.' },
+    { name: 'Manual-wind movement', movement_type: 'Manual-wind movement', description: 'Watch uses a manual-wind movement.' },
+    { name: 'Chronograph movement', movement_type: 'Chronograph movement', description: 'Watch contains a chronograph complication.' },
+    { name: 'GMT movement', movement_type: 'GMT movement', description: 'Watch contains a GMT or dual-time movement.' },
+    { name: 'Co-axial movement', movement_type: 'Co-axial movement', description: 'Watch uses a co-axial escapement design.' },
+];
+
+const DEFAULT_MOVEMENT_CALIBER_TEMPLATES: MovementCaliberTemplate[] = [
+    { name: '2235', caliber_code: '2235', description: 'Rolex calibre 2235 automatic movement.' },
+    { name: '2500', caliber_code: '2500', description: 'Omega calibre 2500 co-axial automatic movement.' },
+    { name: '2824-2', caliber_code: '2824-2', description: 'ETA calibre 2824-2 automatic movement.' },
+    { name: '3135', caliber_code: '3135', description: 'Rolex calibre 3135 automatic date movement.' },
+    { name: 'NH35', caliber_code: 'NH35', description: 'Seiko/TMI calibre NH35 automatic movement.' },
+    { name: 'Powermatic 80', caliber_code: 'Powermatic 80', description: 'ETA-derived Powermatic 80 automatic movement family.' },
+];
 
 interface RepairOrderFormProps {
     isOpen: boolean;
@@ -59,6 +143,15 @@ const newRepairItem = (): Omit<RepairItem, 'name'> => ({
     serial_number: '',
     issues: [],
     issue_description: '',
+    pre_existing_condition: [],
+    diagnosis_status: 'Pending Diagnosis',
+    diagnosis_summary: [],
+    movement_type: [],
+    movement_caliber: [],
+    movement_information: [],
+    recommended_work: [],
+    diagnosed_by: '',
+    diagnosis_date: '',
     technician: '',
     status: WatchStatus.Pending,
     intake_checklist: { scratches: false, water_resistance: false, missing_parts: false, other_observations: '' },
@@ -69,7 +162,12 @@ const newRepairItem = (): Omit<RepairItem, 'name'> => ({
 
 export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClose, onSave, order }) => {
     const { formatCurrency } = useAppConfig();
+    const showPostIntakeFields = Boolean(order?.name);
     const [formData, setFormData] = useState<RepairOrder | null>(null);
+    const [preExistingConditionQueries, setPreExistingConditionQueries] = useState<Record<number, string>>({});
+    const [diagnosisSummaryQueries, setDiagnosisSummaryQueries] = useState<Record<number, string>>({});
+    const [movementTypeQueries, setMovementTypeQueries] = useState<Record<number, string>>({});
+    const [movementCaliberQueries, setMovementCaliberQueries] = useState<Record<number, string>>({});
     const [dependencies, setDependencies] = useState<{
         customers: Customer[];
         employees: Employee[];
@@ -78,7 +176,11 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         brands: WatchBrand[];
         models: WatchModel[];
         issueTemplates: IssueTemplate[];
-    }>({ customers: [], employees: [], services: [], parts: [], brands: [], models: [], issueTemplates: [] });
+        watchConditionTemplates: WatchConditionTemplate[];
+        diagnosisSummaryTemplates: DiagnosisSummaryTemplate[];
+        movementTypeTemplates: MovementTypeTemplate[];
+        movementCaliberTemplates: MovementCaliberTemplate[];
+    }>({ customers: [], employees: [], services: [], parts: [], brands: [], models: [], issueTemplates: [], watchConditionTemplates: [], diagnosisSummaryTemplates: [], movementTypeTemplates: [], movementCaliberTemplates: [] });
 
     // Customer Creation State
     const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false);
@@ -102,12 +204,16 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
     const loadDependencies = useCallback(async () => {
         if (isErpNext) {
-            const [customers, employees, taskTemplates, brands, issueTemplates] = await Promise.all([
+            const [customers, employees, taskTemplates, brands, issueTemplates, watchConditionTemplates, diagnosisSummaryTemplates, movementTypeTemplates, movementCaliberTemplates] = await Promise.all([
                 apiService.getCustomers(),
                 apiService.getEmployees(),
                 apiService.getTaskTemplates(),
                 apiService.getWatchBrands(),
-                apiService.getIssueTemplates()
+                apiService.getIssueTemplates(),
+                apiService.getWatchConditionTemplates(),
+                apiService.getDiagnosisSummaryTemplates(),
+                apiService.getMovementTypeTemplates(),
+                apiService.getMovementCaliberTemplates(),
             ]);
             setDependencies({
                 customers,
@@ -116,7 +222,11 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                 parts: [], // Start empty - users must search
                 brands,
                 models: [], // Models loaded when brand is selected
-                issueTemplates
+                issueTemplates,
+                watchConditionTemplates,
+                diagnosisSummaryTemplates,
+                movementTypeTemplates,
+                movementCaliberTemplates,
             });
             return;
         }
@@ -128,16 +238,62 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
             parts: mockSpareParts,
             brands: [],
             models: [],
-            issueTemplates: []
+            issueTemplates: [],
+            watchConditionTemplates: DEFAULT_WATCH_CONDITION_TEMPLATES,
+            diagnosisSummaryTemplates: DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES,
+            movementTypeTemplates: DEFAULT_MOVEMENT_TYPE_TEMPLATES,
+            movementCaliberTemplates: DEFAULT_MOVEMENT_CALIBER_TEMPLATES,
         });
     }, []);
 
+    const availableWatchConditionSuggestions = (itemIndex: number) => {
+        const selectedConditions = formData.items[itemIndex].pre_existing_condition || [];
+        const query = (preExistingConditionQueries[itemIndex] || '').trim().toLowerCase();
 
+        return dependencies.watchConditionTemplates
+            .filter(template => !selectedConditions.some(existing => existing.toLowerCase() === template.condition_name.toLowerCase()))
+            .filter(template => !query || template.condition_name.toLowerCase().includes(query) || (template.description || '').toLowerCase().includes(query))
+            .slice(0, 8);
+    };
+
+    const availableDiagnosisSummarySuggestions = (itemIndex: number) => {
+        const selectedSummaries = formData.items[itemIndex].diagnosis_summary || [];
+        const query = (diagnosisSummaryQueries[itemIndex] || '').trim().toLowerCase();
+
+        return dependencies.diagnosisSummaryTemplates
+            .filter(template => !selectedSummaries.some(existing => existing.toLowerCase() === template.summary_name.toLowerCase()))
+            .filter(template => !query || template.summary_name.toLowerCase().includes(query) || (template.description || '').toLowerCase().includes(query))
+            .slice(0, 8);
+    };
+
+    const availableMovementTypeSuggestions = (itemIndex: number) => {
+        const selectedValues = formData.items[itemIndex].movement_type || [];
+        const query = (movementTypeQueries[itemIndex] || '').trim().toLowerCase();
+
+        return dependencies.movementTypeTemplates
+            .filter(template => !selectedValues.some(existing => existing.toLowerCase() === template.movement_type.toLowerCase()))
+            .filter(template => !query || template.movement_type.toLowerCase().includes(query) || (template.description || '').toLowerCase().includes(query))
+            .slice(0, 8);
+    };
+
+    const availableMovementCaliberSuggestions = (itemIndex: number) => {
+        const selectedValues = formData.items[itemIndex].movement_caliber || [];
+        const query = (movementCaliberQueries[itemIndex] || '').trim().toLowerCase();
+
+        return dependencies.movementCaliberTemplates
+            .filter(template => !selectedValues.some(existing => existing.toLowerCase() === template.caliber_code.toLowerCase()))
+            .filter(template => !query || template.caliber_code.toLowerCase().includes(query) || (template.description || '').toLowerCase().includes(query))
+            .slice(0, 8);
+    };
 
     useEffect(() => {
         if (isOpen) {
             loadDependencies();
             setValidationErrors([]);
+            setPreExistingConditionQueries({});
+            setDiagnosisSummaryQueries({});
+            setMovementTypeQueries({});
+            setMovementCaliberQueries({});
         }
     }, [isOpen, loadDependencies]);
 
@@ -195,9 +351,60 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         setFormData(prev => prev ? { ...prev, [field]: value } : null);
     };
 
+    const resolveTaskTemplateName = (value: string): string | null => {
+        const normalized = value.trim().toLowerCase();
+        if (!normalized) {
+            return null;
+        }
+
+        const match = dependencies.services.find(service => (
+            service.name.toLowerCase() === normalized || service.task_name.toLowerCase() === normalized
+        ));
+
+        return match?.name || null;
+    };
+
+    const buildAutoTasksForItem = (item: RepairItem): RepairTask[] => {
+        const recommendedServices = Array.from(new Set(
+            (item.recommended_work || [])
+                .map(resolveTaskTemplateName)
+                .filter((serviceName): serviceName is string => Boolean(serviceName))
+        ));
+
+        const issueServices = Array.from(new Set(
+            (item.issues || [])
+                .map(issue => issue.is_other ? null : (dependencies.issueTemplates.find(template => template.name === issue.issue)?.suggested_task || null))
+                .filter((serviceName): serviceName is string => Boolean(serviceName))
+        ));
+
+        const serviceNames = recommendedServices.length > 0 ? recommendedServices : issueServices;
+        return serviceNames.map(service => ({
+            service,
+            technician: item.technician,
+            notes: '',
+            status: TaskStatus.Pending,
+        }));
+    };
+
     const handleItemChange = <K extends keyof RepairItem>(itemIndex: number, field: K, value: RepairItem[K]) => {
         const newItems = [...formData.items];
-        newItems[itemIndex] = { ...newItems[itemIndex], [field]: value };
+        let updatedItem = { ...newItems[itemIndex], [field]: value };
+
+        if (field === 'recommended_work') {
+            updatedItem = { ...updatedItem, tasks: buildAutoTasksForItem(updatedItem) };
+        }
+
+        if (field === 'technician') {
+            updatedItem = {
+                ...updatedItem,
+                tasks: (updatedItem.tasks || []).map(task => ({ ...task, technician: value as string })),
+            };
+        }
+
+        if (field === 'diagnosis_summary' || field === 'movement_type' || field === 'movement_caliber' || field === 'recommended_work') {
+            updatedItem.diagnosis_status = resolveDiagnosisStatus(updatedItem.diagnosis_status, updatedItem);
+        }
+        newItems[itemIndex] = updatedItem;
         setFormData({ ...formData, items: newItems });
     };
 
@@ -209,6 +416,142 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
     const handleRemoveItem = (itemIndex: number) => {
         const newItems = formData.items.filter((_, index) => index !== itemIndex);
         setFormData({ ...formData, items: newItems });
+        setPreExistingConditionQueries(prev => {
+            const next: Record<number, string> = {};
+            Object.entries(prev).forEach(([key, value]) => {
+                const index = Number(key);
+                if (index < itemIndex) next[index] = value;
+                if (index > itemIndex) next[index - 1] = value;
+            });
+            return next;
+        });
+        setDiagnosisSummaryQueries(prev => {
+            const next: Record<number, string> = {};
+            Object.entries(prev).forEach(([key, value]) => {
+                const index = Number(key);
+                if (index < itemIndex) next[index] = value;
+                if (index > itemIndex) next[index - 1] = value;
+            });
+            return next;
+        });
+        setMovementTypeQueries(prev => {
+            const next: Record<number, string> = {};
+            Object.entries(prev).forEach(([key, value]) => {
+                const index = Number(key);
+                if (index < itemIndex) next[index] = value;
+                if (index > itemIndex) next[index - 1] = value;
+            });
+            return next;
+        });
+        setMovementCaliberQueries(prev => {
+            const next: Record<number, string> = {};
+            Object.entries(prev).forEach(([key, value]) => {
+                const index = Number(key);
+                if (index < itemIndex) next[index] = value;
+                if (index > itemIndex) next[index - 1] = value;
+            });
+            return next;
+        });
+    };
+
+    const handlePreExistingConditionQueryChange = (itemIndex: number, value: string) => {
+        setPreExistingConditionQueries(prev => ({ ...prev, [itemIndex]: value }));
+    };
+
+    const handleAddPreExistingCondition = (itemIndex: number, rawValue: string) => {
+        const value = rawValue.trim();
+        if (!value) return;
+
+        const existing = formData.items[itemIndex].pre_existing_condition || [];
+        if (existing.some(entry => entry.toLowerCase() === value.toLowerCase())) {
+            setPreExistingConditionQueries(prev => ({ ...prev, [itemIndex]: '' }));
+            return;
+        }
+
+        handleItemChange(itemIndex, 'pre_existing_condition', [...existing, value]);
+        setPreExistingConditionQueries(prev => ({ ...prev, [itemIndex]: '' }));
+    };
+
+    const handleRemovePreExistingCondition = (itemIndex: number, valueToRemove: string) => {
+        const existing = formData.items[itemIndex].pre_existing_condition || [];
+        handleItemChange(
+            itemIndex,
+            'pre_existing_condition',
+            existing.filter(value => value !== valueToRemove)
+        );
+    };
+
+    const handleDiagnosisSummaryQueryChange = (itemIndex: number, value: string) => {
+        setDiagnosisSummaryQueries(prev => ({ ...prev, [itemIndex]: value }));
+    };
+
+    const handleAddDiagnosisSummary = (itemIndex: number, rawValue: string) => {
+        const value = rawValue.trim();
+        if (!value) return;
+
+        const existing = formData.items[itemIndex].diagnosis_summary || [];
+        if (existing.some(entry => entry.toLowerCase() === value.toLowerCase())) {
+            setDiagnosisSummaryQueries(prev => ({ ...prev, [itemIndex]: '' }));
+            return;
+        }
+
+        handleItemChange(itemIndex, 'diagnosis_summary', [...existing, value]);
+        setDiagnosisSummaryQueries(prev => ({ ...prev, [itemIndex]: '' }));
+    };
+
+    const handleRemoveDiagnosisSummary = (itemIndex: number, valueToRemove: string) => {
+        const existing = formData.items[itemIndex].diagnosis_summary || [];
+        handleItemChange(
+            itemIndex,
+            'diagnosis_summary',
+            existing.filter(value => value !== valueToRemove)
+        );
+    };
+
+    const handleMovementTypeQueryChange = (itemIndex: number, value: string) => {
+        setMovementTypeQueries(prev => ({ ...prev, [itemIndex]: value }));
+    };
+
+    const handleAddMovementType = (itemIndex: number, rawValue: string) => {
+        const value = rawValue.trim();
+        if (!value) return;
+
+        const existing = formData.items[itemIndex].movement_type || [];
+        if (existing.some(entry => entry.toLowerCase() === value.toLowerCase())) {
+            setMovementTypeQueries(prev => ({ ...prev, [itemIndex]: '' }));
+            return;
+        }
+
+        handleItemChange(itemIndex, 'movement_type', [...existing, value]);
+        setMovementTypeQueries(prev => ({ ...prev, [itemIndex]: '' }));
+    };
+
+    const handleRemoveMovementType = (itemIndex: number, valueToRemove: string) => {
+        const existing = formData.items[itemIndex].movement_type || [];
+        handleItemChange(itemIndex, 'movement_type', existing.filter(value => value !== valueToRemove));
+    };
+
+    const handleMovementCaliberQueryChange = (itemIndex: number, value: string) => {
+        setMovementCaliberQueries(prev => ({ ...prev, [itemIndex]: value }));
+    };
+
+    const handleAddMovementCaliber = (itemIndex: number, rawValue: string) => {
+        const value = rawValue.trim();
+        if (!value) return;
+
+        const existing = formData.items[itemIndex].movement_caliber || [];
+        if (existing.some(entry => entry.toLowerCase() === value.toLowerCase())) {
+            setMovementCaliberQueries(prev => ({ ...prev, [itemIndex]: '' }));
+            return;
+        }
+
+        handleItemChange(itemIndex, 'movement_caliber', [...existing, value]);
+        setMovementCaliberQueries(prev => ({ ...prev, [itemIndex]: '' }));
+    };
+
+    const handleRemoveMovementCaliber = (itemIndex: number, valueToRemove: string) => {
+        const existing = formData.items[itemIndex].movement_caliber || [];
+        handleItemChange(itemIndex, 'movement_caliber', existing.filter(value => value !== valueToRemove));
     };
 
     const handleTaskChange = (itemIndex: number, taskIndex: number, field: keyof RepairTask, value: any) => {
@@ -308,24 +651,8 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                 ? [...item.issues, { issue: template.name, is_other: false, other_description: '' }]
                 : item.issues.filter(i => i.issue !== template.name);
 
-            // Auto-add suggested task if available
-            let newTasks = item.tasks;
-            if (checked && template.suggested_task) {
-                const taskExists = item.tasks.some(t => t.service === template.suggested_task);
-                if (!taskExists) {
-                    newTasks = [...item.tasks, {
-                        service: template.suggested_task,
-                        technician: '',
-                        notes: '',
-                        status: TaskStatus.Pending
-                    }];
-                }
-            } else if (!checked && template.suggested_task) {
-                // Remove the suggested task if the issue is unchecked
-                newTasks = item.tasks.filter(t => t.service !== template.suggested_task);
-            }
-
-            return { ...item, issues: newIssues, tasks: newTasks };
+            const updatedItem = { ...item, issues: newIssues };
+            return { ...updatedItem, tasks: buildAutoTasksForItem(updatedItem) };
         });
 
         setFormData({ ...formData, items: newItems });
@@ -339,7 +666,8 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                 ? [...item.issues, { issue: 'Other', is_other: true, other_description: '' }]
                 : item.issues.filter(i => !i.is_other);
 
-            return { ...item, issues: newIssues };
+            const updatedItem = { ...item, issues: newIssues };
+            return { ...updatedItem, tasks: buildAutoTasksForItem(updatedItem) };
         });
 
         setFormData({ ...formData, items: newItems });
@@ -610,114 +938,404 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                             style={{ borderColor: '#E8E8E8' }}
                                         />
                                     </div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <Select label="Technician" value={item.technician} onChange={e => handleItemChange(itemIndex, 'technician', e.target.value)}>
-                                        <option value="">Unassigned</option>
-                                        {dependencies.employees.map(e => <option key={e.name} value={e.name}>{e.employee_name}</option>)}
-                                    </Select>
-                                    <Select label="Watch Status" value={item.status} onChange={e => handleItemChange(itemIndex, 'status', e.target.value as WatchStatus)}>
-                                        {Object.values(WatchStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                                    </Select>
-                                </div>
 
-                                {/* Tasks */}
-                                <div>
-                                    <h5 className="font-semibold text-gray-900">Tasks</h5>
-                                    {item.tasks.map((task, taskIndex) => {
-                                        const selectedService = dependencies.services.find(s => s.name === task.service);
-                                        const autoRate = selectedService?.default_rate || 0;
-                                        return (
-                                            <div key={task.name || taskIndex} className="space-y-2 p-3 border rounded-xl bg-white my-2" style={{ borderColor: '#ECE8E3' }}>
-                                                <div className="flex items-center space-x-2">
-                                                    <Select value={task.service} onChange={e => {
-                                                        handleTaskChange(itemIndex, taskIndex, 'service', e.target.value);
-                                                        // Auto-fetch rate when service changes
-                                                        const service = dependencies.services.find(s => s.name === e.target.value);
-                                                        if (service?.default_rate) {
-                                                            handleTaskChange(itemIndex, taskIndex, 'auto_rate', service.default_rate);
-                                                        }
-                                                    }} className="flex-grow">
-                                                        {dependencies.services.map(s => <option key={s.name} value={s.name}>{s.task_name}</option>)}
-                                                    </Select>
-                                                    <Select value={task.status} onChange={e => handleTaskChange(itemIndex, taskIndex, 'status', e.target.value as TaskStatus)} className="w-32">
-                                                        {Object.values(TaskStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                                                    </Select>
-                                                    <Button type="button" variant="destructive" size="icon" onClick={() => handleRemoveTask(itemIndex, taskIndex)}><TrashIcon className="h-4 w-4" /></Button>
+                                    <div className="mt-4 rounded-xl border bg-[#FCFAF7] p-4" style={{ borderColor: '#ECE8E3' }}>
+                                        <div className="mb-3">
+                                            <h4 className="text-sm font-semibold text-gray-900">Pre-Existing Watch Condition</h4>
+                                            <p className="mt-1 text-xs text-gray-500">
+                                                Record cosmetic or physical conditions already present at intake to preserve an audit trail.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-col gap-3">
+                                            <div className="relative">
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={preExistingConditionQueries[itemIndex] || ''}
+                                                        onChange={(e) => handlePreExistingConditionQueryChange(itemIndex, e.target.value)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                handleAddPreExistingCondition(itemIndex, preExistingConditionQueries[itemIndex] || '');
+                                                            }
+                                                        }}
+                                                        placeholder="Search or type a condition, then press Enter or Add"
+                                                        className="w-full px-3 py-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white pr-24"
+                                                        style={{ borderColor: '#E8E8E8' }}
+                                                    />
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleAddPreExistingCondition(itemIndex, preExistingConditionQueries[itemIndex] || '')}
+                                                        className="shrink-0"
+                                                    >
+                                                        Add
+                                                    </Button>
                                                 </div>
-                                                {/* Pricing row */}
-                                                <div className="flex items-center space-x-2 text-sm">
-                                                    <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 mb-1">Auto Rate</label>
-                                                        <div className="px-3 py-1.5 bg-[#F5F1EC] rounded text-gray-600">
-                                                            {formatCurrency(autoRate)}
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 mb-1">Manual Rate Override</label>
-                                                        <div className="flex space-x-1">
-                                                            <Input
-                                                                type="number"
-                                                                value={task.rate || ''}
-                                                                onChange={e => handleTaskChange(itemIndex, taskIndex, 'rate', e.target.value ? parseFloat(e.target.value) : undefined)}
-                                                                placeholder={`${autoRate.toFixed(2)}`}
-                                                                min="0"
-                                                                step="0.01"
-                                                                className="flex-1"
-                                                            />
-                                                            {task.rate && (
+                                                {(preExistingConditionQueries[itemIndex] || '').trim() && (
+                                                    <div className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-lg" style={{ borderColor: '#E8E8E8' }}>
+                                                        {availableWatchConditionSuggestions(itemIndex)
+                                                            .map(template => (
                                                                 <button
+                                                                    key={template.name}
                                                                     type="button"
-                                                                    onClick={() => handleTaskChange(itemIndex, taskIndex, 'rate', undefined)}
-                                                                    className="px-2 text-xs text-[#648DDA] hover:text-[#527cc7]"
-                                                                    title="Reset to auto rate"
+                                                                    onClick={() => handleAddPreExistingCondition(itemIndex, template.condition_name)}
+                                                                    className="block w-full border-b px-3 py-2 text-left text-sm text-gray-700 hover:bg-[#F9F7F4] last:border-b-0"
+                                                                    style={{ borderColor: '#F0EEEB' }}
                                                                 >
-                                                                    Reset
+                                                                    <div className="font-medium text-gray-800">{template.condition_name}</div>
+                                                                    {template.description && (
+                                                                        <div className="text-xs text-gray-500">{template.description}</div>
+                                                                    )}
+                                                                </button>
+                                                            ))}
+                                                        {!availableWatchConditionSuggestions(itemIndex).length && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleAddPreExistingCondition(itemIndex, preExistingConditionQueries[itemIndex] || '')}
+                                                                className="block w-full px-3 py-2 text-left text-sm text-[#648DDA] hover:bg-[#F9F7F4]"
+                                                            >
+                                                                Add custom condition "{(preExistingConditionQueries[itemIndex] || '').trim()}"
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {item.pre_existing_condition.length > 0 ? (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {item.pre_existing_condition.map((condition) => (
+                                                        <span
+                                                            key={condition}
+                                                            className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-sm text-gray-700"
+                                                        >
+                                                            {condition}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemovePreExistingCondition(itemIndex, condition)}
+                                                                className="text-gray-400 hover:text-red-500"
+                                                                aria-label={`Remove ${condition}`}
+                                                            >
+                                                                ×
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <p className="text-xs text-gray-400">
+                                                    No pre-existing conditions added yet.
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                                {showPostIntakeFields && (
+                                    <div className="rounded-xl border bg-white p-4" style={{ borderColor: '#ECE8E3' }}>
+                                        <div className="mb-3 flex items-start justify-between gap-3">
+                                            <div>
+                                                <h4 className="text-sm font-semibold text-gray-900">Technician Diagnosis</h4>
+                                                <p className="mt-1 text-xs text-gray-500">
+                                                    Record inspection findings and recommended work after technical assessment.
+                                                </p>
+                                            </div>
+                                            {(item.diagnosed_by || item.diagnosis_date) && (
+                                                <div className="text-right text-xs text-gray-500">
+                                                    {item.diagnosed_by && <div>By: {item.diagnosed_by}</div>}
+                                                    {item.diagnosis_date && <div>{item.diagnosis_date}</div>}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <Select label="Diagnosis Status" value={item.diagnosis_status} onChange={e => handleItemChange(itemIndex, 'diagnosis_status', e.target.value as RepairItem['diagnosis_status'])}>
+                                                <option value="Pending Diagnosis">Pending Diagnosis</option>
+                                                <option value="Diagnosed">Diagnosed</option>
+                                                <option value="Not Repairable">Not Repairable</option>
+                                                <option value="Awaiting Approval">Awaiting Approval</option>
+                                                <option value="Quoted">Quoted</option>
+                                                <option value="Declined">Declined</option>
+                                            </Select>
+                                        </div>
+                                        <div className="mt-4">
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Diagnosis Summary</label>
+                                            <div className="flex flex-col gap-3">
+                                                <div className="relative">
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            type="text"
+                                                            value={diagnosisSummaryQueries[itemIndex] || ''}
+                                                            onChange={(e) => handleDiagnosisSummaryQueryChange(itemIndex, e.target.value)}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') {
+                                                                    e.preventDefault();
+                                                                    handleAddDiagnosisSummary(itemIndex, diagnosisSummaryQueries[itemIndex] || '');
+                                                                }
+                                                            }}
+                                                            placeholder="Search or type a diagnosis summary"
+                                                            className="w-full px-3 py-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white"
+                                                            style={{ borderColor: '#E8E8E8' }}
+                                                        />
+                                                        <Button type="button" variant="outline" size="sm" onClick={() => handleAddDiagnosisSummary(itemIndex, diagnosisSummaryQueries[itemIndex] || '')} className="shrink-0">
+                                                            Add
+                                                        </Button>
+                                                    </div>
+                                                    {(diagnosisSummaryQueries[itemIndex] || '').trim() && (
+                                                        <div className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-lg" style={{ borderColor: '#E8E8E8' }}>
+                                                            {availableDiagnosisSummarySuggestions(itemIndex).map(template => (
+                                                                <button
+                                                                    key={template.name}
+                                                                    type="button"
+                                                                    onClick={() => handleAddDiagnosisSummary(itemIndex, template.summary_name)}
+                                                                    className="block w-full border-b px-3 py-2 text-left text-sm text-gray-700 hover:bg-[#F9F7F4] last:border-b-0"
+                                                                    style={{ borderColor: '#F0EEEB' }}
+                                                                >
+                                                                    <div className="font-medium text-gray-800">{template.summary_name}</div>
+                                                                    {template.description && <div className="text-xs text-gray-500">{template.description}</div>}
+                                                                </button>
+                                                            ))}
+                                                            {!availableDiagnosisSummarySuggestions(itemIndex).length && (
+                                                                <button type="button" onClick={() => handleAddDiagnosisSummary(itemIndex, diagnosisSummaryQueries[itemIndex] || '')} className="block w-full px-3 py-2 text-left text-sm text-[#648DDA] hover:bg-[#F9F7F4]">
+                                                                    Add custom summary "{(diagnosisSummaryQueries[itemIndex] || '').trim()}"
                                                                 </button>
                                                             )}
                                                         </div>
+                                                    )}
+                                                </div>
+                                                {item.diagnosis_summary.length > 0 ? (
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {item.diagnosis_summary.map((summary) => (
+                                                            <span key={summary} className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-sm text-gray-700">
+                                                                {summary}
+                                                                <button type="button" onClick={() => handleRemoveDiagnosisSummary(itemIndex, summary)} className="text-gray-400 hover:text-red-500" aria-label={`Remove ${summary}`}>
+                                                                    ×
+                                                                </button>
+                                                            </span>
+                                                        ))}
                                                     </div>
-                                                    <div className="flex-1">
-                                                        <label className="block text-xs text-gray-500 mb-1">Effective Rate</label>
-                                                        <div className="px-3 py-1.5 bg-[#EBF5F0] rounded font-medium text-[#2E7B5B]">
-                                                            {formatCurrency(task.rate || autoRate)}
-                                                            {task.rate && <span className="ml-1 text-xs">(manual)</span>}
+                                                ) : (
+                                                    <p className="text-xs text-gray-400">No diagnosis summary added yet.</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">Movement Type</label>
+                                                <div className="flex flex-col gap-3">
+                                                    <div className="relative">
+                                                        <div className="flex gap-2">
+                                                            <input
+                                                                type="text"
+                                                                value={movementTypeQueries[itemIndex] || ''}
+                                                                onChange={(e) => handleMovementTypeQueryChange(itemIndex, e.target.value)}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        e.preventDefault();
+                                                                        handleAddMovementType(itemIndex, movementTypeQueries[itemIndex] || '');
+                                                                    }
+                                                                }}
+                                                                placeholder="Search or type movement type"
+                                                                className="w-full px-3 py-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white"
+                                                                style={{ borderColor: '#E8E8E8' }}
+                                                            />
+                                                            <Button type="button" variant="outline" size="sm" onClick={() => handleAddMovementType(itemIndex, movementTypeQueries[itemIndex] || '')} className="shrink-0">
+                                                                Add
+                                                            </Button>
                                                         </div>
+                                                        {(movementTypeQueries[itemIndex] || '').trim() && (
+                                                            <div className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-lg" style={{ borderColor: '#E8E8E8' }}>
+                                                                {availableMovementTypeSuggestions(itemIndex).map(template => (
+                                                                    <button
+                                                                        key={template.name}
+                                                                        type="button"
+                                                                        onClick={() => handleAddMovementType(itemIndex, template.movement_type)}
+                                                                        className="block w-full border-b px-3 py-2 text-left text-sm text-gray-700 hover:bg-[#F9F7F4] last:border-b-0"
+                                                                        style={{ borderColor: '#F0EEEB' }}
+                                                                    >
+                                                                        <div className="font-medium text-gray-800">{template.movement_type}</div>
+                                                                        {template.description && <div className="text-xs text-gray-500">{template.description}</div>}
+                                                                    </button>
+                                                                ))}
+                                                                {!availableMovementTypeSuggestions(itemIndex).length && (
+                                                                    <button type="button" onClick={() => handleAddMovementType(itemIndex, movementTypeQueries[itemIndex] || '')} className="block w-full px-3 py-2 text-left text-sm text-[#648DDA] hover:bg-[#F9F7F4]">
+                                                                        Add custom movement type "{(movementTypeQueries[itemIndex] || '').trim()}"
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
+                                                    {item.movement_type.length > 0 ? (
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {item.movement_type.map((movementType) => (
+                                                                <span key={movementType} className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-sm text-gray-700">
+                                                                    {movementType}
+                                                                    <button type="button" onClick={() => handleRemoveMovementType(itemIndex, movementType)} className="text-gray-400 hover:text-red-500" aria-label={`Remove ${movementType}`}>
+                                                                        ×
+                                                                    </button>
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-xs text-gray-400">No movement type added yet.</p>
+                                                    )}
                                                 </div>
                                             </div>
-                                        );
-                                    })}
-                                    <Button type="button" variant="outline" size="sm" onClick={() => handleAddTask(itemIndex)} className="mt-2"><PlusIcon className="h-4 w-4 mr-1" />Add Task</Button>
-                                </div>
 
-                                {/* Parts */}
-                                <div>
-                                    <h5 className="font-semibold text-gray-900">Parts Used</h5>
-                                    {item.parts_used.map((part, partIndex) => {
-                                        const selectedPart = dependencies.parts.find(p => p.name === part.part);
-                                        return (
-                                            <div key={part.name || partIndex} className="space-y-2 p-3 border rounded-xl bg-white my-2" style={{ borderColor: '#ECE8E3' }}>
-                                                <div className="flex items-center space-x-2">
-                                                    <Autocomplete
-                                                        placeholder="Search by code, name, or description..."
-                                                        options={dependencies.parts.map(p => ({
-                                                            value: p.name,
-                                                            label: `${p.item_code || p.name} - ${p.item_name}`,
-                                                            subtitle: p.description || `Rate: ${formatCurrency(p.standard_rate || 0)}`
-                                                        }))}
-                                                        value={part.part}
-                                                        onChange={(value) => {
-                                                            handlePartChange(itemIndex, partIndex, 'part', value);
-                                                            // Auto-fill UOM and rate
-                                                            const selectedItem = dependencies.parts.find(p => p.name === value);
-                                                            if (selectedItem) {
-                                                                handlePartChange(itemIndex, partIndex, 'uom', selectedItem.stock_uom);
-                                                                handlePartChange(itemIndex, partIndex, 'auto_rate', selectedItem.standard_rate);
-                                                            }
-                                                        }}
-                                                        onSearch={async (query) => {
-                                                            if (isErpNext && query.trim()) {
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">Movement Caliber</label>
+                                                <div className="flex flex-col gap-3">
+                                                    <div className="relative">
+                                                        <div className="flex gap-2">
+                                                            <input
+                                                                type="text"
+                                                                value={movementCaliberQueries[itemIndex] || ''}
+                                                                onChange={(e) => handleMovementCaliberQueryChange(itemIndex, e.target.value)}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        e.preventDefault();
+                                                                        handleAddMovementCaliber(itemIndex, movementCaliberQueries[itemIndex] || '');
+                                                                    }
+                                                                }}
+                                                                placeholder="Search or type caliber code"
+                                                                className="w-full px-3 py-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white"
+                                                                style={{ borderColor: '#E8E8E8' }}
+                                                            />
+                                                            <Button type="button" variant="outline" size="sm" onClick={() => handleAddMovementCaliber(itemIndex, movementCaliberQueries[itemIndex] || '')} className="shrink-0">
+                                                                Add
+                                                            </Button>
+                                                        </div>
+                                                        {(movementCaliberQueries[itemIndex] || '').trim() && (
+                                                            <div className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-lg" style={{ borderColor: '#E8E8E8' }}>
+                                                                {availableMovementCaliberSuggestions(itemIndex).map(template => (
+                                                                    <button
+                                                                        key={template.name}
+                                                                        type="button"
+                                                                        onClick={() => handleAddMovementCaliber(itemIndex, template.caliber_code)}
+                                                                        className="block w-full border-b px-3 py-2 text-left text-sm text-gray-700 hover:bg-[#F9F7F4] last:border-b-0"
+                                                                        style={{ borderColor: '#F0EEEB' }}
+                                                                    >
+                                                                        <div className="font-medium text-gray-800">{template.caliber_code}</div>
+                                                                        {template.description && <div className="text-xs text-gray-500">{template.description}</div>}
+                                                                    </button>
+                                                                ))}
+                                                                {!availableMovementCaliberSuggestions(itemIndex).length && (
+                                                                    <button type="button" onClick={() => handleAddMovementCaliber(itemIndex, movementCaliberQueries[itemIndex] || '')} className="block w-full px-3 py-2 text-left text-sm text-[#648DDA] hover:bg-[#F9F7F4]">
+                                                                        Add custom caliber "{(movementCaliberQueries[itemIndex] || '').trim()}"
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    {item.movement_caliber.length > 0 ? (
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {item.movement_caliber.map((caliber) => (
+                                                                <span key={caliber} className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-sm text-gray-700">
+                                                                    {caliber}
+                                                                    <button type="button" onClick={() => handleRemoveMovementCaliber(itemIndex, caliber)} className="text-gray-400 hover:text-red-500" aria-label={`Remove ${caliber}`}>
+                                                                        ×
+                                                                    </button>
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-xs text-gray-400">No movement caliber added yet.</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4">
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Recommended Work</label>
+                                            <textarea
+                                                value={(item.recommended_work || []).join('\n')}
+                                                onChange={(e) => handleItemChange(itemIndex, 'recommended_work', e.target.value.split('\n').filter(Boolean) as any)}
+                                                rows={2}
+                                                placeholder="Recommended service or repair steps..."
+                                                className="w-full p-2 border rounded-md focus:ring-[#648DDA] focus:border-[#648DDA] text-sm bg-white"
+                                                style={{ borderColor: '#E8E8E8' }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                                {showPostIntakeFields && (
+                                    <>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <Select label="Technician" value={item.technician} onChange={e => handleItemChange(itemIndex, 'technician', e.target.value)}>
+                                                <option value="">Unassigned</option>
+                                                {dependencies.employees.map(e => <option key={e.name} value={e.name}>{e.employee_name}</option>)}
+                                            </Select>
+                                            <Select label="Watch Status" value={item.status} onChange={e => handleItemChange(itemIndex, 'status', e.target.value as WatchStatus)}>
+                                                {Object.values(WatchStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                                            </Select>
+                                        </div>
+
+                                        <div>
+                                            <div className="flex items-center justify-between gap-3">
+                                                <h5 className="font-semibold text-gray-900">Tasks</h5>
+                                                <span className="text-xs text-gray-500">Auto-managed from issues and recommended work</span>
+                                            </div>
+                                            {item.tasks.map((task, taskIndex) => {
+                                                const selectedService = dependencies.services.find(s => s.name === task.service);
+                                                const autoRate = selectedService?.default_rate || 0;
+                                                return (
+                                                    <div key={task.name || taskIndex} className="space-y-2 p-3 border rounded-xl bg-white my-2" style={{ borderColor: '#ECE8E3' }}>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <p className="font-medium text-gray-900">{selectedService?.task_name || task.service}</p>
+                                                                <p className="text-xs text-gray-500">{task.status}</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="font-medium text-[#2E7B5B]">{formatCurrency(task.rate || autoRate)}</p>
+                                                                {task.rate && <p className="text-xs text-gray-500">Manual override saved</p>}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center space-x-2 text-sm">
+                                                            <div className="flex-1">
+                                                                <label className="block text-xs text-gray-500 mb-1">Auto Rate</label>
+                                                                <div className="px-3 py-1.5 bg-[#F5F1EC] rounded text-gray-600">
+                                                                    {formatCurrency(autoRate)}
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex-1">
+                                                                <label className="block text-xs text-gray-500 mb-1">Effective Rate</label>
+                                                                <div className="px-3 py-1.5 bg-[#EBF5F0] rounded font-medium text-[#2E7B5B]">
+                                                                    {formatCurrency(task.rate || autoRate)}
+                                                                    {task.rate && <span className="ml-1 text-xs">(manual)</span>}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                            {item.tasks.length === 0 && (
+                                                <p className="mt-2 text-sm text-gray-500">Tasks will be generated automatically from selected issues or recommended work.</p>
+                                            )}
+                                        </div>
+
+                                        <div>
+                                            <h5 className="font-semibold text-gray-900">Parts Used</h5>
+                                            {item.parts_used.map((part, partIndex) => {
+                                                const selectedPart = dependencies.parts.find(p => p.name === part.part);
+                                                return (
+                                                    <div key={part.name || partIndex} className="space-y-2 p-3 border rounded-xl bg-white my-2" style={{ borderColor: '#ECE8E3' }}>
+                                                        <div className="flex items-center space-x-2">
+                                                            <Autocomplete
+                                                                placeholder="Search by code, name, or description..."
+                                                                options={dependencies.parts.map(p => ({
+                                                                    value: p.name,
+                                                                    label: `${p.item_code || p.name} - ${p.item_name}`,
+                                                                    subtitle: p.description || `Rate: ${formatCurrency(p.standard_rate || 0)}`
+                                                                }))}
+                                                                value={part.part}
+                                                                onChange={(value) => {
+                                                                    handlePartChange(itemIndex, partIndex, 'part', value);
+                                                                    const selectedItem = dependencies.parts.find(p => p.name === value);
+                                                                    if (selectedItem) {
+                                                                        handlePartChange(itemIndex, partIndex, 'uom', selectedItem.stock_uom);
+                                                                        handlePartChange(itemIndex, partIndex, 'auto_rate', selectedItem.standard_rate);
+                                                                    }
+                                                                }}
+                                                                onSearch={async (query) => {
+                                                                    if (isErpNext && query.trim()) {
                                                                 const results = await apiService.searchItems(query);
                                                                 setDependencies(prev => ({ ...prev, parts: results }));
                                                             }
@@ -813,6 +1431,8 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                                     })}
                                     <Button type="button" variant="outline" size="sm" onClick={() => handleOpenAddPart(itemIndex)} className="mt-2"><PlusIcon className="h-4 w-4 mr-1" />Add Part</Button>
                                 </div>
+                            </>
+                        )}
                             </div>
                         ))}
                         <Button type="button" variant="outline" onClick={handleAddItem} className="w-full">

@@ -37,6 +37,12 @@ def execute():
 			"is_active": 1,
 			"message_body": "Dear {{1}}, your repair order #{{2}} has been delivered. Thank you for your business! We'd love to see you again at {{4}}.",
 		},
+		{
+			"notification_key": "watch_estimate_ready",
+			"label": "Watch Estimate Ready",
+			"is_active": 1,
+			"message_body": "Dear {{1}}, we prepared the estimate for your watch {{6}} on order #{{2}}. Recommended work: {{7}}. Estimated total: {{8}}. Please confirm to proceed.",
+		},
 	]
 
 	for t in templates:

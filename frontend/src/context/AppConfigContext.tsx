@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { isErpNext, apiFetchRaw } from '../services/apiService';
+import { useAuth } from './AuthContext';
 
 export interface AppConfig {
     logoUrl: string;
@@ -30,6 +31,7 @@ const AppConfigContext = createContext<AppConfigContextValue>({
 export const useAppConfig = () => useContext(AppConfigContext);
 
 export const AppConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const { isAuthenticated, isLoading } = useAuth();
     const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
 
     const refreshConfig = useCallback(async () => {
@@ -54,8 +56,21 @@ export const AppConfigProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, []);
 
     useEffect(() => {
+        if (!isErpNext) {
+            return;
+        }
+
+        if (isLoading) {
+            return;
+        }
+
+        if (!isAuthenticated) {
+            setConfig(DEFAULT_CONFIG);
+            return;
+        }
+
         refreshConfig();
-    }, [refreshConfig]);
+    }, [isAuthenticated, isLoading, refreshConfig]);
 
     const formatCurrency = useCallback((amount: number): string => {
         return `${config.currencySymbol}${amount.toLocaleString('en-US', {

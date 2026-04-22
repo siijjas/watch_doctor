@@ -3,4 +3,8 @@ watch_doctor.patches.seed_whatsapp_templates
 watch_doctor.patches.migrate_whatsapp_placeholders
 watch_doctor.patches.setup_pms_fields
 watch_doctor.patches.setup_invoice_settings
+watch_doctor.patches.setup_general_configuration
 watch_doctor.patches.grant_native_doctype_permissions
+watch_doctor.patches.reload_dw_doctypes
+watch_doctor.patches.migrate_merged_watch_statuses
+watch_doctor.patches.update_create_estimate_status_and_template

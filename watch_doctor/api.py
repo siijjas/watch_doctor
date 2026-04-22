@@ -1,6 +1,7 @@
 import frappe
 from frappe import _  # noqa: F401
 import json
+from frappe.utils import now_datetime
 
 from watch_doctor.invoice_settings import (
 	clear_invoice_settings_cache,
@@ -9,6 +10,8 @@ from watch_doctor.invoice_settings import (
 	get_sales_invoice_print_context,
 	validate_invoice_workflow_settings,
 )
+
+from watch_doctor.general_configuration import get_general_configuration, set_general_configuration
 
 from watch_doctor.pos_enhancements import (
 	apply_pos_profile,
@@ -27,6 +30,17 @@ from watch_doctor.permissions import (
     ROLE_TECHNICIAN,
     PRIVILEGED_ROLES,
 )
+from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import (
+	WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+	WATCH_STATUS_COMPLETED,
+	WATCH_STATUS_DIAGNOSED,
+	WATCH_STATUS_IN_REPAIR,
+	WATCH_STATUS_QUOTED,
+	WATCH_STATUS_UNDER_DIAGNOSIS,
+	normalize_repair_item_status,
+	resolve_repair_item_diagnosis_status,
+	resolve_repair_item_status,
+)
 
 
 # ==================== User Info ====================
@@ -44,7 +58,7 @@ def get_user_info():
             technician = frappe.db.get_value(
                 "DW Technician",
                 {"name": ["in", tech_values]},
-                ["name", "technician_name"],
+				["name", "technician_name", "email"],
                 as_dict=True,
             )
 
@@ -62,11 +76,13 @@ def get_app_config():
 	"""Return app-level configuration: logo URL, currency symbol, decimal places."""
 	from watch_doctor.pms import get_pms_runtime_configuration
 	invoice_settings = get_invoice_workflow_settings()
+	general_config = get_general_configuration()
 	config = {
 		"logo_url": "",
 		"currency_code": "",
 		"currency_symbol": "",
 		"decimal_places": 0,
+		"general_configuration": general_config,
 		"repair_service_print_format": invoice_settings.get("repair_service_print_format") or "Standard",
 		"pos_standard_print_format": invoice_settings.get("pos_standard_print_format") or "DW POS Retail Receipt",
 		"pos_pms_print_format": invoice_settings.get("pos_pms_print_format") or "DW PMS Tax Invoice",
@@ -192,6 +208,70 @@ def save_logo_url(logo_url):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "save_logo_url error")
 		return {"success": False, "error": str(e)}
+
+
+def rename_and_sync_print_format(old_name, new_name, file_path):
+	"""Rename a Print Format if needed and overwrite its HTML from an exported JSON fixture."""
+	with open(file_path, "r", encoding="utf-8") as handle:
+		payload = json.load(handle)
+
+	if old_name != new_name and frappe.db.exists("Print Format", old_name) and not frappe.db.exists("Print Format", new_name):
+		frappe.rename_doc("Print Format", old_name, new_name, force=True, ignore_permissions=True)
+
+	doc = frappe.get_doc("Print Format", new_name)
+	doc.html = payload.get("html") or ""
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	frappe.clear_cache()
+
+	return {
+		"name": doc.name,
+		"modified": doc.modified,
+	}
+
+
+@frappe.whitelist()
+def get_general_configuration_api():
+	"""Return editable general company information for the Settings UI."""
+	require_roles(ROLE_EXECUTIVE)
+	from watch_doctor.setup_general_configuration import execute as ensure_general_configuration_setup
+
+	if not frappe.db.exists("DocType", "DW General Configuration"):
+		ensure_general_configuration_setup()
+
+	return {"config": get_general_configuration()}
+
+
+@frappe.whitelist()
+def save_general_configuration(
+	company_name: str = "",
+	company_phone: str = "",
+	company_email: str = "",
+	company_website: str = "",
+	company_address: str = "",
+	cr_number: str = "",
+	vat_registration_number: str = "",
+	repair_receipt_subtitle: str = "",
+):
+	"""Persist editable general company information used in print formats."""
+	require_roles(ROLE_EXECUTIVE)
+	from watch_doctor.setup_general_configuration import execute as ensure_general_configuration_setup
+
+	if not frappe.db.exists("DocType", "DW General Configuration"):
+		ensure_general_configuration_setup()
+
+	config = {
+		"company_name": company_name or "",
+		"company_phone": company_phone or "",
+		"company_email": company_email or "",
+		"company_website": company_website or "",
+		"company_address": company_address or "",
+		"cr_number": cr_number or "",
+		"vat_registration_number": vat_registration_number or "",
+		"repair_receipt_subtitle": repair_receipt_subtitle or "",
+	}
+
+	return {"success": True, "config": set_general_configuration(config)}
 
 
 @frappe.whitelist()
@@ -327,6 +407,184 @@ def save_pms_configuration(
 	return {"success": True, "config": get_pms_configuration()["config"]}
 
 
+MOVEMENT_TYPE_VALUES = {
+	"quartz movement",
+	"automatic movement",
+	"manual-wind movement",
+	"chronograph movement",
+	"gmt movement",
+	"day-date movement",
+	"moonphase movement",
+	"co-axial movement",
+	"solar movement",
+	"kinetic movement",
+	"eco-drive movement",
+	"mecha-quartz movement",
+	"vintage movement",
+	"swiss movement",
+	"japanese movement",
+}
+
+
+def normalize_string_list(value):
+	if isinstance(value, list):
+		result = []
+		for entry in value:
+			text = str(entry or "").strip()
+			if text and text not in result:
+				result.append(text)
+		return result
+	if isinstance(value, str):
+		trimmed = value.strip()
+		if not trimmed:
+			return []
+		try:
+			parsed = json.loads(trimmed)
+			if isinstance(parsed, list):
+				return normalize_string_list(parsed)
+		except Exception:
+			pass
+		return [trimmed]
+	return []
+
+
+def is_likely_caliber_code(value):
+	trimmed = str(value or "").strip()
+	if not trimmed:
+		return False
+	return bool(any(char.isdigit() for char in trimmed) and frappe.safe_decode(trimmed) and __import__("re").match(r"^[A-Za-z0-9.-]+(?: [A-Za-z0-9.-]+)?$", trimmed))
+
+
+def split_legacy_movement_information(values):
+	movement_type = []
+	movement_caliber = []
+
+	for entry in normalize_string_list(values):
+		lowered = entry.lower()
+		if lowered in MOVEMENT_TYPE_VALUES:
+			movement_type.append(entry)
+		elif is_likely_caliber_code(entry):
+			movement_caliber.append(entry)
+
+	return {
+		"movement_type": normalize_string_list(movement_type),
+		"movement_caliber": normalize_string_list(movement_caliber),
+	}
+
+
+def combine_movement_information(movement_type, movement_caliber):
+	return normalize_string_list([
+		*normalize_string_list(movement_type),
+		*normalize_string_list(movement_caliber),
+	])
+
+
+DIAGNOSIS_MANUAL_STATUSES = {"Not Repairable", "Awaiting Approval", "Quoted", "Declined"}
+VALID_DIAGNOSIS_STATUSES = {"Pending Diagnosis", "Diagnosed", "Not Repairable", "Awaiting Approval", "Quoted", "Declined"}
+
+
+def has_diagnosis_content(diagnosis_summary=None, movement_type=None, movement_caliber=None, recommended_work=None):
+	return any([
+		normalize_string_list(diagnosis_summary),
+		normalize_string_list(movement_type),
+		normalize_string_list(movement_caliber),
+		normalize_string_list(recommended_work),
+	])
+
+
+def resolve_diagnosis_status(current_status, diagnosis_summary=None, movement_type=None, movement_caliber=None, recommended_work=None):
+	if not has_diagnosis_content(diagnosis_summary, movement_type, movement_caliber, recommended_work):
+		return "Pending Diagnosis"
+
+	status = str(current_status or "").strip()
+	if status in DIAGNOSIS_MANUAL_STATUSES:
+		return status
+
+	return "Diagnosed"
+
+
+def resolve_task_template_name(task_value):
+	task_value = str(task_value or "").strip()
+	if not task_value:
+		return None
+
+	if frappe.db.exists("DW Task Template", task_value):
+		return task_value
+
+	match = frappe.db.sql(
+		"""
+		select name
+		from `tabDW Task Template`
+		where lower(task_name) = lower(%s)
+		limit 1
+		""",
+		(task_value,),
+		as_dict=True,
+	)
+	if match:
+		return match[0].name
+
+	return None
+
+
+def get_auto_task_services_for_item(item):
+	recommended_work = normalize_string_list(item.get("recommended_work"))
+	resolved_services = []
+	seen = set()
+
+	if recommended_work:
+		candidates = recommended_work
+	else:
+		candidates = []
+		for issue in item.get("issues") or []:
+			issue_name = issue.get("issue") if hasattr(issue, "get") else None
+			if not issue_name:
+				continue
+			suggested_task = frappe.db.get_value("DW Issue Template", issue_name, "suggested_task")
+			if suggested_task:
+				candidates.append(suggested_task)
+
+	for candidate in candidates:
+		service_name = resolve_task_template_name(candidate)
+		if not service_name or service_name in seen:
+			continue
+		seen.add(service_name)
+		resolved_services.append(service_name)
+
+	return resolved_services
+
+
+def sync_item_tasks_with_auto_sources(order_doc, item):
+	service_names = get_auto_task_services_for_item(item)
+	technician = str(item.get("technician") or "").strip()
+	item_key = str(item.idx)
+
+	remaining_tasks = [task for task in (order_doc.all_tasks or []) if str(task.repair_item_key) != item_key]
+	order_doc.set("all_tasks", [])
+	for task in remaining_tasks:
+		order_doc.append("all_tasks", {
+			"repair_item_key": task.repair_item_key,
+			"service": task.service,
+			"technician": task.technician,
+			"notes": task.notes,
+			"status": task.status,
+			"rate": task.rate,
+			"auto_rate": task.auto_rate,
+			"price_manually_set": task.price_manually_set,
+		})
+
+	for service_name in service_names:
+		order_doc.append("all_tasks", {
+			"repair_item_key": item_key,
+			"service": service_name,
+			"technician": technician,
+			"notes": "",
+			"status": "Pending",
+		})
+
+	return service_names
+
+
 @frappe.whitelist()
 def save_repair_order(doc_json):
 	"""Custom save method for repair orders that handles system fields properly."""
@@ -366,9 +624,48 @@ def save_repair_order(doc_json):
 	# Auto-update item statuses based on technician assignment BEFORE merging with doc
 	# This ensures the status change is included in the update
 	for item in doc_dict.get('items', []):
-		if item.get('technician') and item.get('status') == 'Pending':
-			frappe.logger().info(f"Updating item status from Pending to In Repair (technician: {item.get('technician')})")
-			item['status'] = 'In Repair'
+		item['pre_existing_condition'] = json.dumps(normalize_string_list(item.get('pre_existing_condition')))
+		diagnosis_summary = normalize_string_list(item.get('diagnosis_summary'))
+		item['diagnosis_summary'] = json.dumps(diagnosis_summary)
+		legacy_movement_information = normalize_string_list(item.get('movement_information'))
+		movement_type = normalize_string_list(item.get('movement_type'))
+		movement_caliber = normalize_string_list(item.get('movement_caliber'))
+		recommended_work = normalize_string_list(item.get('recommended_work'))
+		if not movement_type and not movement_caliber and legacy_movement_information:
+			split_movement = split_legacy_movement_information(legacy_movement_information)
+			movement_type = split_movement['movement_type']
+			movement_caliber = split_movement['movement_caliber']
+		incoming_status = str(item.get('diagnosis_status') or '').strip()
+		if incoming_status and incoming_status not in VALID_DIAGNOSIS_STATUSES:
+			frappe.throw(_("Invalid diagnosis status"))
+		item['diagnosis_status'] = resolve_diagnosis_status(
+			incoming_status,
+			diagnosis_summary=diagnosis_summary,
+			movement_type=movement_type,
+			movement_caliber=movement_caliber,
+			recommended_work=recommended_work,
+		)
+		item['movement_type'] = json.dumps(movement_type)
+		item['movement_caliber'] = json.dumps(movement_caliber)
+		item['movement_information'] = json.dumps(combine_movement_information(movement_type, movement_caliber))
+		item['recommended_work'] = json.dumps(recommended_work)
+		item['status'] = resolve_repair_item_status(
+			current_status=item.get('status'),
+			diagnosis_status=item['diagnosis_status'],
+			technician=item.get('technician'),
+			recommended_work=recommended_work,
+			task_statuses=[task.get('status') for task in (item.get('tasks') or [])],
+		)
+		item['diagnosis_status'] = resolve_repair_item_diagnosis_status(
+			item['status'],
+			current_diagnosis_status=item['diagnosis_status'],
+			has_diagnosis_content=has_diagnosis_content(
+				diagnosis_summary,
+				movement_type,
+				movement_caliber,
+				recommended_work,
+			),
+		)
 
 	# Flatten nested structures (tasks, parts, issues) from items into the main doc tables
 	# This is necessary because frontend uses nested structure but backend uses flat tables linked by repair_item_key
@@ -474,12 +771,56 @@ def save_repair_order(doc_json):
 		if task_name and task_name in parts_by_task and task.get('status') == 'Pending':
 			frappe.logger().info(f"Updating task {task_name} status from Pending to In Progress (has parts)")
 			task['status'] = 'In Progress'
+
+	# Re-resolve item workflow status after task auto-updates.
+	tasks_by_item = {}
+	for task in doc_dict.get('all_tasks', []):
+		item_key = str(task.get('repair_item_key') or '')
+		if not item_key:
+			continue
+		tasks_by_item.setdefault(item_key, []).append(task)
+
+	for index, item in enumerate(doc_dict.get('items', []), start=1):
+		item_key = str(index)
+		item_tasks = tasks_by_item.get(item_key, [])
+		recommended_work = normalize_string_list(item.get('recommended_work'))
+		diagnosis_summary = normalize_string_list(item.get('diagnosis_summary'))
+		movement_type = normalize_string_list(item.get('movement_type'))
+		movement_caliber = normalize_string_list(item.get('movement_caliber'))
+		item['status'] = resolve_repair_item_status(
+			current_status=item.get('status'),
+			diagnosis_status=item.get('diagnosis_status'),
+			technician=item.get('technician'),
+			recommended_work=recommended_work,
+			task_statuses=[task.get('status') for task in item_tasks],
+		)
+		item['diagnosis_status'] = resolve_repair_item_diagnosis_status(
+			item['status'],
+			current_diagnosis_status=item.get('diagnosis_status'),
+			has_diagnosis_content=has_diagnosis_content(
+				diagnosis_summary,
+				movement_type,
+				movement_caliber,
+				recommended_work,
+			),
+		)
 	
 	# Auto-update order status based on item statuses
-	item_statuses = [item.get('status') for item in doc_dict.get('items', [])]
-	if any(s == 'In Repair' for s in item_statuses) and doc_dict.get('status') == 'Pending':
-		frappe.logger().info(f"Updating order status from Pending to In Progress")
-		doc_dict['status'] = 'In Progress'
+	item_statuses = [normalize_repair_item_status(item.get('status')) for item in doc_dict.get('items', [])]
+	if item_statuses:
+		if all(status in {WATCH_STATUS_COMPLETED, 'Delivered'} for status in item_statuses):
+			doc_dict['status'] = 'Repaired'
+		elif any(status in {
+			WATCH_STATUS_UNDER_DIAGNOSIS,
+			WATCH_STATUS_DIAGNOSED,
+			WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
+			WATCH_STATUS_QUOTED,
+			WATCH_STATUS_IN_REPAIR,
+			WATCH_STATUS_COMPLETED,
+		} for status in item_statuses):
+			doc_dict['status'] = 'In Progress'
+		else:
+			doc_dict['status'] = 'Pending'
 	
 	# Get or create document
 	if doc_dict.get('name'):
@@ -501,6 +842,125 @@ def save_repair_order(doc_json):
 		frappe.logger().info(f"After save: item {item.idx} status={item.status}, technician={item.technician}")
 	
 	return doc.as_dict()
+
+
+@frappe.whitelist()
+def update_repair_item_diagnosis(item_name, diagnosis_json):
+	"""Update diagnosis fields for a single repair item with item-level technician checks."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	diagnosis = json.loads(diagnosis_json) if isinstance(diagnosis_json, str) else (diagnosis_json or {})
+
+	item_row = frappe.db.get_value(
+		"DW Repair Item",
+		item_name,
+		["name", "parent", "technician"],
+		as_dict=True,
+	)
+	if not item_row:
+		frappe.throw(_("Repair item not found"), frappe.DoesNotExistError)
+
+	if not can_access_repair_order(item_row.parent):
+		frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
+
+	roles = set(frappe.get_roles())
+	is_privileged = bool(roles & PRIVILEGED_ROLES)
+	if not is_privileged and ROLE_TECHNICIAN in roles:
+		tech_values = set(get_current_technician_identifiers())
+		if not tech_values or (item_row.technician or "") not in tech_values:
+			frappe.throw(_("You can only update diagnosis for watches assigned to you"), frappe.PermissionError)
+
+	allowed_fields = {
+		"diagnosis_status",
+		"diagnosis_summary",
+		"movement_type",
+		"movement_caliber",
+		"movement_information",
+		"recommended_work",
+	}
+	for key in diagnosis.keys():
+		if key not in allowed_fields:
+			frappe.throw(_("Field {0} is not allowed in diagnosis update").format(key), frappe.PermissionError)
+
+	incoming_status = str(diagnosis.get("diagnosis_status") or "").strip()
+	if incoming_status and incoming_status not in VALID_DIAGNOSIS_STATUSES:
+		frappe.throw(_("Invalid diagnosis status"))
+
+	order_doc = frappe.get_doc("DW Repair Order", item_row.parent)
+	target_item = next((item for item in order_doc.items if item.name == item_name), None)
+	if not target_item:
+		frappe.throw(_("Repair item not found in parent order"), frappe.DoesNotExistError)
+
+	diagnosis_summary = normalize_string_list(diagnosis.get("diagnosis_summary"))
+	target_item.diagnosis_summary = json.dumps(diagnosis_summary)
+	legacy_movement_information = normalize_string_list(diagnosis.get("movement_information"))
+	movement_type = normalize_string_list(diagnosis.get("movement_type"))
+	movement_caliber = normalize_string_list(diagnosis.get("movement_caliber"))
+	if not movement_type and not movement_caliber and legacy_movement_information:
+		split_movement = split_legacy_movement_information(legacy_movement_information)
+		movement_type = split_movement["movement_type"]
+		movement_caliber = split_movement["movement_caliber"]
+	target_item.movement_type = json.dumps(movement_type)
+	target_item.movement_caliber = json.dumps(movement_caliber)
+	target_item.movement_information = json.dumps(combine_movement_information(movement_type, movement_caliber))
+	recommended_work = normalize_string_list(diagnosis.get("recommended_work"))
+	target_item.recommended_work = json.dumps(recommended_work)
+	sync_item_tasks_with_auto_sources(order_doc, target_item)
+	resolved_diagnosis_status = resolve_diagnosis_status(
+		incoming_status,
+		diagnosis_summary=diagnosis_summary,
+		movement_type=movement_type,
+		movement_caliber=movement_caliber,
+		recommended_work=recommended_work,
+	)
+
+	has_content = has_diagnosis_content(
+		target_item.diagnosis_summary,
+		target_item.movement_type,
+		target_item.movement_caliber,
+		target_item.recommended_work,
+	)
+	item_task_statuses = [
+		task.status
+		for task in (order_doc.all_tasks or [])
+		if str(task.repair_item_key) == str(target_item.idx)
+	]
+	target_item.status = resolve_repair_item_status(
+		current_status=target_item.status,
+		diagnosis_status=resolved_diagnosis_status,
+		technician=target_item.technician,
+		recommended_work=recommended_work,
+		task_statuses=item_task_statuses,
+	)
+	target_item.diagnosis_status = resolve_repair_item_diagnosis_status(
+		target_item.status,
+		current_diagnosis_status=resolved_diagnosis_status,
+		has_diagnosis_content=has_content,
+	)
+
+	if has_content:
+		target_item.diagnosis_date = now_datetime()
+		if ROLE_TECHNICIAN in roles and not is_privileged:
+			current_technician = get_current_technician()
+			if current_technician:
+				target_item.diagnosed_by = current_technician
+	elif is_privileged:
+		target_item.diagnosed_by = None
+		target_item.diagnosis_date = None
+
+	order_doc.save()
+	frappe.db.commit()
+
+	return {
+		"item_name": target_item.name,
+		"diagnosis_status": target_item.diagnosis_status,
+		"diagnosis_summary": normalize_string_list(target_item.diagnosis_summary),
+		"movement_type": normalize_string_list(target_item.movement_type),
+		"movement_caliber": normalize_string_list(target_item.movement_caliber),
+		"movement_information": normalize_string_list(target_item.movement_information),
+		"recommended_work": normalize_string_list(target_item.recommended_work),
+		"diagnosed_by": target_item.diagnosed_by,
+		"diagnosis_date": target_item.diagnosis_date,
+	}
 
 
 
@@ -536,12 +996,19 @@ def list_repair_orders():
 		limit_page_length=50,
 		order_by="modified desc",
 	)
-	# add customer_name for display
-	customer_names = {}
+	# add customer display fields for the list view search UI
+	customer_details = {}
 	for o in orders:
-		if o.customer and o.customer not in customer_names:
-			customer_names[o.customer] = frappe.db.get_value("Customer", o.customer, "customer_name")
-		o["customer_name"] = customer_names.get(o.customer) or o.customer
+		if o.customer and o.customer not in customer_details:
+			customer_details[o.customer] = frappe.db.get_value(
+				"Customer",
+				o.customer,
+				["customer_name", "mobile_no"],
+				as_dict=True,
+			) or {}
+		customer = customer_details.get(o.customer) or {}
+		o["customer_name"] = customer.get("customer_name") or o.customer
+		o["customer_mobile"] = customer.get("mobile_no") or ""
 		
 		# Add item count
 		o["item_count"] = frappe.db.count("DW Repair Item", {"parent": o.name})
@@ -691,6 +1158,72 @@ def get_issue_templates():
 	)
 	
 	return templates
+
+
+@frappe.whitelist()
+def get_watch_condition_templates():
+	"""Get all active pre-existing watch condition templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	templates = frappe.get_all(
+		"DW Watch Condition Template",
+		fields=["name", "condition_name", "description"],
+		filters={"is_active": 1},
+		limit_page_length=200,
+		order_by="condition_name asc"
+	)
+	return templates
+
+
+@frappe.whitelist()
+def get_diagnosis_summary_templates():
+	"""Get all active diagnosis summary templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	return frappe.get_all(
+		"DW Diagnosis Summary Template",
+		fields=["name", "summary_name", "description"],
+		filters={"is_active": 1},
+		limit_page_length=200,
+		order_by="summary_name asc",
+	)
+
+
+@frappe.whitelist()
+def get_movement_info_templates():
+	"""Get all active movement information templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	return frappe.get_all(
+		"DW Movement Information Template",
+		fields=["name", "movement_info", "description"],
+		filters={"is_active": 1},
+		limit_page_length=200,
+		order_by="movement_info asc",
+	)
+
+
+@frappe.whitelist()
+def get_movement_type_templates():
+	"""Get all active movement type templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	return frappe.get_all(
+		"DW Movement Type Template",
+		fields=["name", "movement_type", "description"],
+		filters={"is_active": 1},
+		limit_page_length=200,
+		order_by="movement_type asc",
+	)
+
+
+@frappe.whitelist()
+def get_movement_caliber_templates():
+	"""Get all active movement caliber templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	return frappe.get_all(
+		"DW Movement Caliber Template",
+		fields=["name", "caliber_code", "description"],
+		filters={"is_active": 1},
+		limit_page_length=400,
+		order_by="caliber_code asc",
+	)
 
 
 @frappe.whitelist()

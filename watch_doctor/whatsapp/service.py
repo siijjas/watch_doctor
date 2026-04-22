@@ -2,6 +2,7 @@ import frappe
 import requests
 import re
 import random
+import json
 
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 10  # 10s, 20s, 40s
@@ -14,6 +15,9 @@ PLACEHOLDER_DEFINITIONS = [
     ("{{3}}", "Current Status"),
     ("{{4}}", "Shop Name"),
     ("{{5}}", "Promised Date"),
+	("{{6}}", "Watch Details"),
+	("{{7}}", "Recommended Works"),
+	("{{8}}", "Estimate Total"),
 ]
 
 # Sample values used for live preview (frontend mirrors these)
@@ -23,7 +27,55 @@ PLACEHOLDER_SAMPLES = {
     "{{3}}": "Ready for Collection",
     "{{4}}": "Watch Doctor",
     "{{5}}": "20 Apr 2026",
+    "{{6}}": "Omega Seamaster (SN: A12345)",
+    "{{7}}": "Movement service, Gasket replacement",
+    "{{8}}": "BHD 68.000",
 }
+
+
+def _normalize_string_list(value):
+	if not value:
+		return []
+	if isinstance(value, list):
+		return [str(entry).strip() for entry in value if str(entry).strip()]
+	if isinstance(value, str):
+		trimmed = value.strip()
+		if not trimmed:
+			return []
+		if trimmed.startswith("[") and trimmed.endswith("]"):
+			try:
+				parsed = json.loads(trimmed)
+				if isinstance(parsed, list):
+					return [str(entry).strip() for entry in parsed if str(entry).strip()]
+			except Exception:
+				pass
+		return [trimmed]
+	return [str(value).strip()]
+
+
+def _replace_template_tokens(template: str, values: dict[str, str]) -> str:
+	body = template
+	for token, value in values.items():
+		body = body.replace(token, str(value or ""))
+	return body
+
+
+def _get_task_rate(task) -> float:
+	rate = task.rate or task.auto_rate
+	if rate:
+		return float(rate)
+	if task.service:
+		return float(frappe.db.get_value("DW Task Template", task.service, "default_rate") or 0)
+	return 0.0
+
+
+def _get_part_rate(part) -> float:
+	rate = part.rate or part.auto_rate
+	if rate:
+		return float(rate)
+	if part.part:
+		return float(frappe.db.get_value("Item", part.part, "standard_rate") or 0)
+	return 0.0
 
 
 def should_retry(status_code: int) -> bool:
@@ -118,11 +170,12 @@ def build_message(order_name: str, notification_key: str) -> dict:
 		"{{3}}": order.status,
 		"{{4}}": shop_name,
 		"{{5}}": promised,
+		"{{6}}": "",
+		"{{7}}": "",
+		"{{8}}": "",
 	}
 
-	body = template
-	for token, value in values.items():
-		body = body.replace(token, value)
+	body = _replace_template_tokens(template, values)
 
 	phone = normalize_phone(customer.mobile_no or "")
 
@@ -131,6 +184,87 @@ def build_message(order_name: str, notification_key: str) -> dict:
 		"body": body,
 		"customer_name": customer.customer_name,
 		"phone_raw": customer.mobile_no,
+	}
+
+
+def build_watch_estimate_message(order_name: str, repair_item_name: str, notification_key: str = "watch_estimate_ready") -> dict:
+	"""Build a watch-specific estimate WhatsApp message."""
+	order = frappe.get_doc("DW Repair Order", order_name)
+	customer = frappe.get_doc("Customer", order.customer)
+
+	template = frappe.db.get_value(
+		"DW WhatsApp Template",
+		{"notification_key": notification_key, "is_active": 1},
+		"message_body",
+	)
+	if not template:
+		frappe.throw(f"No active WhatsApp template for key: {notification_key}")
+
+	item = next((row for row in (order.items or []) if row.name == repair_item_name), None)
+	if not item:
+		frappe.throw("Repair item not found in this order")
+
+	brand = str(item.watch_brand or "").strip()
+	model = str(item.watch_model or "").strip()
+	brand_display = frappe.db.get_value("DW Watch Brand", brand, "brand_name") if brand else ""
+	model_display = frappe.db.get_value("DW Watch Model", model, "model_name") if model else ""
+	brand_label = str(brand_display or brand).strip()
+	model_label = str(model_display or model).strip()
+	serial = str(item.serial_number or "").strip()
+	watch_label = " ".join([value for value in [brand_label, model_label] if value]).strip() or item.name
+	if serial:
+		watch_label = f"{watch_label} (SN: {serial})"
+
+	recommended_work = _normalize_string_list(getattr(item, "recommended_work", None))
+	recommended_work_text = ", ".join(recommended_work) if recommended_work else "General diagnosis completed"
+
+	item_key = str(getattr(item, "idx", "") or "")
+	item_tasks = [
+		task
+		for task in (getattr(order, "all_tasks", []) or [])
+		if str(getattr(task, "repair_item_key", "") or "") == item_key
+	]
+	item_parts = [
+		part
+		for part in (getattr(order, "all_parts", []) or [])
+		if str(getattr(part, "repair_item_key", "") or "") == item_key
+	]
+
+	tasks_total = sum(_get_task_rate(task) for task in item_tasks)
+	parts_total = sum(_get_part_rate(part) * float(part.quantity or 0) for part in item_parts)
+	estimate_total = tasks_total + parts_total
+	currency = frappe.db.get_default("currency") or frappe.defaults.get_global_default("currency") or "USD"
+	estimate_total_text = frappe.utils.fmt_money(estimate_total, currency=currency)
+
+	shop_name = frappe.db.get_default("company") or "our shop"
+	ref = order.reference_number or order.name
+	promised = (
+		frappe.utils.formatdate(order.promised_delivery_date)
+		if order.promised_delivery_date
+		else ""
+	)
+
+	values = {
+		"{{1}}": customer.customer_name,
+		"{{2}}": str(ref),
+		"{{3}}": str(item.status or order.status),
+		"{{4}}": shop_name,
+		"{{5}}": promised,
+		"{{6}}": watch_label,
+		"{{7}}": recommended_work_text,
+		"{{8}}": estimate_total_text,
+	}
+	body = _replace_template_tokens(template, values)
+	phone = normalize_phone(customer.mobile_no or "")
+
+	return {
+		"to": phone,
+		"body": body,
+		"customer_name": customer.customer_name,
+		"phone_raw": customer.mobile_no,
+		"watch_label": watch_label,
+		"estimate_total": estimate_total_text,
+		"recommended_work": recommended_work,
 	}
 
 

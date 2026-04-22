@@ -1,35 +1,35 @@
 {
     "actions": [],
     "allow_rename": 1,
-    "autoname": "format:DW-MODEL-{#####}",
+    "autoname": "field:condition_name",
     "creation": "2025-01-01 00:00:00.000000",
     "doctype": "DocType",
     "engine": "InnoDB",
     "field_order": [
-        "brand",
-        "model_name",
-        "description"
+        "condition_name",
+        "description",
+        "is_active"
     ],
     "fields": [
         {
-            "fieldname": "brand",
-            "fieldtype": "Link",
-            "label": "Brand",
-            "options": "DW Watch Brand",
-            "reqd": 1,
-            "in_list_view": 1
-        },
-        {
-            "fieldname": "model_name",
+            "fieldname": "condition_name",
             "fieldtype": "Data",
-            "label": "Model Name",
+            "label": "Condition Name",
             "reqd": 1,
+            "unique": 1,
             "in_list_view": 1
         },
         {
             "fieldname": "description",
             "fieldtype": "Small Text",
             "label": "Description"
+        },
+        {
+            "fieldname": "is_active",
+            "fieldtype": "Check",
+            "label": "Is Active",
+            "default": 1,
+            "in_list_view": 1
         }
     ],
     "index_web_pages_for_search": 1,
@@ -37,8 +37,8 @@
     "modified": "2025-01-01 00:00:00.000000",
     "modified_by": "Administrator",
     "module": "Repair Management",
-    "name": "DW Watch Model",
-    "naming_rule": "Expression (AUTONAME)",
+    "name": "DW Watch Condition Template",
+    "naming_rule": "By fieldname",
     "owner": "Administrator",
     "permissions": [
         {
@@ -66,7 +66,6 @@
             "write": 1
         },
         {
-            "create": 1,
             "read": 1,
             "role": "DW Data Entry"
         },
@@ -75,10 +74,10 @@
             "role": "DW Technician"
         }
     ],
-    "search_fields": "model_name,brand",
+    "search_fields": "condition_name, description",
     "sort_field": "modified",
     "sort_order": "DESC",
     "states": [],
-    "title_field": "model_name",
+    "title_field": "condition_name",
     "track_changes": 1
 }
