@@ -503,7 +503,7 @@ def resolve_diagnosis_status(current_status, diagnosis_summary=None, movement_ty
 	return "Diagnosed"
 
 
-def resolve_task_template_name(task_value):
+def resolve_task_template_name(task_value, create_missing=False, description=None):
 	task_value = str(task_value or "").strip()
 	if not task_value:
 		return None
@@ -524,6 +524,30 @@ def resolve_task_template_name(task_value):
 	if match:
 		return match[0].name
 
+	if create_missing:
+		try:
+			task_doc = frappe.get_doc({
+				"doctype": "DW Task Template",
+				"task_name": task_value,
+				"description": (description or "").strip() or None,
+			})
+			task_doc.insert(ignore_permissions=True)
+			return task_doc.name
+		except Exception:
+			# Handle duplicate creation races by re-resolving after insert failure.
+			retry_match = frappe.db.sql(
+				"""
+				select name
+				from `tabDW Task Template`
+				where lower(task_name) = lower(%s)
+				limit 1
+				""",
+				(task_value,),
+				as_dict=True,
+			)
+			if retry_match:
+				return retry_match[0].name
+
 	return None
 
 
@@ -531,6 +555,23 @@ def get_auto_task_services_for_item(item):
 	recommended_work = normalize_string_list(item.get("recommended_work"))
 	resolved_services = []
 	seen = set()
+	recommended_descriptions = {}
+
+	if recommended_work:
+		normalized_recommended = [value.lower() for value in recommended_work]
+		description_rows = frappe.db.sql(
+			"""
+			select work_name, description
+			from `tabDW Recommended Work Template`
+			where lower(work_name) in ({placeholders})
+			""".format(placeholders=", ".join(["%s"] * len(recommended_work))),
+			tuple(normalized_recommended),
+			as_dict=True,
+		)
+		recommended_descriptions = {
+			str((row.get("work_name") or "")).strip().lower(): row.get("description")
+			for row in description_rows
+		}
 
 	if recommended_work:
 		candidates = recommended_work
@@ -545,7 +586,14 @@ def get_auto_task_services_for_item(item):
 				candidates.append(suggested_task)
 
 	for candidate in candidates:
-		service_name = resolve_task_template_name(candidate)
+		candidate_value = str(candidate or "").strip()
+		if not candidate_value:
+			continue
+		service_name = resolve_task_template_name(
+			candidate_value,
+			create_missing=bool(recommended_work),
+			description=recommended_descriptions.get(candidate_value.lower()),
+		)
 		if not service_name or service_name in seen:
 			continue
 		seen.add(service_name)
@@ -558,6 +606,13 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 	service_names = get_auto_task_services_for_item(item)
 	technician = str(item.get("technician") or "").strip()
 	item_key = str(item.idx)
+	existing_tasks_by_service = {}
+	for task in (order_doc.all_tasks or []):
+		if str(task.repair_item_key) != item_key:
+			continue
+		service_name = str(task.service or "").strip()
+		if service_name and service_name not in existing_tasks_by_service:
+			existing_tasks_by_service[service_name] = task
 
 	remaining_tasks = [task for task in (order_doc.all_tasks or []) if str(task.repair_item_key) != item_key]
 	order_doc.set("all_tasks", [])
@@ -574,12 +629,16 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 		})
 
 	for service_name in service_names:
+		existing_task = existing_tasks_by_service.get(service_name)
 		order_doc.append("all_tasks", {
 			"repair_item_key": item_key,
 			"service": service_name,
-			"technician": technician,
-			"notes": "",
-			"status": "Pending",
+			"technician": technician or (existing_task.technician if existing_task else ""),
+			"notes": existing_task.notes if existing_task else "",
+			"status": (existing_task.status if existing_task else "Pending") or "Pending",
+			"rate": existing_task.rate if existing_task else None,
+			"auto_rate": existing_task.auto_rate if existing_task else None,
+			"price_manually_set": existing_task.price_manually_set if existing_task else 0,
 		})
 
 	return service_names
@@ -831,6 +890,57 @@ def save_repair_order(doc_json):
 	else:
 		# Create new
 		doc = frappe.get_doc(doc_dict)
+
+	# Keep repair tasks auto-managed from recommended work / issue suggestions,
+	# including fallback task-template creation for new recommended work names.
+	for item in doc.items or []:
+		sync_item_tasks_with_auto_sources(doc, item)
+
+	# Recompute item and order statuses after auto-sync.
+	for item in doc.items or []:
+		recommended_work = normalize_string_list(item.get('recommended_work'))
+		diagnosis_summary = normalize_string_list(item.get('diagnosis_summary'))
+		movement_type = normalize_string_list(item.get('movement_type'))
+		movement_caliber = normalize_string_list(item.get('movement_caliber'))
+		item_task_statuses = [
+			task.status
+			for task in (doc.all_tasks or [])
+			if str(task.repair_item_key) == str(item.idx)
+		]
+		item.status = resolve_repair_item_status(
+			current_status=item.status,
+			diagnosis_status=item.diagnosis_status,
+			technician=item.technician,
+			recommended_work=recommended_work,
+			task_statuses=item_task_statuses,
+		)
+		item.diagnosis_status = resolve_repair_item_diagnosis_status(
+			item.status,
+			current_diagnosis_status=item.diagnosis_status,
+			has_diagnosis_content=has_diagnosis_content(
+				diagnosis_summary,
+				movement_type,
+				movement_caliber,
+				recommended_work,
+			),
+		)
+
+	item_statuses = [normalize_repair_item_status(item.status) for item in (doc.items or [])]
+	if item_statuses:
+		if all(status in {WATCH_STATUS_COMPLETED, 'Delivered'} for status in item_statuses):
+			doc.status = 'Repaired'
+		elif any(status == WATCH_STATUS_APPROVAL_FOR_ESTIMATE for status in item_statuses):
+			doc.status = WATCH_STATUS_APPROVAL_FOR_ESTIMATE
+		elif any(status in {
+			WATCH_STATUS_UNDER_DIAGNOSIS,
+			WATCH_STATUS_DIAGNOSED,
+			WATCH_STATUS_QUOTED,
+			WATCH_STATUS_IN_REPAIR,
+			WATCH_STATUS_COMPLETED,
+		} for status in item_statuses):
+			doc.status = 'In Progress'
+		else:
+			doc.status = 'Pending'
 	
 	doc.save()
 	frappe.db.commit()
