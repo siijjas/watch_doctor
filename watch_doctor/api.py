@@ -1189,6 +1189,19 @@ def get_diagnosis_summary_templates():
 
 
 @frappe.whitelist()
+def get_recommended_work_templates():
+	"""Get all active recommended work templates."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	return frappe.get_all(
+		"DW Recommended Work Template",
+		fields=["name", "work_name", "description"],
+		filters={"is_active": 1},
+		limit_page_length=200,
+		order_by="work_name asc",
+	)
+
+
+@frappe.whitelist()
 def get_movement_info_templates():
 	"""Get all active movement information templates."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)

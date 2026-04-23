@@ -18,6 +18,7 @@ PLACEHOLDER_DEFINITIONS = [
 	("{{6}}", "Watch Details"),
 	("{{7}}", "Recommended Works"),
 	("{{8}}", "Estimate Total"),
+	("{{9}}", "Diagnosis Summary"),
 ]
 
 # Sample values used for live preview (frontend mirrors these)
@@ -30,6 +31,7 @@ PLACEHOLDER_SAMPLES = {
     "{{6}}": "Omega Seamaster (SN: A12345)",
     "{{7}}": "Movement service, Gasket replacement",
     "{{8}}": "BHD 68.000",
+	"{{9}}": "Circuit damage, Movement wear",
 }
 
 
@@ -144,6 +146,7 @@ def build_message(order_name: str, notification_key: str) -> dict:
 
 	Placeholder mapping (mirrors PLACEHOLDER_DEFINITIONS order):
 	  {{1}} Customer Name  {{2}} Order ID  {{3}} Status  {{4}} Shop Name  {{5}} Promised Date
+	  {{6}} Watch Details  {{7}} Recommended Works  {{8}} Estimate Total  {{9}} Diagnosis Summary
 	"""
 	order = frappe.get_doc("DW Repair Order", order_name)
 	customer = frappe.get_doc("Customer", order.customer)
@@ -173,6 +176,7 @@ def build_message(order_name: str, notification_key: str) -> dict:
 		"{{6}}": "",
 		"{{7}}": "",
 		"{{8}}": "",
+		"{{9}}": "",
 	}
 
 	body = _replace_template_tokens(template, values)
@@ -217,6 +221,8 @@ def build_watch_estimate_message(order_name: str, repair_item_name: str, notific
 
 	recommended_work = _normalize_string_list(getattr(item, "recommended_work", None))
 	recommended_work_text = ", ".join(recommended_work) if recommended_work else "General diagnosis completed"
+	diagnosis_summary = _normalize_string_list(getattr(item, "diagnosis_summary", None))
+	diagnosis_summary_text = ", ".join(diagnosis_summary) if diagnosis_summary else "General diagnosis completed"
 
 	item_key = str(getattr(item, "idx", "") or "")
 	item_tasks = [
@@ -253,6 +259,7 @@ def build_watch_estimate_message(order_name: str, repair_item_name: str, notific
 		"{{6}}": watch_label,
 		"{{7}}": recommended_work_text,
 		"{{8}}": estimate_total_text,
+		"{{9}}": diagnosis_summary_text,
 	}
 	body = _replace_template_tokens(template, values)
 	phone = normalize_phone(customer.mobile_no or "")
@@ -265,6 +272,7 @@ def build_watch_estimate_message(order_name: str, repair_item_name: str, notific
 		"watch_label": watch_label,
 		"estimate_total": estimate_total_text,
 		"recommended_work": recommended_work,
+		"diagnosis_summary": diagnosis_summary,
 	}
 
 

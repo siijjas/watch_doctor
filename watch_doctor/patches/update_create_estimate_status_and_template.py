@@ -22,7 +22,7 @@ def execute():
 				"notification_key": notification_key,
 				"label": "Watch Estimate Ready",
 				"is_active": 1,
-				"message_body": "Dear {{1}}, we prepared the estimate for your watch {{6}} on order #{{2}}. Recommended work: {{7}}. Estimated total: {{8}}. Please confirm to proceed.",
+				"message_body": "Dear {{1}}, we prepared the estimate for your watch {{6}} on order #{{2}}. Diagnosis summary: {{9}}. Recommended work: {{7}}. Estimated total: {{8}}. Please confirm to proceed.",
 			}
 		)
 		doc.insert(ignore_permissions=True)

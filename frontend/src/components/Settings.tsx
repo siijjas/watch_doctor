@@ -24,6 +24,7 @@ type SettingsTab =
     | 'issue-templates'
     | 'watch-condition-templates'
     | 'diagnosis-summary-templates'
+    | 'recommended-work-templates'
     | 'movement-type-templates'
     | 'movement-caliber-templates'
     | 'watch-brands'
@@ -90,6 +91,13 @@ interface WatchConditionTemplate {
 interface DiagnosisSummaryTemplate {
     name?: string;
     summary_name: string;
+    description: string;
+    is_active: number;
+}
+
+interface RecommendedWorkTemplate {
+    name?: string;
+    work_name: string;
     description: string;
     is_active: number;
 }
@@ -1624,6 +1632,102 @@ const DiagnosisSummaryTemplatesSection: React.FC = () => {
     );
 };
 
+const RecommendedWorkTemplatesSection: React.FC = () => {
+    const [data, setData] = useState<RecommendedWorkTemplate[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editRow, setEditRow] = useState<RecommendedWorkTemplate | null>(null);
+    const [form, setForm] = useState<RecommendedWorkTemplate>({ work_name: '', description: '', is_active: 1 });
+    const [isSaving, setIsSaving] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<RecommendedWorkTemplate | null>(null);
+
+    const load = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const templates = await getList('DW Recommended Work Template', ['name', 'work_name', 'description', 'is_active'], [], 250);
+            setData(templates);
+        } catch (e) { console.error(e); }
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    const openAdd = () => {
+        setEditRow(null);
+        setForm({ work_name: '', description: '', is_active: 1 });
+        setIsModalOpen(true);
+    };
+
+    const openEdit = async (row: RecommendedWorkTemplate) => {
+        try {
+            const full = await getDoc('DW Recommended Work Template', row.name!);
+            setEditRow(full);
+            setForm({ work_name: full.work_name, description: full.description || '', is_active: full.is_active, name: full.name });
+        } catch { setEditRow(row); setForm({ ...row }); }
+        setIsModalOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSaving(true);
+        try {
+            await saveDoc({ doctype: 'DW Recommended Work Template', ...form, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            setIsModalOpen(false);
+            await load();
+        } catch (e) { console.error(e); alert('Error saving: ' + e); }
+        setIsSaving(false);
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget?.name) return;
+        try {
+            await deleteDoc('DW Recommended Work Template', deleteTarget.name);
+            setDeleteTarget(null);
+            await load();
+        } catch (e) { alert('Error deleting: ' + e); }
+    };
+
+    const columns: Column<RecommendedWorkTemplate>[] = [
+        { key: 'work_name', label: 'Work Name' },
+        { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
+        { key: 'is_active', label: 'Status', render: r => <ActiveBadge active={!!r.is_active} /> },
+    ];
+
+    return (
+        <div>
+            <SectionHeader
+                title="Recommended Work Templates"
+                description="Recommended work presets shown in technician diagnosis sections."
+                onAdd={openAdd}
+                addLabel="Add Work"
+            />
+            <ConfigTable data={data} isLoading={isLoading} columns={columns} onEdit={openEdit} onDelete={r => setDeleteTarget(r)} />
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editRow ? 'Edit Recommended Work Template' : 'Add Recommended Work Template'}>
+                <form onSubmit={handleSave} className="space-y-4">
+                    <Input label="Work Name *" value={form.work_name} onChange={e => setForm(f => ({ ...f, work_name: e.target.value }))} placeholder="e.g. Complete Movement Service" required />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                        <textarea className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional guidance for technicians..." />
+                    </div>
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="w-4 h-4 text-purple-600 rounded"
+                            checked={!!form.is_active}
+                            onChange={e => setForm(f => ({ ...f, is_active: e.target.checked ? 1 : 0 }))}
+                        />
+                        <span className="text-sm font-medium text-gray-700">Active</span>
+                    </label>
+                    <ModalFooter onCancel={() => setIsModalOpen(false)} isSaving={isSaving} />
+                </form>
+            </Modal>
+
+            <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete} title="Delete Recommended Work Template" message={`Are you sure you want to delete recommended work template "${deleteTarget?.work_name}"?`} confirmText="Delete" variant="danger" />
+        </div>
+    );
+};
+
 const MovementTypeTemplatesSection: React.FC = () => {
     const [data, setData] = useState<MovementTypeTemplate[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -2704,6 +2808,7 @@ const DEFAULT_PLACEHOLDERS: WhatsAppPlaceholder[] = [
     { token: '{{6}}', label: 'Watch Details',    sample: 'Omega Seamaster (SN: A12345)' },
     { token: '{{7}}', label: 'Recommended Works', sample: 'Movement service, Gasket replacement' },
     { token: '{{8}}', label: 'Estimate Total',   sample: 'BHD 68.000' },
+    { token: '{{9}}', label: 'Diagnosis Summary', sample: 'Circuit damage, Movement wear' },
 ];
 
 function applyPreview(body: string, placeholders: WhatsAppPlaceholder[]): string {
@@ -3044,6 +3149,15 @@ const tabs: TabDef[] = [
         ),
     },
     {
+        id: 'recommended-work-templates',
+        label: 'Recommended Work',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+        ),
+    },
+    {
         id: 'movement-type-templates',
         label: 'Movement Types',
         icon: (
@@ -3151,6 +3265,7 @@ const Settings: React.FC = () => {
                 {activeTab === 'issue-templates' && <IssueTemplatesSection />}
                 {activeTab === 'watch-condition-templates' && <WatchConditionTemplatesSection />}
                 {activeTab === 'diagnosis-summary-templates' && <DiagnosisSummaryTemplatesSection />}
+                {activeTab === 'recommended-work-templates' && <RecommendedWorkTemplatesSection />}
                 {activeTab === 'movement-type-templates' && <MovementTypeTemplatesSection />}
                 {activeTab === 'movement-caliber-templates' && <MovementCaliberTemplatesSection />}
                 {activeTab === 'watch-brands' && <WatchBrandsSection />}

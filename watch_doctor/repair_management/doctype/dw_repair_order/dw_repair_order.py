@@ -136,11 +136,19 @@ def resolve_repair_item_status(current_status=None, diagnosis_status=None, techn
 		return status
 
 	diagnosis_mapped_status = DIAGNOSIS_TO_WATCH_STATUS.get(diagnosis_status)
-	if diagnosis_mapped_status in {WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED, WATCH_STATUS_QUOTED, WATCH_STATUS_APPROVAL_FOR_ESTIMATE}:
+
+	# Hard-stop diagnoses (Not Repairable, Declined) always override, even manual statuses.
+	if diagnosis_mapped_status in {WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED}:
 		return diagnosis_mapped_status
 
+	# If the caller explicitly set a manual status (e.g. "Quoted" after "Create Estimate"),
+	# respect that choice rather than letting the still-stale diagnosis_status revert it.
 	if status in MANUAL_ITEM_STATUSES:
 		return status
+
+	# Diagnosis-driven transitions for Quoted / Create Estimate when no manual override was set.
+	if diagnosis_mapped_status in {WATCH_STATUS_QUOTED, WATCH_STATUS_APPROVAL_FOR_ESTIMATE}:
+		return diagnosis_mapped_status
 
 	if diagnosis_mapped_status == WATCH_STATUS_DIAGNOSED or has_recommended_work:
 		return WATCH_STATUS_DIAGNOSED

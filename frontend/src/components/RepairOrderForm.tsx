@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { RepairOrder, RepairItem, RepairTask, RepairPartUsed, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, MovementTypeTemplate, MovementCaliberTemplate, RepairItemIssue } from '../types';
+import type { RepairOrder, RepairItem, RepairTask, RepairPartUsed, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, RecommendedWorkTemplate, MovementTypeTemplate, MovementCaliberTemplate, RepairItemIssue } from '../types';
 import { OrderStatus, Priority, WatchStatus, TaskStatus, resolveDiagnosisStatus } from '../types';
 import * as apiService from '../services/apiService';
 import { isErpNext } from '../services/apiService';
-import { mockCustomers, mockEmployees, mockRepairServices, mockSpareParts } from '../services/mockData';
+import { mockCustomers, mockEmployees, mockSpareParts, mockTaskTemplates } from '../services/mockData';
 import { Modal } from './ui/Modal';
 import { CreateCustomerModal } from './CreateCustomerModal';
 import { CreateBrandModal } from './CreateBrandModal';
@@ -178,9 +178,10 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         issueTemplates: IssueTemplate[];
         watchConditionTemplates: WatchConditionTemplate[];
         diagnosisSummaryTemplates: DiagnosisSummaryTemplate[];
+        recommendedWorkTemplates: RecommendedWorkTemplate[];
         movementTypeTemplates: MovementTypeTemplate[];
         movementCaliberTemplates: MovementCaliberTemplate[];
-    }>({ customers: [], employees: [], services: [], parts: [], brands: [], models: [], issueTemplates: [], watchConditionTemplates: [], diagnosisSummaryTemplates: [], movementTypeTemplates: [], movementCaliberTemplates: [] });
+    }>({ customers: [], employees: [], services: [], parts: [], brands: [], models: [], issueTemplates: [], watchConditionTemplates: [], diagnosisSummaryTemplates: [], recommendedWorkTemplates: [], movementTypeTemplates: [], movementCaliberTemplates: [] });
 
     // Customer Creation State
     const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false);
@@ -204,7 +205,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
 
     const loadDependencies = useCallback(async () => {
         if (isErpNext) {
-            const [customers, employees, taskTemplates, brands, issueTemplates, watchConditionTemplates, diagnosisSummaryTemplates, movementTypeTemplates, movementCaliberTemplates] = await Promise.all([
+            const [customers, employees, taskTemplates, brands, issueTemplates, watchConditionTemplates, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates] = await Promise.all([
                 apiService.getCustomers(),
                 apiService.getEmployees(),
                 apiService.getTaskTemplates(),
@@ -212,6 +213,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                 apiService.getIssueTemplates(),
                 apiService.getWatchConditionTemplates(),
                 apiService.getDiagnosisSummaryTemplates(),
+                apiService.getRecommendedWorkTemplates(),
                 apiService.getMovementTypeTemplates(),
                 apiService.getMovementCaliberTemplates(),
             ]);
@@ -225,6 +227,7 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                 issueTemplates,
                 watchConditionTemplates,
                 diagnosisSummaryTemplates,
+                recommendedWorkTemplates,
                 movementTypeTemplates,
                 movementCaliberTemplates,
             });
@@ -241,6 +244,11 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
             issueTemplates: [],
             watchConditionTemplates: DEFAULT_WATCH_CONDITION_TEMPLATES,
             diagnosisSummaryTemplates: DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES,
+            recommendedWorkTemplates: mockTaskTemplates.map(template => ({
+                name: template.name,
+                work_name: template.task_name,
+                description: template.description,
+            })),
             movementTypeTemplates: DEFAULT_MOVEMENT_TYPE_TEMPLATES,
             movementCaliberTemplates: DEFAULT_MOVEMENT_CALIBER_TEMPLATES,
         });

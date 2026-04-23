@@ -40,7 +40,7 @@
    "label": "Message Template"
   },
   {
-    "description": "Placeholders: {{1}} Customer Name, {{2}} Order ID, {{3}} Status, {{4}} Shop Name, {{5}} Promised Date, {{6}} Watch Details, {{7}} Recommended Works, {{8}} Estimate Total",
+    "description": "Placeholders: {{1}} Customer Name, {{2}} Order ID, {{3}} Status, {{4}} Shop Name, {{5}} Promised Date, {{6}} Watch Details, {{7}} Recommended Works, {{8}} Estimate Total, {{9}} Diagnosis Summary",
    "fieldname": "message_body",
    "fieldtype": "Long Text",
    "label": "Message Body",

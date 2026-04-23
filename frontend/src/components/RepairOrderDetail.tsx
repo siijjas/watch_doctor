@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { RepairOrder, RepairItem, RepairPartUsed, RepairTask, Employee, Item, RepairTaskTemplate, WatchModel, IssueTemplate, DiagnosisSummaryTemplate, MovementTypeTemplate, MovementCaliberTemplate } from '../types';
+import type { RepairOrder, RepairItem, RepairPartUsed, RepairTask, Employee, Item, RepairTaskTemplate, WatchModel, IssueTemplate, DiagnosisSummaryTemplate, RecommendedWorkTemplate, MovementTypeTemplate, MovementCaliberTemplate } from '../types';
 import { TaskStatus, WatchStatus, resolveDiagnosisStatus } from '../types';
 import * as apiService from '../services/apiService';
 import { isErpNext } from '../services/apiService';
@@ -249,6 +249,7 @@ const WatchCard: React.FC<{
     onSetWorkflowStatus: (itemIndex: number, status: WatchStatus) => Promise<void>;
     onNotifyEstimateCustomer: (itemIndex: number) => Promise<void>;
     diagnosisSummaryTemplates: DiagnosisSummaryTemplate[];
+    recommendedWorkTemplates: RecommendedWorkTemplate[];
     movementTypeTemplates: MovementTypeTemplate[];
     movementCaliberTemplates: MovementCaliberTemplate[];
     canEditDiagnosis: boolean;
@@ -257,7 +258,7 @@ const WatchCard: React.FC<{
     isSavingDiagnosis: boolean;
     onSaveDiagnosis: (itemIndex: number, diagnosis: Pick<RepairItem, 'diagnosis_status' | 'diagnosis_summary' | 'movement_type' | 'movement_caliber' | 'movement_information' | 'recommended_work'>) => Promise<void>;
     defaultExpanded?: boolean;
-  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, defaultExpanded = true }) => {
+  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, defaultExpanded = true }) => {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
     const [activeDiagnosisModal, setActiveDiagnosisModal] = useState<null | 'movement_type' | 'movement_caliber' | 'diagnosis_summary' | 'recommended_work'>(null);
     const [diagnosisDraft, setDiagnosisDraft] = useState({
@@ -321,18 +322,11 @@ const WatchCard: React.FC<{
       label: template.summary_name,
       description: template.description,
     }));
-    const recommendedWorkOptions = Array.from(
-      new Map(
-        taskTemplates.map(template => [
-          template.task_name.toLowerCase(),
-          {
-            value: template.task_name,
-            label: template.task_name,
-            description: template.description,
-          },
-        ])
-      ).values()
-    );
+    const recommendedWorkOptions = recommendedWorkTemplates.map(template => ({
+      value: template.work_name,
+      label: template.work_name,
+      description: template.description,
+    }));
     const canSubmitForEstimateApproval = canManageWorkflowStatus && item.status === WatchStatus.Diagnosed;
     const canSubmitToQuoted = canManageWorkflowStatus && item.status === WatchStatus.CreateEstimate;
     const canMoveToRepair = canManageWorkflowStatus && item.status === WatchStatus.Quoted;
@@ -898,7 +892,7 @@ const WatchCard: React.FC<{
               isOpen={activeDiagnosisModal === 'recommended_work'}
               onClose={() => setActiveDiagnosisModal(null)}
               title="Add Recommended Work"
-              helperText="Select one or more recommended work items. This list is sourced from the configured repair task templates because there is no separate recommended-work template source."
+              helperText=""
               options={recommendedWorkOptions}
               currentValues={new Set(diagnosisDraft.recommended_work || [])}
               onSave={async (selectedValues) => {
@@ -933,6 +927,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   const [watchModels, setWatchModels] = useState<WatchModel[]>([]);
   const [issueTemplates, setIssueTemplates] = useState<IssueTemplate[]>([]);
   const [diagnosisSummaryTemplates, setDiagnosisSummaryTemplates] = useState<DiagnosisSummaryTemplate[]>([]);
+  const [recommendedWorkTemplates, setRecommendedWorkTemplates] = useState<RecommendedWorkTemplate[]>([]);
   const [movementTypeTemplates, setMovementTypeTemplates] = useState<MovementTypeTemplate[]>([]);
   const [movementCaliberTemplates, setMovementCaliberTemplates] = useState<MovementCaliberTemplate[]>([]);
   const [addPartModal, setAddPartModal] = useState<{
@@ -1343,12 +1338,13 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     const fetchData = async () => {
       setIsLoading(true);
       if (isErpNext) {
-        const [emps, templates, models, issues, diagnosisSummaries, movementTypes, movementCalibers] = await Promise.all([
+        const [emps, templates, models, issues, diagnosisSummaries, recommendedWorks, movementTypes, movementCalibers] = await Promise.all([
           apiService.getEmployees(),
           apiService.getTaskTemplates(),
           apiService.getWatchModels(''), // Fetch all models
           apiService.getIssueTemplates(),
           apiService.getDiagnosisSummaryTemplates(),
+          apiService.getRecommendedWorkTemplates(),
           apiService.getMovementTypeTemplates(),
           apiService.getMovementCaliberTemplates(),
         ]);
@@ -1356,6 +1352,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
         setTaskTemplates(templates);
         setIssueTemplates(issues);
         setDiagnosisSummaryTemplates(diagnosisSummaries);
+        setRecommendedWorkTemplates(recommendedWorks);
         setMovementTypeTemplates(movementTypes);
         setMovementCaliberTemplates(movementCalibers);
 
@@ -1389,6 +1386,11 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
         setAllItems(mockItems);
         setTaskTemplates(mockTaskTemplates);
         setDiagnosisSummaryTemplates(DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES);
+        setRecommendedWorkTemplates(mockTaskTemplates.map(template => ({
+          name: template.name,
+          work_name: template.task_name,
+          description: template.description,
+        })));
         setMovementTypeTemplates(DEFAULT_MOVEMENT_TYPE_TEMPLATES);
         setMovementCaliberTemplates(DEFAULT_MOVEMENT_CALIBER_TEMPLATES);
       }
@@ -1592,6 +1594,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-wide">Customer</p>
                   <p className="font-semibold text-gray-900">{order.customer_name || order.customer}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{order.customer_mobile || 'No mobile number'}</p>
                 </div>
               </div>
             </div>
@@ -1710,6 +1713,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           onSetWorkflowStatus={handleSetWorkflowStatus}
           onNotifyEstimateCustomer={handleNotifyEstimateCustomer}
           diagnosisSummaryTemplates={diagnosisSummaryTemplates}
+          recommendedWorkTemplates={recommendedWorkTemplates}
           movementTypeTemplates={movementTypeTemplates}
           movementCaliberTemplates={movementCaliberTemplates}
           canEditDiagnosis={canEditDiagnosisForItem(item)}

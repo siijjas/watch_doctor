@@ -271,7 +271,7 @@ after_migrate = [
 fixtures = [
     {
         "doctype": "DocType",
-        "filters": [["name", "in", ["DW Technician", "DW Repair Order", "DW Repair Item", "DW Repair Task", "DW Repair Part Used", "DW Task Template", "DW Watch Condition Template", "DW Diagnosis Summary Template", "DW Movement Information Template", "DW Movement Type Template", "DW Movement Caliber Template", "DW Test"]]],
+        "filters": [["name", "in", ["DW Technician", "DW Repair Order", "DW Repair Item", "DW Repair Task", "DW Repair Part Used", "DW Task Template", "DW Watch Condition Template", "DW Diagnosis Summary Template", "DW Recommended Work Template", "DW Movement Information Template", "DW Movement Type Template", "DW Movement Caliber Template", "DW Test"]]],
     },
     {
         "doctype": "Role",

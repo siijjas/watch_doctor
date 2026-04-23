@@ -1,4 +1,4 @@
-import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, MovementInfoTemplate, MovementTypeTemplate, MovementCaliberTemplate, DiagnosisStatus, QuotationSummary, InvoiceSummary, UserInfo } from '../types';
+import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, RecommendedWorkTemplate, MovementInfoTemplate, MovementTypeTemplate, MovementCaliberTemplate, DiagnosisStatus, QuotationSummary, InvoiceSummary, UserInfo } from '../types';
 import { resolveDiagnosisStatus } from '../types';
 
 declare const window: any;
@@ -334,6 +334,32 @@ const unflattenRepairOrder = (order: any): RepairOrder => {
     return { ...order, items };
 };
 
+const enrichRepairOrderCustomerDisplay = async (order: RepairOrder): Promise<RepairOrder> => {
+    if (!order.customer) {
+        return order;
+    }
+
+    const hasDisplayName = Boolean(order.customer_name && order.customer_name.trim());
+    const hasDisplayMobile = Boolean(order.customer_mobile && order.customer_mobile.trim());
+    if (hasDisplayName && hasDisplayMobile) {
+        return order;
+    }
+
+    try {
+        const customer = await getDoc('Customer', order.customer);
+        return {
+            ...order,
+            customer_name: customer?.customer_name || order.customer_name || order.customer,
+            customer_mobile: customer?.mobile_no || customer?.phone || order.customer_mobile || '',
+        };
+    } catch {
+        return {
+            ...order,
+            customer_name: order.customer_name || order.customer,
+        };
+    }
+};
+
 export const getRepairOrders = async (): Promise<RepairOrder[]> => {
     const res = await apiFetch('/api/method/watch_doctor.api.list_repair_orders', { method: 'POST', body: JSON.stringify({}) });
     const orders = res.message || [];
@@ -342,7 +368,8 @@ export const getRepairOrders = async (): Promise<RepairOrder[]> => {
 
 export const getRepairOrder = async (name: string): Promise<RepairOrder> => {
     const doc = await getDoc('DW Repair Order', name);
-    return unflattenRepairOrder(doc);
+    const normalizedOrder = unflattenRepairOrder(doc);
+    return enrichRepairOrderCustomerDisplay(normalizedOrder);
 };
 
 export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> => {
@@ -517,7 +544,8 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
         body: JSON.stringify({ doc_json: JSON.stringify(docToSave) }),
     });
     // Unflatten so callers get items with nested issues/tasks/parts
-    return unflattenRepairOrder(res.message);
+    const normalizedOrder = unflattenRepairOrder(res.message);
+    return enrichRepairOrderCustomerDisplay(normalizedOrder);
 };
 
 export const deleteRepairOrder = (name: string): Promise<any> => {
@@ -677,6 +705,13 @@ export const getWatchConditionTemplates = async (): Promise<WatchConditionTempla
 
 export const getDiagnosisSummaryTemplates = async (): Promise<DiagnosisSummaryTemplate[]> => {
     const res = await apiFetch('/api/method/watch_doctor.api.get_diagnosis_summary_templates', {
+        method: 'POST',
+    });
+    return res.message || [];
+};
+
+export const getRecommendedWorkTemplates = async (): Promise<RecommendedWorkTemplate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_recommended_work_templates', {
         method: 'POST',
     });
     return res.message || [];

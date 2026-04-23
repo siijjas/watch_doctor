@@ -265,6 +265,12 @@ export interface DiagnosisSummaryTemplate {
     description?: string;
 }
 
+export interface RecommendedWorkTemplate {
+    name: string;
+    work_name: string;
+    description?: string;
+}
+
 export interface MovementInfoTemplate {
     name: string;
     movement_info: string;
