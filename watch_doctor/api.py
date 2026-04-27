@@ -1982,6 +1982,7 @@ def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_n
 	if customer_id:
 		meta = frappe.get_meta("Customer")
 		for fieldname in (
+			"customer_pos_id",
 			"customer_id",
 			"custom_customer_id",
 			"id_number",
