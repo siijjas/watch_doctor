@@ -14,8 +14,6 @@ interface PaymentSplit extends POSPaymentSplit {
     id: string;
 }
 
-const LAST_POS_CUSTOMER_KEY = 'watch_doctor_last_pos_customer';
-
 const POS: React.FC<POSProps> = ({ onBack }) => {
     const { formatCurrency, config } = useAppConfig();
     const [items, setItems] = useState<POSItem[]>([]);
@@ -24,6 +22,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [customerSearch, setCustomerSearch] = useState('');
     const [selectedCustomer, setSelectedCustomer] = useState<POSCustomer | null>(null);
+    const [hasInitializedCustomer, setHasInitializedCustomer] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [paymentModes, setPaymentModes] = useState<any[]>([]);
     const [runtimeConfig, setRuntimeConfig] = useState<POSRuntimeConfig | null>(null);
@@ -33,6 +32,15 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     const [selectedReceiptFormat, setSelectedReceiptFormat] = useState('');
     const [selectedNamingSeries, setSelectedNamingSeries] = useState('');
     const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+    const [showCreateCustomerForm, setShowCreateCustomerForm] = useState(false);
+    const [createCustomerData, setCreateCustomerData] = useState({
+        customer_name: '',
+        customer_id: '',
+        mobile_no: '',
+        email_id: '',
+    });
+    const [createCustomerError, setCreateCustomerError] = useState('');
+    const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
     const [editingItemCode, setEditingItemCode] = useState<string | null>(null);
     const [editingPrice, setEditingPrice] = useState('');
 
@@ -66,17 +74,18 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     }, []);
 
     useEffect(() => {
-        if (selectedCustomer || !runtimeConfig?.default_customer) return;
-        setSelectedCustomer({
-            name: runtimeConfig.default_customer,
-            customer_name: runtimeConfig.default_customer_name || runtimeConfig.default_customer,
-        });
-    }, [runtimeConfig, selectedCustomer]);
+        if (!runtimeConfig || hasInitializedCustomer) return;
 
-    useEffect(() => {
-        if (!selectedCustomer) return;
-        localStorage.setItem(LAST_POS_CUSTOMER_KEY, JSON.stringify(selectedCustomer));
-    }, [selectedCustomer]);
+        if (!selectedCustomer && runtimeConfig.default_customer) {
+            setSelectedCustomer({
+                name: runtimeConfig.default_customer,
+                customer_name: runtimeConfig.default_customer_name || runtimeConfig.default_customer,
+            });
+        }
+
+        // Default customer should only auto-apply once on initial POS load.
+        setHasInitializedCustomer(true);
+    }, [runtimeConfig, selectedCustomer, hasInitializedCustomer]);
 
     const loadItems = async (search: string = '') => {
         setIsLoading(true);
@@ -94,21 +103,6 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         try {
             const data = await apiService.getPosCustomers(search);
             setCustomers(data);
-
-            if (!search && !selectedCustomer) {
-                try {
-                    const raw = localStorage.getItem(LAST_POS_CUSTOMER_KEY);
-                    if (raw) {
-                        const lastCustomer = JSON.parse(raw) as POSCustomer;
-                        const matched = data.find(c => c.name === lastCustomer.name);
-                        if (matched) {
-                            setSelectedCustomer(matched);
-                        }
-                    }
-                } catch {
-                    localStorage.removeItem(LAST_POS_CUSTOMER_KEY);
-                }
-            }
         } catch (error) {
             console.error('Failed to load customers:', error);
         }
@@ -143,6 +137,50 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             setDrafts(data);
         } catch (error) {
             console.error('Failed to load drafts:', error);
+        }
+    };
+
+    const handleCreateCustomer = async () => {
+        const customer_name = createCustomerData.customer_name.trim();
+        const customer_id = createCustomerData.customer_id.trim();
+        const mobile_no = createCustomerData.mobile_no.trim();
+        const email_id = createCustomerData.email_id.trim();
+
+        if (!customer_name) {
+            setCreateCustomerError('Customer name is required');
+            return;
+        }
+
+        setCreateCustomerError('');
+        setIsCreatingCustomer(true);
+        try {
+            const createdCustomer = await apiService.createPosCustomer({
+                customer_name,
+                customer_id: customer_id || undefined,
+                mobile_no: mobile_no || undefined,
+                email_id: email_id || undefined,
+            });
+
+            setCustomers(prev => {
+                const rest = prev.filter(c => c.name !== createdCustomer.name);
+                return [createdCustomer, ...rest];
+            });
+            setSelectedCustomer(createdCustomer);
+            setCustomerSearch('');
+            setShowCustomerDropdown(false);
+            setShowCreateCustomerForm(false);
+            setCreateCustomerData({
+                customer_name: '',
+                customer_id: '',
+                mobile_no: '',
+                email_id: '',
+            });
+            showToast(`Customer ${createdCustomer.customer_name} created`, 'success');
+        } catch (error: any) {
+            const message = error?.message || 'Failed to create customer';
+            setCreateCustomerError(message);
+        } finally {
+            setIsCreatingCustomer(false);
         }
     };
 
@@ -587,38 +625,101 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                     {/* Customer Selection */}
                     <div className="p-4 shrink-0" style={{ borderBottom: '1px solid #F0EEEB' }}>
                         <label className="text-xs text-gray-500 uppercase tracking-wide mb-2 block">Customer</label>
-                        <div className="relative">
-                            <input
-                                type="text"
-                                placeholder="Search customer..."
-                                value={selectedCustomer ? selectedCustomer.customer_name : customerSearch}
-                                onChange={(e) => {
-                                    setCustomerSearch(e.target.value);
-                                    setSelectedCustomer(null);
-                                    setShowCustomerDropdown(true);
+                        <div className="flex items-center gap-2">
+                            <div className="relative flex-1">
+                                <input
+                                    type="text"
+                                    placeholder="Search customer..."
+                                    value={selectedCustomer ? selectedCustomer.customer_name : customerSearch}
+                                    onChange={(e) => {
+                                        setCustomerSearch(e.target.value);
+                                        setSelectedCustomer(null);
+                                        setShowCustomerDropdown(true);
+                                    }}
+                                    onFocus={() => setShowCustomerDropdown(true)}
+                                    className="w-full px-4 py-2 rounded-lg bg-white text-sm"
+                                    style={{ border: '1px solid #E8E8E8' }}
+                                />
+                                {showCustomerDropdown && customers.length > 0 && !selectedCustomer && (
+                                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-lg shadow-lg max-h-40 overflow-y-auto z-10" style={{ borderColor: '#E8E8E8' }}>
+                                        {customers.map(customer => (
+                                            <div
+                                                key={customer.name}
+                                                onClick={() => {
+                                                    setSelectedCustomer(customer);
+                                                    setShowCustomerDropdown(false);
+                                                    setCustomerSearch('');
+                                                }}
+                                                className="px-4 py-2 hover:bg-stone-50 cursor-pointer text-sm"
+                                            >
+                                                {customer.customer_name}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <button
+                                onClick={() => {
+                                    setShowCreateCustomerForm(prev => !prev);
+                                    setCreateCustomerError('');
                                 }}
-                                onFocus={() => setShowCustomerDropdown(true)}
-                                className="w-full px-4 py-2 rounded-lg bg-white text-sm"
-                                style={{ border: '1px solid #E8E8E8' }}
-                            />
-                            {showCustomerDropdown && customers.length > 0 && !selectedCustomer && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-lg shadow-lg max-h-40 overflow-y-auto z-10" style={{ borderColor: '#E8E8E8' }}>
-                                    {customers.map(customer => (
-                                        <div
-                                            key={customer.name}
-                                            onClick={() => {
-                                                setSelectedCustomer(customer);
-                                                setShowCustomerDropdown(false);
-                                                setCustomerSearch('');
-                                            }}
-                                            className="px-4 py-2 hover:bg-stone-50 cursor-pointer text-sm"
-                                        >
-                                            {customer.customer_name}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
+                                className="text-xs font-medium shrink-0 px-2"
+                                style={{ color: '#648DDA' }}
+                                type="button"
+                            >
+                                {showCreateCustomerForm ? 'Close' : '+ New Customer'}
+                            </button>
                         </div>
+
+                        {showCreateCustomerForm && (
+                            <div className="mt-3 rounded-lg p-3" style={{ border: '1px solid #E8E8E8', backgroundColor: '#FAF7F2' }}>
+                                {createCustomerError && (
+                                    <div className="mb-2 text-xs text-red-600">{createCustomerError}</div>
+                                )}
+                                <div className="space-y-2">
+                                    <input
+                                        type="text"
+                                        placeholder="Name"
+                                        value={createCustomerData.customer_name}
+                                        onChange={(e) => setCreateCustomerData(prev => ({ ...prev, customer_name: e.target.value }))}
+                                        className="w-full px-3 py-2 rounded-lg text-sm bg-white"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="ID"
+                                        value={createCustomerData.customer_id}
+                                        onChange={(e) => setCreateCustomerData(prev => ({ ...prev, customer_id: e.target.value }))}
+                                        className="w-full px-3 py-2 rounded-lg text-sm bg-white"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Mobile"
+                                        value={createCustomerData.mobile_no}
+                                        onChange={(e) => setCreateCustomerData(prev => ({ ...prev, mobile_no: e.target.value }))}
+                                        className="w-full px-3 py-2 rounded-lg text-sm bg-white"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    />
+                                    <input
+                                        type="email"
+                                        placeholder="Email"
+                                        value={createCustomerData.email_id}
+                                        onChange={(e) => setCreateCustomerData(prev => ({ ...prev, email_id: e.target.value }))}
+                                        className="w-full px-3 py-2 rounded-lg text-sm bg-white"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    />
+                                    <Button
+                                        onClick={handleCreateCustomer}
+                                        disabled={isCreatingCustomer}
+                                        className="w-full"
+                                        style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
+                                    >
+                                        {isCreatingCustomer ? 'Creating...' : 'Create Customer'}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Cart Items */}

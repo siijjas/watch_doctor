@@ -1113,6 +1113,15 @@ export interface POSItem {
 export interface POSCustomer {
     name: string;
     customer_name: string;
+    mobile_no?: string;
+    email_id?: string;
+}
+
+export interface POSCustomerCreatePayload {
+    customer_name: string;
+    customer_id?: string;
+    mobile_no?: string;
+    email_id?: string;
 }
 
 export interface CartItem {
@@ -1194,6 +1203,14 @@ export const getPosCustomers = async (search: string = ""): Promise<POSCustomer[
         body: JSON.stringify({ search }),
     });
     return res.message || [];
+};
+
+export const createPosCustomer = async (payload: POSCustomerCreatePayload): Promise<POSCustomer> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.create_pos_customer', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+    return res.message;
 };
 
 const normalizePosPayments = (payments: POSPaymentSplit[] | string): POSPaymentSplit[] => {

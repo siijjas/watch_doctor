@@ -1954,6 +1954,61 @@ def get_pos_customers(search: str = "", limit: int = 20):
 
 
 @frappe.whitelist()
+def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_no: str = "", email_id: str = ""):
+	"""Create a new Customer from POS quick-create form."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	customer_name = " ".join((customer_name or "").split())
+	customer_id = (customer_id or "").strip()
+	mobile_no = (mobile_no or "").strip()
+	email_id = (email_id or "").strip()
+
+	if not customer_name:
+		frappe.throw("Customer name is required")
+
+	if email_id and not frappe.utils.validate_email_address(email_id, throw=False):
+		frappe.throw("Please enter a valid email address")
+
+	customer_doc = frappe.get_doc({
+		"doctype": "Customer",
+		"customer_name": customer_name,
+		"customer_type": "Individual",
+		"customer_group": "Individual",
+		"territory": "All Territories",
+		"mobile_no": mobile_no,
+		"email_id": email_id,
+	})
+
+	if customer_id:
+		meta = frappe.get_meta("Customer")
+		for fieldname in (
+			"customer_id",
+			"custom_customer_id",
+			"id_number",
+			"custom_id_number",
+			"identification_number",
+			"custom_identification_number",
+			"identification_document_number",
+			"custom_identification_document_number",
+			"civil_id",
+			"national_id",
+		):
+			if meta.has_field(fieldname):
+				customer_doc.set(fieldname, customer_id)
+				break
+
+	customer_doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	return {
+		"name": customer_doc.name,
+		"customer_name": customer_doc.customer_name,
+		"mobile_no": customer_doc.mobile_no,
+		"email_id": customer_doc.email_id,
+	}
+
+
+@frappe.whitelist()
 def create_pos_invoice(
 	customer: str = "",
 	items_json: str = "[]",
