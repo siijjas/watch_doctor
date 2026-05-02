@@ -35,16 +35,9 @@ DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES = [
 
 
 def execute():
-	"""Sync diagnosis summary templates to the active supported set."""
-	active_names = {summary_name for summary_name, _ in DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES}
-
+	"""Seed default diagnosis summary templates without overwriting user-managed records."""
 	for summary_name, description in DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES:
-		existing_name = frappe.db.get_value("DW Diagnosis Summary Template", {"summary_name": summary_name}, "name")
-		if existing_name:
-			doc = frappe.get_doc("DW Diagnosis Summary Template", existing_name)
-			doc.description = description
-			doc.is_active = 1
-			doc.save(ignore_permissions=True)
+		if frappe.db.exists("DW Diagnosis Summary Template", {"summary_name": summary_name}):
 			continue
 
 		frappe.get_doc({
@@ -53,9 +46,5 @@ def execute():
 			"description": description,
 			"is_active": 1,
 		}).insert(ignore_permissions=True)
-
-	for template in frappe.get_all("DW Diagnosis Summary Template", fields=["name", "summary_name", "is_active"], limit_page_length=500):
-		if template.summary_name not in active_names or not template.is_active:
-			frappe.delete_doc("DW Diagnosis Summary Template", template.name, ignore_permissions=True, force=True)
 
 	frappe.db.commit()
