@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import type { RepairOrder } from '../types';
 import { STATUS_COLORS, PRIORITY_COLORS } from '../constants';
 import { Badge } from './ui/Badge';
@@ -6,8 +6,15 @@ import { Badge } from './ui/Badge';
 interface RepairOrderListProps {
   orders: RepairOrder[];
   onSelectOrder: (order: RepairOrder) => void;
-  initialFilter?: string;
-  initialSearch?: string;
+  searchQuery?: string;
+  statusFilter?: string;
+  onSearchQueryChange?: (value: string) => void;
+  onStatusFilterChange?: (value: string) => void;
+  serverSideSearch?: boolean;
+  totalOrdersCount?: number;
+  onLoadMore: () => void;
+  hasMoreOrders: boolean;
+  isLoadingMoreOrders: boolean;
 }
 
 const STATUS_OPTIONS = ['All', 'Pending', 'In Progress', 'Create Estimate', 'Awaiting Parts', 'Repaired', 'Delivered', 'Cancelled'];
@@ -30,38 +37,64 @@ const DREELIO_PRIORITY_STYLES: { [key: string]: string } = {
   'VIP': 'bg-pink-200 text-pink-700',
 };
 
-const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder, initialFilter, initialSearch }) => {
-  const [searchQuery, setSearchQuery] = useState(initialSearch || '');
-  const [statusFilter, setStatusFilter] = useState(initialFilter || 'All');
+const RepairOrderList: React.FC<RepairOrderListProps> = ({
+  orders,
+  onSelectOrder,
+  searchQuery,
+  statusFilter,
+  onSearchQueryChange,
+  onStatusFilterChange,
+  serverSideSearch = false,
+  totalOrdersCount,
+  onLoadMore,
+  hasMoreOrders,
+  isLoadingMoreOrders,
+}) => {
+  const [localSearchQuery, setLocalSearchQuery] = useState('');
+  const [localStatusFilter, setLocalStatusFilter] = useState('All');
+  const loadMoreAnchorRef = useRef<HTMLDivElement | null>(null);
 
-  // Update filter/search when props change
-  React.useEffect(() => {
-    if (initialFilter) {
-      setStatusFilter(initialFilter);
-    }
-  }, [initialFilter]);
+  const activeSearchQuery = serverSideSearch ? (searchQuery || '') : localSearchQuery;
+  const activeStatusFilter = serverSideSearch ? (statusFilter || 'All') : localStatusFilter;
 
-  React.useEffect(() => {
-    if (initialSearch !== undefined) {
-      setSearchQuery(initialSearch);
+  useEffect(() => {
+    if (!hasMoreOrders || isLoadingMoreOrders) {
+      return;
     }
-  }, [initialSearch]);
+
+    const anchor = loadMoreAnchorRef.current;
+    if (!anchor) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: '300px 0px' }
+    );
+
+    observer.observe(anchor);
+    return () => observer.disconnect();
+  }, [hasMoreOrders, isLoadingMoreOrders, onLoadMore]);
 
   // Filter orders based on search and status
   const filteredOrders = useMemo(() => {
+    if (serverSideSearch) {
+      return orders;
+    }
+
     return orders.filter(order => {
       // Status filter
-      if (statusFilter === 'In Progress') {
-        if (!['In Progress', 'Create Estimate'].includes(order.status)) {
-          return false;
-        }
-      } else if (statusFilter !== 'All' && order.status !== statusFilter) {
+      if (activeStatusFilter !== 'All' && order.status !== activeStatusFilter) {
         return false;
       }
 
       // Search filter (order ID, reference number, customer name/mobile, technician, issue)
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase();
+      if (activeSearchQuery.trim()) {
+        const query = activeSearchQuery.toLowerCase();
         const matchesId = order.name?.toLowerCase().includes(query);
         const matchesRef = (order.reference_number || '').toLowerCase().includes(query);
         const matchesCustomer = (order.customer_name || order.customer || '').toLowerCase().includes(query);
@@ -84,7 +117,7 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
 
       return true;
     });
-  }, [orders, searchQuery, statusFilter]);
+  }, [orders, activeSearchQuery, activeStatusFilter, serverSideSearch]);
 
   return (
     <div className="w-full">
@@ -92,7 +125,9 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
       <div className="mb-4 sm:mb-6">
         <h1 className="text-2xl sm:text-[46px] leading-tight font-bold text-slate-900">All Repair Orders</h1>
         <p className="text-slate-500 text-lg sm:text-[34px] mt-1">
-          {filteredOrders.length} of {orders.length} orders
+          {serverSideSearch
+            ? `${orders.length} of ${totalOrdersCount ?? orders.length} orders`
+            : `${filteredOrders.length} of ${orders.length} orders`}
         </p>
       </div>
 
@@ -108,8 +143,15 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
           <input
             type="text"
             placeholder="Search by Order ID, Ref No, Customer, or Mobile..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            value={activeSearchQuery}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (serverSideSearch) {
+                onSearchQueryChange?.(value);
+              } else {
+                setLocalSearchQuery(value);
+              }
+            }}
             className="w-full pl-12 pr-4 py-3 rounded-xl bg-white text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-gray-200 shadow-sm"
             style={{ border: '1px solid #E8E8E8' }}
           />
@@ -117,8 +159,15 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
 
         {/* Status Filter */}
         <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          value={activeStatusFilter}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (serverSideSearch) {
+              onStatusFilterChange?.(value);
+            } else {
+              setLocalStatusFilter(value);
+            }
+          }}
           className="px-4 py-3 rounded-xl bg-white text-gray-900 focus:ring-2 focus:ring-gray-200 shadow-sm min-w-[180px]"
           style={{ border: '1px solid #E8E8E8' }}
         >
@@ -239,6 +288,21 @@ const RepairOrderList: React.FC<RepairOrderListProps> = ({ orders, onSelectOrder
           </table>
         </div>
       </div>
+
+      {(hasMoreOrders || isLoadingMoreOrders) && (
+        <div className="mt-5 flex flex-col items-center gap-3">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={isLoadingMoreOrders}
+            className="font-semibold py-2.5 px-5 rounded-xl shadow-sm transition duration-200 text-sm hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
+            style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
+          >
+            {isLoadingMoreOrders ? 'Loading more orders...' : 'Load more orders'}
+          </button>
+          <div ref={loadMoreAnchorRef} className="h-1 w-full" aria-hidden="true" />
+        </div>
+      )}
     </div>
   );
 };

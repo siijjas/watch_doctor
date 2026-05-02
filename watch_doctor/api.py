@@ -1077,9 +1077,29 @@ def update_repair_item_diagnosis(item_name, diagnosis_json):
 
 
 @frappe.whitelist()
-def list_repair_orders():
+def list_repair_orders(
+	start: int = 0,
+	limit_page_length: int = 100,
+	search: str = "",
+	status: str = "All",
+	include_total: int = 0,
+):
 	"""Return lightweight repair order list with customer display."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+
+	# Keep page size bounded to protect API performance.
+	try:
+		start = max(0, int(start or 0))
+	except (TypeError, ValueError):
+		start = 0
+	try:
+		limit_page_length = int(limit_page_length or 100)
+	except (TypeError, ValueError):
+		limit_page_length = 100
+	limit_page_length = max(1, min(limit_page_length, 500))
+	search = (search or "").strip()
+	status = (status or "All").strip()
+	include_total = int(include_total or 0)
 
 	# Technicians: only orders assigned to them
 	roles = set(frappe.get_roles())
@@ -1100,30 +1120,99 @@ def list_repair_orders():
 		else:
 			return []
 
-	orders = frappe.get_all(
-		"DW Repair Order",
-		fields=["name", "customer", "reference_number", "status", "priority", "received_date"],
-		filters=extra_filters,
-		limit_page_length=50,
-		order_by="modified desc",
-	)
-	# add customer display fields for the list view search UI
-	customer_details = {}
-	for o in orders:
-		if o.customer and o.customer not in customer_details:
-			customer_details[o.customer] = frappe.db.get_value(
-				"Customer",
+	where_clauses = ["1=1"]
+	query_values = {
+		"start": start,
+		"limit": limit_page_length,
+	}
+
+	if "name" in extra_filters and extra_filters["name"][0] == "in":
+		where_clauses.append("o.name IN %(order_names)s")
+		query_values["order_names"] = tuple(extra_filters["name"][1])
+
+	if status and status != "All":
+		where_clauses.append("o.status = %(status)s")
+		query_values["status"] = status
+
+	if search:
+		where_clauses.append("""
+			(
+				o.name LIKE %(needle)s
+				OR IFNULL(o.reference_number, '') LIKE %(needle)s
+				OR IFNULL(o.customer, '') LIKE %(needle)s
+				OR IFNULL(c.customer_name, '') LIKE %(needle)s
+				OR IFNULL(c.mobile_no, '') LIKE %(needle)s
+			)
+		""")
+		query_values["needle"] = f"%{search}%"
+
+	orders = frappe.db.sql(
+		f"""
+			SELECT
+				o.name,
 				o.customer,
-				["customer_name", "mobile_no"],
-				as_dict=True,
-			) or {}
-		customer = customer_details.get(o.customer) or {}
-		o["customer_name"] = customer.get("customer_name") or o.customer
-		o["customer_mobile"] = customer.get("mobile_no") or ""
-		
-		# Add item count
-		o["item_count"] = frappe.db.count("DW Repair Item", {"parent": o.name})
-	
+				o.reference_number,
+				o.status,
+				o.priority,
+				o.received_date,
+				c.customer_name,
+				c.mobile_no AS customer_mobile
+			FROM `tabDW Repair Order` o
+			LEFT JOIN `tabCustomer` c ON c.name = o.customer
+			WHERE {' AND '.join(where_clauses)}
+			ORDER BY o.modified DESC
+			LIMIT %(limit)s OFFSET %(start)s
+		""",
+		query_values,
+		as_dict=True,
+	)
+
+	total_count = None
+	if include_total:
+		# Build a separate values dict for COUNT — strip LIMIT/OFFSET keys which
+		# have no placeholders in the COUNT SQL (passing unused keys causes pymysql
+		# "not all arguments converted" error).
+		count_values = {k: v for k, v in query_values.items() if k not in ("start", "limit")}
+		count_sql = f"""
+			SELECT COUNT(*) as count
+			FROM `tabDW Repair Order` o
+			LEFT JOIN `tabCustomer` c ON c.name = o.customer
+			WHERE {' AND '.join(where_clauses)}
+		"""
+		# Only pass values when there are actual filter params; passing an empty
+		# dict to pymysql still triggers substitution and errors on plain SQL.
+		if count_values:
+			count_rows = frappe.db.sql(count_sql, count_values, as_dict=True)
+		else:
+			count_rows = frappe.db.sql(count_sql, as_dict=True)
+		total_count = count_rows[0].get("count", 0) if count_rows else 0
+
+	order_names = [o.name for o in orders]
+	item_count_map = {}
+	if order_names:
+		item_counts = frappe.db.sql(
+			"""
+				SELECT parent, COUNT(name) AS item_count
+				FROM `tabDW Repair Item`
+				WHERE parent IN %(order_names)s
+				GROUP BY parent
+			""",
+			{"order_names": tuple(order_names)},
+			as_dict=True,
+		)
+		item_count_map = {row.parent: int(row.item_count or 0) for row in item_counts}
+
+	for o in orders:
+		o["customer_name"] = o.get("customer_name") or o.get("customer")
+		o["customer_mobile"] = o.get("customer_mobile") or ""
+		o["item_count"] = item_count_map.get(o.name, 0)
+
+	if include_total:
+		return {
+			"orders": orders,
+			"total_count": int(total_count or 0),
+		}
+
 	return orders
 
 
@@ -1550,7 +1639,7 @@ def get_dashboard_stats(days: int = 7):
 	return {
 		"total_orders": total_orders,
 		"pending": status_map.get("Pending", 0),
-		"in_progress": status_map.get("In Progress", 0) + status_map.get("Create Estimate", 0),
+		"in_progress": status_map.get("In Progress", 0),
 		"awaiting_parts": status_map.get("Awaiting Parts", 0),
 		"repaired": status_map.get("Repaired", 0),
 		"delivered": status_map.get("Delivered", 0),

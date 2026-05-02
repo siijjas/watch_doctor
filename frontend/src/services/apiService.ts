@@ -360,10 +360,43 @@ const enrichRepairOrderCustomerDisplay = async (order: RepairOrder): Promise<Rep
     }
 };
 
-export const getRepairOrders = async (): Promise<RepairOrder[]> => {
-    const res = await apiFetch('/api/method/watch_doctor.api.list_repair_orders', { method: 'POST', body: JSON.stringify({}) });
-    const orders = res.message || [];
-    return orders.map((o: any) => ({ ...o, items: [] })); // List view doesn't need details
+export const getRepairOrders = async (
+    start: number = 0,
+    limitPageLength: number = 100,
+    search: string = '',
+    status: string = 'All',
+    includeTotal: boolean = false,
+): Promise<{ orders: RepairOrder[]; total_count: number }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.list_repair_orders', {
+        method: 'POST',
+        body: JSON.stringify({
+            start,
+            limit_page_length: limitPageLength,
+            search,
+            status,
+            include_total: includeTotal ? 1 : 0,
+        }),
+    });
+    if (includeTotal) {
+        const payload = res.message;
+        // Guard: old backend returns a plain array; new backend returns { orders, total_count }
+        if (Array.isArray(payload)) {
+            const orders = payload.map((o: any) => ({ ...o, items: [] }));
+            return { orders, total_count: orders.length };
+        }
+        const data = (payload || {}) as { orders?: any[]; total_count?: number };
+        const orders = (data.orders || []).map((o: any) => ({ ...o, items: [] }));
+        return {
+            orders,
+            total_count: Number(data.total_count || 0),
+        };
+    }
+
+    const orders = (res.message || []).map((o: any) => ({ ...o, items: [] }));
+    return {
+        orders,
+        total_count: orders.length,
+    };
 };
 
 export const getRepairOrder = async (name: string): Promise<RepairOrder> => {

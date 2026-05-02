@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { RepairOrder } from './types';
 import * as apiService from './services/apiService';
 import { isErpNext } from './services/apiService';
@@ -17,6 +17,7 @@ import { AppConfigProvider } from './context/AppConfigContext';
 import { LoginPage } from './components/LoginPage';
 
 type ViewType = 'dashboard' | 'orders' | 'pos' | 'daily-report' | 'settings';
+const ORDER_PAGE_SIZE = 100;
 
 // Main app content (shown when authenticated)
 const AppContent: React.FC = () => {
@@ -34,22 +35,82 @@ const AppContent: React.FC = () => {
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [orderToEdit, setOrderToEdit] = useState<RepairOrder | null | undefined>(undefined);
-  const [initialOrderFilter, setInitialOrderFilter] = useState<string | undefined>(undefined);
-  const [initialOrderSearch, setInitialOrderSearch] = useState<string | undefined>(undefined);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>('All');
+  const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
+  const [debouncedOrderSearchQuery, setDebouncedOrderSearchQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMoreOrders, setIsLoadingMoreOrders] = useState(false);
+  const [hasMoreOrders, setHasMoreOrders] = useState(true);
+  const [orderTotalCount, setOrderTotalCount] = useState(0);
+  const latestOrdersRequestRef = useRef(0);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedOrderSearchQuery(orderSearchQuery);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [orderSearchQuery]);
 
   const loadOrders = useCallback(async () => {
+    const requestId = ++latestOrdersRequestRef.current;
     setIsLoading(true);
     try {
-      const orders = isErpNext ? await apiService.getRepairOrders() : mockRepairOrders;
-      setRepairOrders(orders as RepairOrder[]);
+      if (isErpNext) {
+        const response = await apiService.getRepairOrders(0, ORDER_PAGE_SIZE, debouncedOrderSearchQuery, orderStatusFilter, true);
+        if (requestId !== latestOrdersRequestRef.current) {
+          return;
+        }
+        setRepairOrders(response.orders as RepairOrder[]);
+        setOrderTotalCount(response.total_count || 0);
+        setHasMoreOrders(response.orders.length < response.total_count);
+      } else {
+        setRepairOrders(mockRepairOrders as RepairOrder[]);
+        setOrderTotalCount(mockRepairOrders.length);
+        setHasMoreOrders(false);
+      }
     } catch (error) {
       console.error("Failed to load repair orders:", error);
       setRepairOrders(mockRepairOrders as RepairOrder[]);
+      setOrderTotalCount(mockRepairOrders.length);
+      setHasMoreOrders(false);
     } finally {
-      setIsLoading(false);
+      if (requestId === latestOrdersRequestRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, []);
+  }, [debouncedOrderSearchQuery, orderStatusFilter]);
+
+  const loadMoreOrders = useCallback(async () => {
+    if (!isErpNext || isLoadingMoreOrders || !hasMoreOrders) {
+      return;
+    }
+
+    const requestId = ++latestOrdersRequestRef.current;
+    setIsLoadingMoreOrders(true);
+    try {
+      const currentLoaded = repairOrders.length;
+      const response = await apiService.getRepairOrders(
+        repairOrders.length,
+        ORDER_PAGE_SIZE,
+        debouncedOrderSearchQuery,
+        orderStatusFilter,
+        true,
+      );
+      if (requestId !== latestOrdersRequestRef.current) {
+        return;
+      }
+      setRepairOrders(prev => [...prev, ...(response.orders as RepairOrder[])]);
+      setOrderTotalCount(response.total_count || currentLoaded + response.orders.length);
+      setHasMoreOrders(currentLoaded + response.orders.length < response.total_count);
+    } catch (error) {
+      console.error("Failed to load more repair orders:", error);
+    } finally {
+      if (requestId === latestOrdersRequestRef.current) {
+        setIsLoadingMoreOrders(false);
+      }
+    }
+  }, [debouncedOrderSearchQuery, hasMoreOrders, isLoadingMoreOrders, orderStatusFilter, repairOrders.length]);
 
   useEffect(() => {
     if (currentView === 'orders') {
@@ -146,11 +207,13 @@ const AppContent: React.FC = () => {
   }, []);
 
   const handleNavigateToOrders = useCallback((filter?: string, search?: string) => {
-    setInitialOrderFilter(filter);
-    setInitialOrderSearch(search);
+    const nextStatus = filter || 'All';
+    const nextSearch = search || '';
+    setOrderStatusFilter(nextStatus);
+    setOrderSearchQuery(nextSearch);
+    setDebouncedOrderSearchQuery(nextSearch);
     setCurrentView('orders');
-    loadOrders();
-  }, [loadOrders]);
+  }, []);
 
   // Tab button component
   const TabButton: React.FC<{ view: ViewType; icon: React.ReactNode; label: string }> = ({ view, icon, label }) => (
@@ -159,8 +222,9 @@ const AppContent: React.FC = () => {
         setCurrentView(view);
         setSelectedOrder(null);
         if (view === 'orders') {
-          setInitialOrderFilter(undefined);
-          setInitialOrderSearch(undefined);
+          setOrderStatusFilter('All');
+          setOrderSearchQuery('');
+          setDebouncedOrderSearchQuery('');
         }
       }}
       className={`flex items-center px-4 py-2 rounded-lg font-medium transition-all duration-200 ${currentView === view
@@ -228,8 +292,15 @@ const AppContent: React.FC = () => {
             <RepairOrderList
               orders={repairOrders}
               onSelectOrder={handleSelectOrder}
-              initialFilter={initialOrderFilter}
-              initialSearch={initialOrderSearch}
+              searchQuery={orderSearchQuery}
+              statusFilter={orderStatusFilter}
+              onSearchQueryChange={setOrderSearchQuery}
+              onStatusFilterChange={setOrderStatusFilter}
+              serverSideSearch={isErpNext}
+              totalOrdersCount={orderTotalCount}
+              onLoadMore={loadMoreOrders}
+              hasMoreOrders={hasMoreOrders}
+              isLoadingMoreOrders={isLoadingMoreOrders}
             />
           )}
         </main>
