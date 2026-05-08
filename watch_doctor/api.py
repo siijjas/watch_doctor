@@ -2799,6 +2799,7 @@ def get_daily_report(report_date=None):
 			f"SUM(amount) as total_amount "
 			f"FROM `tabSales Invoice Item` "
 			f"WHERE parent IN ({placeholders}) "
+			f"AND IFNULL(dw_is_internal_line, 0) = 0 "
 			f"GROUP BY item_code, item_name ORDER BY total_qty DESC",
 			tuple(sales_inv_names), as_dict=True
 		)
@@ -2807,6 +2808,7 @@ def get_daily_report(report_date=None):
 			f"SELECT item_group, SUM(qty) as total_qty, SUM(amount) as total_amount "
 			f"FROM `tabSales Invoice Item` "
 			f"WHERE parent IN ({placeholders}) "
+			f"AND IFNULL(dw_is_internal_line, 0) = 0 "
 			f"GROUP BY item_group ORDER BY total_amount DESC",
 			tuple(sales_inv_names), as_dict=True
 		)
@@ -2842,6 +2844,7 @@ def get_daily_report(report_date=None):
 			FROM `tabSales Invoice Item` sii
 			LEFT JOIN `tabItem` i ON i.name = sii.item_code
 			WHERE sii.parent IN ({profit_placeholders})
+			  AND IFNULL(sii.dw_is_internal_line, 0) = 0
 			GROUP BY COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other')
 			ORDER BY gross_profit DESC, sales_amount DESC
 			""",
@@ -2868,6 +2871,7 @@ def get_daily_report(report_date=None):
 			FROM `tabSales Invoice Item` sii
 			LEFT JOIN `tabItem` i ON i.name = sii.item_code
 			WHERE sii.parent IN ({profit_placeholders})
+			  AND IFNULL(sii.dw_is_internal_line, 0) = 0
 			GROUP BY sii.item_code, sii.item_name, COALESCE(NULLIF(sii.item_group, ''), i.item_group, 'Other')
 			ORDER BY gross_profit DESC, sales_amount DESC
 			""",

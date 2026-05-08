@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, getdate
+from frappe.utils import add_days, flt, getdate
 
 from watch_doctor.invoice_settings import (
 	WORKFLOW_REPAIR_SERVICE,
@@ -12,6 +12,7 @@ from watch_doctor.invoice_settings import (
 	get_workflow_settings,
 )
 from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
+from watch_doctor.inventory_helpers import validate_parts_stock_availability
 
 
 WATCH_STATUS_PENDING = "Pending"
@@ -432,8 +433,7 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	
 	quotation.title = f"{quotation_type} Quotation for {repair_order.name}"
 	
-	# Add ONE item per watch (total cost; recommended_work as description)
-	total_amount = 0
+	# Add one labor item per watch and itemized part lines.
 
 	# Ensure we have a generic service item for tasks
 	service_item_code = get_or_create_service_item()
@@ -447,18 +447,11 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 		model_name = frappe.db.get_value("DW Watch Model", item.watch_model, "model_name") or item.watch_model
 		watch_item_name = f"Repair - {item.watch_brand} {model_name}"
 
-		# Calculate total cost for this watch
+		# Calculate labor cost for this watch
 		tasks_cost = 0
 		for task in item_tasks:
 			task_template = frappe.get_doc("DW Task Template", task.service)
 			tasks_cost += task.rate if task.rate else (task_template.default_rate or 0)
-
-		parts_cost = 0
-		for part in item_parts:
-			item_doc = frappe.get_doc("Item", part.part)
-			parts_cost += (part.rate if part.rate else (item_doc.standard_rate or 0)) * part.quantity
-
-		watch_total = tasks_cost + parts_cost
 
 		# Build description from recommended_work (JSON array stored in field)
 		try:
@@ -478,20 +471,52 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 
 		desc_lines = "<br>".join(line for line in rw_items if str(line).strip())
 
-		# One quotation item per watch
+		# Aggregate customer-facing total: tasks + parts at customer price.
+		# Parts cost is bundled into the service line so the customer sees one clean line.
+		customer_total = tasks_cost
+		for part in item_parts:
+			if not part.part or not part.quantity:
+				continue
+			part_rate = flt(part.rate) if part.rate else flt(frappe.db.get_value("Item", part.part, "standard_rate") or 0)
+			customer_total += flt(part.quantity) * part_rate
+
+		# Visible service line: full customer price (tasks + parts markup).
 		quotation_item = quotation.append("items", {})
 		quotation_item.item_code = service_item_code
 		quotation_item.item_name = watch_item_name
 		quotation_item.description = desc_lines or watch_item_name
 		quotation_item.qty = 1
-		quotation_item.rate = watch_total
+		quotation_item.rate = customer_total
 		quotation_item.uom = "Nos"
 
-		total_amount += watch_total
+		# Internal part lines: zero rate, hidden from customer print.
+		# These exist so downstream invoices can deduct stock correctly.
+		for part in item_parts:
+			if not part.part or not part.quantity:
+				continue
+
+			part_code = part.part
+			part_qty = part.quantity
+			part_uom = frappe.db.get_value("Item", part_code, "stock_uom") or "Nos"
+
+			part_item = quotation.append("items", {})
+			part_item.item_code = part_code
+			part_item.item_name = frappe.db.get_value("Item", part_code, "item_name") or part_code
+			part_item.description = _("Part for {0}").format(watch_item_name)
+			part_item.qty = part_qty
+			part_item.rate = 0
+			part_item.price_list_rate = 0
+			part_item.discount_percentage = 0
+			part_item.uom = part_uom
+			part_item.dw_is_internal_line = 1
 	
 	# Save quotation
 	quotation.insert(ignore_permissions=True)
-	
+
+	# ERPNext's insert() fetches price_list_rate from the selling price list
+	# and overwrites our rate=0 on internal part lines. Force them back to zero.
+	_zero_internal_lines(quotation)
+
 	# Submit the quotation
 	quotation.submit()
 	
@@ -528,6 +553,34 @@ def get_or_create_service_item():
 		frappe.db.commit()
 	
 	return item_code
+
+
+def _zero_internal_lines(doc):
+	"""Force zero rate on all internal (hidden) part lines.
+
+	ERPNext's insert() / set_missing_values() fetches price_list_rate from the
+	selling price list and recalculates rate, overwriting our explicit rate=0.
+	This function must be called AFTER insert() to re-zero the rates, then
+	save() to let ERPNext recalculate the document totals correctly.
+	"""
+	needs_save = False
+	for item in doc.items:
+		if item.dw_is_internal_line:
+			item.price_list_rate = 0
+			item.discount_percentage = 0
+			item.rate = 0
+			item.amount = 0
+			item.net_rate = 0
+			item.net_amount = 0
+			item.base_rate = 0
+			item.base_amount = 0
+			item.base_net_rate = 0
+			item.base_net_amount = 0
+			item.base_price_list_rate = 0
+			needs_save = True
+
+	if needs_save:
+		doc.save(ignore_permissions=True)
 
 
 @frappe.whitelist()
@@ -590,6 +643,7 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 	invoice.posting_date = frappe.utils.nowdate()
 	invoice.due_date = frappe.utils.add_days(None, 30)  # Net 30 payment terms
 	invoice.is_pos = 1  # Mark as POS invoice to enable payment tracking
+	invoice.update_stock = 1  # Auto-deduct stock items when invoice is submitted.
 	apply_workflow_naming_series(invoice, WORKFLOW_REPAIR_SERVICE)
 	
 	# Determine source of items
@@ -597,7 +651,7 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 		# Create from quotation
 		quotation = frappe.get_doc("Quotation", repair_order.quotation)
 		
-		# Add all items from quotation
+		# Add all items from quotation, preserving the internal line flag
 		for q_item in quotation.items:
 			invoice_item = invoice.append("items", {})
 			invoice_item.item_code = q_item.item_code
@@ -606,10 +660,11 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 			invoice_item.qty = q_item.qty
 			invoice_item.rate = q_item.rate
 			invoice_item.uom = q_item.uom
+			invoice_item.dw_is_internal_line = q_item.dw_is_internal_line or 0
 		
 		total_amount = quotation.grand_total
 	else:
-		# Create directly from repair order – ONE item per watch
+		# Create directly from repair order with one labor line plus itemized parts.
 		total_amount = 0
 
 		# Ensure we have a generic service item for tasks
@@ -624,18 +679,11 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 			item_tasks = [task for task in repair_order.all_tasks if task.repair_item_key == item_key]
 			item_parts = [part for part in repair_order.all_parts if part.repair_item_key == item_key]
 
-			# Calculate total cost for this watch
+			# Calculate labor cost for this watch
 			tasks_cost = 0
 			for task in item_tasks:
 				task_template = frappe.get_doc("DW Task Template", task.service)
 				tasks_cost += task.rate if task.rate else (task_template.default_rate or 0)
-
-			parts_cost = 0
-			for part in item_parts:
-				item_doc = frappe.get_doc("Item", part.part)
-				parts_cost += (part.rate if part.rate else (item_doc.standard_rate or 0)) * part.quantity
-
-			watch_total = tasks_cost + parts_cost
 
 			# Build description from recommended_work
 			try:
@@ -654,15 +702,45 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 
 			desc_lines = "<br>".join(line for line in rw_items if str(line).strip())
 
+			# Aggregate customer-facing total: tasks + parts at customer price.
+			customer_total = tasks_cost
+			for part in item_parts:
+				if not part.part or not part.quantity:
+					continue
+				part_rate = flt(part.rate) if part.rate else flt(frappe.db.get_value("Item", part.part, "standard_rate") or 0)
+				customer_total += flt(part.quantity) * part_rate
+
+			# Visible service line: full customer price (tasks + parts markup).
 			invoice_item = invoice.append("items", {})
 			invoice_item.item_code = service_item_code
 			invoice_item.item_name = watch_item_name
 			invoice_item.description = desc_lines or watch_item_name
 			invoice_item.qty = 1
-			invoice_item.rate = watch_total
+			invoice_item.rate = customer_total
 			invoice_item.uom = "Nos"
+			total_amount += customer_total
 
-			total_amount += watch_total
+			# Internal part lines: zero rate, stock deduction only.
+			# Hidden from customer print via dw_is_internal_line flag.
+			# ERPNext creates SLEs at valuation rate regardless of selling rate.
+			for part in item_parts:
+				if not part.part or not part.quantity:
+					continue
+
+				part_code = part.part
+				part_qty = flt(part.quantity)
+				part_uom = frappe.db.get_value("Item", part_code, "stock_uom") or "Nos"
+
+				invoice_part = invoice.append("items", {})
+				invoice_part.item_code = part_code
+				invoice_part.item_name = frappe.db.get_value("Item", part_code, "item_name") or part_code
+				invoice_part.description = _("Part for {0}").format(watch_item_name)
+				invoice_part.qty = part_qty
+				invoice_part.rate = 0
+				invoice_part.price_list_rate = 0
+				invoice_part.discount_percentage = 0
+				invoice_part.uom = part_uom
+				invoice_part.dw_is_internal_line = 1
 	
 	# Handle partial payments
 	if payment_type == "advance" or payment_type == "balance":
@@ -683,6 +761,10 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 	
 	# Save invoice
 	invoice.insert(ignore_permissions=True)
+
+	# ERPNext's insert() fetches price_list_rate from the selling price list
+	# and overwrites our rate=0 on internal part lines. Force them back to zero.
+	_zero_internal_lines(invoice)
 	
 	# Link invoice to repair order
 	if not repair_order.sales_invoice:
@@ -736,6 +818,14 @@ def get_invoice_summary(repair_order_name):
 
 
 @frappe.whitelist()
+def check_parts_availability(repair_order_name, warehouse=""):
+	"""Return part shortages for a repair order, grouped by item_code."""
+	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
+	company = frappe.db.get_single_value("Global Defaults", "default_company") or ""
+	return validate_parts_stock_availability(repair_order, warehouse=warehouse or "", company=company)
+
+
+@frappe.whitelist()
 def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="Cash", mark_as_delivered=True):
 	"""
 	Finalize an invoice with discount, payment mode, and optionally mark order as delivered.
@@ -763,6 +853,32 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 	# Get the invoice
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 	invoice.flags.ignore_permissions = True
+
+	# Get repair order
+	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
+	repair_order.flags.ignore_permissions = True
+
+	# Validate stock availability before finalizing invoice.
+	warehouse = invoice.set_warehouse or ""
+	shortage_map = validate_parts_stock_availability(repair_order, warehouse=warehouse, company=invoice.company)
+	if shortage_map:
+		shortage_lines = []
+		for item_code, shortage in shortage_map.items():
+			item_name = shortage.get("item_name") or item_code
+			shortage_lines.append(
+				_("{0} ({1}): Need {2}, Have {3}").format(
+					item_name,
+					item_code,
+					shortage.get("qty_required", 0),
+					shortage.get("qty_available", 0),
+				)
+			)
+		frappe.throw(
+			_("Insufficient stock for repair order {0}:\n{1}").format(
+				repair_order_name,
+				"\n".join(shortage_lines),
+			)
+		)
 	
 	# Apply discount if any
 	if discount > 0:
@@ -771,6 +887,7 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 		invoice.reload()
 	
 	# Add payment mode entry if this is a POS invoice
+	mode_of_payment_doc = None
 	if invoice.is_pos:
 		# Clear existing payments
 		invoice.payments = []
@@ -815,17 +932,42 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 	
 	# Submit the invoice
 	if invoice.docstatus == 0:
-		invoice.submit()
-	
-	# Get repair order
-	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
-	repair_order.flags.ignore_permissions = True
+		try:
+			invoice.submit()
+		except Exception:
+			frappe.db.rollback()
+			frappe.log_error(frappe.get_traceback(), _("Finalize Invoice Submit Failure"))
+			frappe.throw(_("Failed to submit Sales Invoice. Please review stock and accounting setup, then retry."))
+
+	# Verify stock ledger entries were created for stock items (parts) on the invoice.
+	stock_item_codes = [
+		item.item_code
+		for item in (invoice.items or [])
+		if item.item_code and frappe.db.get_value("Item", item.item_code, "is_stock_item")
+	]
+	if stock_item_codes and int(invoice.update_stock or 0):
+		sle_count = frappe.db.sql(
+			"""
+			select count(*)
+			from `tabStock Ledger Entry`
+			where voucher_type = 'Sales Invoice'
+			  and voucher_no = %s
+			  and item_code in ({placeholders})
+			""".format(placeholders=", ".join(["%s"] * len(stock_item_codes))),
+			tuple([invoice.name, *stock_item_codes]),
+		)[0][0] or 0
+		if sle_count <= 0:
+			frappe.log_error(
+				_("No Stock Ledger Entry found for stock items in Sales Invoice {0}").format(invoice.name),
+				_("Finalize Invoice Stock Ledger Warning"),
+			)
 	
 	# Update invoiced amount
 	repair_order.db_set('invoiced_amount', invoice.grand_total, update_modified=False)
 	
 	# Update paid amount based on payment mode TYPE
-	if mode_of_payment_doc.type in ['Cash', 'Bank']:
+	is_immediate_payment = bool(mode_of_payment_doc and mode_of_payment_doc.type in ['Cash', 'Bank'])
+	if is_immediate_payment:
 		# Immediate payment - mark as paid
 		repair_order.db_set('paid_amount', invoice.grand_total, update_modified=False)
 		repair_order.db_set('balance_amount', 0, update_modified=False)
