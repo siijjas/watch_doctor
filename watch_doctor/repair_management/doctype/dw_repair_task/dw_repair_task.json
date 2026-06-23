@@ -4,6 +4,7 @@
   "engine": "InnoDB",
   "field_order": [
     "service",
+    "is_manual",
     "technician",
     "notes",
     "status",
@@ -26,6 +27,14 @@
       "options": "DW Task Template",
       "reqd": 1,
       "in_list_view": 1
+    },
+    {
+      "fieldname": "is_manual",
+      "fieldtype": "Check",
+      "label": "Manually Added",
+      "default": "0",
+      "hidden": 1,
+      "description": "Set to 1 for tasks added manually via AddTaskModal. These are preserved across re-syncs."
     },
     {
       "fieldname": "technician",

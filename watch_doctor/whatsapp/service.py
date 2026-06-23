@@ -93,11 +93,23 @@ def get_backoff_delay(attempt: int) -> int:
 
 def get_default_country_code() -> str:
 	"""Return the configured/default country code for WhatsApp sends."""
+	# 1. site_config.json override
 	configured = str(frappe.conf.get("whatsapp_default_country_code") or "").strip()
 	configured = re.sub(r"[^\d]", "", configured)
 	if configured:
 		return configured
 
+	# 2. DW General Configuration (editable from Settings UI)
+	try:
+		from watch_doctor.general_configuration import DOCTYPE_NAME as GC_DOCTYPE
+		cc_from_config = frappe.db.get_single_value(GC_DOCTYPE, "whatsapp_default_country_code") or ""
+		cc_from_config = re.sub(r"[^\d]", "", str(cc_from_config).strip())
+		if cc_from_config:
+			return cc_from_config
+	except Exception:
+		pass
+
+	# 3. DW Country Code list
 	try:
 		country_code = frappe.db.get_value(
 			"DW Country Code",

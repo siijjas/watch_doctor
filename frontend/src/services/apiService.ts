@@ -621,21 +621,45 @@ export const getCustomers = async (search: string = ''): Promise<Customer[]> => 
 };
 
 export const createCustomer = async (data: { customer_name: string; mobile_no?: string; email_id?: string }): Promise<Customer> => {
-    const customer = {
-        doctype: 'Customer',
-        customer_name: data.customer_name,
-        customer_type: 'Individual',
-        customer_group: 'Individual',
-        territory: 'All Territories',
-        mobile_no: data.mobile_no,
-        email_id: data.email_id
-    };
-    return await saveDoc(customer);
+    const res = await apiFetch('/api/method/watch_doctor.api.create_pos_customer', {
+        method: 'POST',
+        body: JSON.stringify({
+            customer_name: data.customer_name,
+            mobile_no: data.mobile_no || '',
+            email_id: data.email_id || '',
+        }),
+    });
+    return res.message;
+};
+
+export interface CustomerRepairHistoryRow {
+    name: string;
+    status: string;
+    received_date: string;
+    delivery_date?: string;
+    invoiced_amount?: number;
+    watch_count: number;
+}
+
+export const getCustomerRepairHistory = async (customer: string, limit = 5): Promise<CustomerRepairHistoryRow[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_customer_repair_history', {
+        method: 'POST',
+        body: JSON.stringify({ customer, limit }),
+    });
+    return res.message || [];
+};
+
+export const getRepairHistoryDetail = async (name: string): Promise<{ items: any[]; all_tasks: any[] }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_repair_history_detail', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+    });
+    return res.message || { items: [], all_tasks: [] };
 };
 
 export const getEmployees = (): Promise<Employee[]> => {
-    // Use DW Technician custom doctype for technician selection
-    return getList('DW Technician', ['name', 'technician_name as employee_name']);
+    return apiFetch('/api/method/watch_doctor.api.get_employees', { method: 'GET' })
+        .then(res => res.message || []);
 };
 
 export const getItems = async (): Promise<Item[]> => {
@@ -872,6 +896,26 @@ export const getAgedPendingOrders = async (limit: number = 5): Promise<PendingOr
     });
     return res.message || [];
 };
+export interface OutstandingInvoice {
+    name: string;
+    customer: string;
+    customer_name: string;
+    mobile_no: string;
+    grand_total: number;
+    outstanding_amount: number;
+    posting_date: string;
+    days_outstanding: number;
+    repair_order: string | null;
+}
+
+export const getOutstandingInvoices = async (daysOverdue: number = 0): Promise<OutstandingInvoice[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_outstanding_invoices', {
+        method: 'POST',
+        body: JSON.stringify({ days_overdue: daysOverdue }),
+    });
+    return res.message || [];
+};
+
 // --- Quotation and Billing API Methods ---
 
 export const createQuotation = async (
@@ -900,7 +944,8 @@ export const createInvoice = async (
     repairOrderName: string,
     sourceType: 'quotation' | 'order',
     paymentType: 'full' | 'advance' | 'balance',
-    amount?: number
+    amount?: number,
+    itemIndices?: string[]
 ): Promise<{ invoice_name: string; invoice_amount: number; print_format?: string }> => {
     const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.create_sales_invoice', {
         method: 'POST',
@@ -908,10 +953,26 @@ export const createInvoice = async (
             repair_order_name: repairOrderName,
             source_type: sourceType,
             payment_type: paymentType,
-            amount: amount
+            amount: amount,
+            item_indices: itemIndices ? JSON.stringify(itemIndices) : undefined
         }),
     });
     return res.message;
+};
+
+export const getQuotationHistory = async (repairOrderName: string): Promise<Array<{
+    name: string;
+    title: string;
+    transaction_date: string;
+    valid_till?: string;
+    grand_total: number;
+    status: string;
+}>> => {
+    const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.get_quotation_history', {
+        method: 'POST',
+        body: JSON.stringify({ repair_order_name: repairOrderName }),
+    });
+    return res.message || [];
 };
 
 export const getQuotationSummary = async (repairOrderName: string): Promise<any> => {
@@ -962,6 +1023,14 @@ export const getPaymentModes = async (): Promise<any[]> => {
     return res.message || [];
 };
 
+export const getItemStock = async (itemCode: string, warehouse: string = ''): Promise<{ item_code: string; available_qty: number }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_item_stock', {
+        method: 'POST',
+        body: JSON.stringify({ item_code: itemCode, warehouse }),
+    });
+    return res.message;
+};
+
 // ==================== App Config APIs ====================
 
 export interface AppConfigResponse {
@@ -984,6 +1053,7 @@ export interface GeneralConfiguration {
     cr_number: string;
     vat_registration_number: string;
     repair_receipt_subtitle: string;
+    whatsapp_default_country_code?: string;
 }
 
 export interface InvoiceWorkflowConfiguration {

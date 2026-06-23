@@ -20,6 +20,7 @@ import { AddPartModal } from './AddPartModal';
 import { ChangeTaskStatusModal } from './ChangeTaskStatusModal';
 import { UpdatePriceModal } from './UpdatePriceModal';
 import { CreateQuotationModal } from './CreateQuotationModal';
+import { CreateInvoiceModal } from './CreateInvoiceModal';
 import PaymentModal from './PaymentModal';
 import { AssignTechnicianModal } from './AssignTechnicianModal';
 import { ActionsDropdown } from './ui/ActionsDropdown';
@@ -961,6 +962,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   }>({ isOpen: false, watchIndex: null });
 
   const [createQuotationModal, setCreateQuotationModal] = useState(false);
+  const [createInvoiceModalOpen, setCreateInvoiceModalOpen] = useState(false);
   const [viewQuotationModal, setViewQuotationModal] = useState(false);
   const [viewInvoiceModal, setViewInvoiceModal] = useState(false);
   const [paymentModal, setPaymentModal] = useState<{
@@ -969,6 +971,10 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     invoiceAmount: number;
   }>({ isOpen: false, invoiceName: '', invoiceAmount: 0 });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Quotation history
+  const [quotationHistory, setQuotationHistory] = useState<Awaited<ReturnType<typeof apiService.getQuotationHistory>>>([]);
+  const [quoteHistoryExpanded, setQuoteHistoryExpanded] = useState(false);
 
   // WhatsApp notification state
   const [showNotifyModal, setShowNotifyModal] = useState(false);
@@ -1204,7 +1210,8 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
         technician: item.technician || '',
         notes: '',
         status: TaskStatus.Pending,
-      });
+        is_manual: 1,
+      } as any);
       existingServices.add(taskName);
     }
 
@@ -1257,9 +1264,9 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     }
   };
 
-  const handleCreateInvoice = async (sourceType: 'quotation' | 'order', paymentType: 'full' | 'advance' | 'balance', amount?: number) => {
+  const handleCreateInvoice = async (sourceType: 'quotation' | 'order', paymentType: 'full' | 'advance' | 'balance', amount?: number, itemIndices?: string[]) => {
     try {
-      const result = await apiService.createInvoice(order.name, sourceType, paymentType, amount);
+      const result = await apiService.createInvoice(order.name, sourceType, paymentType, amount, itemIndices);
       // Refresh order to get updated invoice link
       if (onRefresh) {
         await onRefresh(order.name);
@@ -1418,6 +1425,14 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     loadWhatsApp();
   }, [order.name, order.status]);
 
+  // Load quotation history whenever quotation changes
+  useEffect(() => {
+    if (!order.quotation || !isErpNext) return;
+    apiService.getQuotationHistory(order.name)
+      .then(setQuotationHistory)
+      .catch(() => setQuotationHistory([]));
+  }, [order.name, order.quotation]);
+
   const handleNotifyCustomer = () => setShowNotifyModal(true);
 
   const handleNotifySuccess = async () => {
@@ -1514,6 +1529,12 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               onClick: () => handleCreateInvoice('quotation', 'full', order.quotation_amount),
               hidden: !(order.docstatus === 0 && order.status === 'Repaired' && order.quotation && !order.sales_invoice),
             },
+            {
+              label: 'Invoice Completed Watches',
+              icon: '💰',
+              onClick: () => setCreateInvoiceModalOpen(true),
+              hidden: !(order.docstatus === 0 && (order.items || []).some(i => i.status === 'Completed')),
+            },
             // View actions
             {
               label: 'View Quotation',
@@ -1581,6 +1602,11 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               )}
               <Badge className={`${STATUS_COLORS[order.status]} px-4 py-1 text-sm`}>{order.status}</Badge>
               <Badge className={`${PRIORITY_COLORS[order.priority]} px-3 py-1 text-xs`}>{order.priority}</Badge>
+              {/* Partial delivery badge: some items Delivered but order not yet fully submitted */}
+              {order.docstatus === 0 && order.status !== 'Delivered' &&
+                (order.items || []).some(i => i.status === 'Delivered') && (
+                  <Badge className="bg-orange-100 text-orange-700 px-3 py-1 text-xs">Partial Delivery</Badge>
+              )}
             </div>
           </div>
 
@@ -1691,6 +1717,68 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               </>
             )}
           </div>
+
+          {/* Quotation revision history */}
+          {quotationHistory.length > 1 && (
+            <div className="mt-4 pt-4 border-t" style={{ borderColor: '#F0EEEB' }}>
+              <button
+                className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                onClick={() => setQuoteHistoryExpanded(prev => !prev)}
+              >
+                <svg className={`w-4 h-4 transition-transform ${quoteHistoryExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+                Quotation History ({quotationHistory.length} revisions)
+              </button>
+              {quoteHistoryExpanded && (
+                <table className="w-full mt-3 text-sm">
+                  <thead>
+                    <tr className="text-left text-xs font-medium text-gray-500 uppercase">
+                      <th className="py-1 pr-4">Quotation</th>
+                      <th className="py-1 pr-4">Date</th>
+                      <th className="py-1 pr-4">Valid Until</th>
+                      <th className="py-1 pr-4 text-right">Amount</th>
+                      <th className="py-1">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {quotationHistory.map(q => (
+                      <tr key={q.name} className={q.name === order.quotation ? 'bg-purple-50' : ''}>
+                        <td className="py-2 pr-4 font-mono text-xs">{q.name}</td>
+                        <td className="py-2 pr-4 text-gray-600">{q.transaction_date}</td>
+                        <td className={`py-2 pr-4 ${q.valid_till && q.valid_till < new Date().toISOString().split('T')[0] ? 'text-red-500' : 'text-gray-600'}`}>
+                          {q.valid_till || '—'}
+                        </td>
+                        <td className="py-2 pr-4 text-right font-medium">{formatCurrency(q.grand_total)}</td>
+                        <td className="py-2 text-xs">
+                          <span className={`px-2 py-0.5 rounded-full ${q.status === 'Submitted' || q.status === 'Open' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                            {q.name === order.quotation ? 'Active' : q.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Balance outstanding banner */}
+      {order.sales_invoice && (order.balance_amount || 0) > 0 && (
+        <div className="mb-4 sm:mb-6 rounded-2xl px-5 py-4 flex items-center gap-4 bg-red-50 border border-red-200">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+            <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <p className="font-semibold text-red-800">
+              Balance of {formatCurrency(order.balance_amount || 0)} outstanding — collect payment.
+            </p>
+            <p className="text-xs text-red-600 mt-0.5">Invoice: {order.sales_invoice}</p>
+          </div>
         </div>
       )}
 
@@ -1768,6 +1856,20 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           watchItem={order.items[updatePriceModal.watchIndex]}
           taskTemplates={taskTemplates}
           allItems={allItems}
+        />
+      )}
+
+      {/* Create Invoice Modal (partial delivery — pick which completed watches to invoice) */}
+      {createInvoiceModalOpen && (
+        <CreateInvoiceModal
+          isOpen={createInvoiceModalOpen}
+          onClose={() => setCreateInvoiceModalOpen(false)}
+          onSave={async (sourceType, paymentType, amount, itemIndices) => {
+            await handleCreateInvoice(sourceType, paymentType, amount, itemIndices);
+            setCreateInvoiceModalOpen(false);
+          }}
+          order={order}
+          hasQuotation={!!order.quotation}
         />
       )}
 

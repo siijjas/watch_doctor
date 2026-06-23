@@ -220,8 +220,19 @@ class DWRepairOrder(Document):
 	
 	def validate(self):
 		"""Validate the repair order before saving."""
+		if not self.items:
+			frappe.throw(_("A repair order must contain at least one watch."))
+
+		# Ensure a non-guessable token exists for future customer-portal use
+		if not self.public_token:
+			self.public_token = frappe.generate_hash(length=16)
+
 		if not self.promised_delivery_date and self.received_date:
 			self.promised_delivery_date = add_days(self.received_date, 7)
+
+		if self.received_date and self.promised_delivery_date:
+			if getdate(self.promised_delivery_date) < getdate(self.received_date):
+				frappe.throw(_("Promised delivery date cannot be before the received date."))
 		
 		# Get the status from database (before any changes)
 		db_status = None
@@ -266,14 +277,15 @@ class DWRepairOrder(Document):
 	
 	def on_submit(self):
 		"""Actions to perform when the repair order is submitted."""
-		# Use db_set to update fields after submit (since doc is already saved)
 		self.db_set('status', 'Delivered', update_modified=False)
 		self.db_set('delivery_date', getdate(), update_modified=False)
-		
-		# Update all items to Delivered
+
+		# Only promote Completed items to Delivered; items already Delivered from
+		# a prior partial-delivery finalize stay Delivered without being re-written.
 		for item in self.items:
-			frappe.db.set_value('DW Repair Item', item.name, 'status', 'Delivered', update_modified=False)
-		
+			if normalize_repair_item_status(item.status) == WATCH_STATUS_COMPLETED:
+				frappe.db.set_value('DW Repair Item', item.name, 'status', 'Delivered', update_modified=False)
+
 		frappe.msgprint(_("Order marked as Delivered on {0}").format(getdate()))
 	
 	def on_cancel(self):
@@ -510,6 +522,13 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 			part_item.uom = part_uom
 			part_item.dw_is_internal_line = 1
 	
+	# Set expiry 30 days from today
+	quotation.valid_till = add_days(frappe.utils.nowdate(), 30)
+
+	# Track which repair items this quotation covers so partial-delivery invoicing works correctly.
+	_q_covered = [i.name for i in selected_items]
+	quotation.remarks = f"covered_items:{json.dumps(_q_covered)}"
+
 	# Save quotation
 	quotation.insert(ignore_permissions=True)
 
@@ -584,6 +603,22 @@ def _zero_internal_lines(doc):
 
 
 @frappe.whitelist()
+def get_quotation_history(repair_order_name):
+	"""Return all ERPNext Quotations whose title references this repair order."""
+	rows = frappe.db.sql(
+		"""
+		SELECT name, title, transaction_date, valid_till, grand_total, status
+		FROM `tabQuotation`
+		WHERE title LIKE %s
+		ORDER BY transaction_date DESC, creation DESC
+		""",
+		(f"%{repair_order_name}%",),
+		as_dict=True,
+	)
+	return rows
+
+
+@frappe.whitelist()
 def get_quotation_summary(repair_order_name):
 	"""
 	Get quotation summary for a repair order.
@@ -614,25 +649,37 @@ def get_quotation_summary(repair_order_name):
 # Invoice Generation Methods
 
 @frappe.whitelist()
-def create_sales_invoice(repair_order_name, source_type="quotation", payment_type="full", amount=None):
+def create_sales_invoice(repair_order_name, source_type="quotation", payment_type="full", amount=None, item_indices=None):
 	"""
 	Create a sales invoice from a repair order.
-	
+
 	Args:
 		repair_order_name: Name of the repair order
 		source_type: "quotation" or "order" - source for invoice items
 		payment_type: "full", "advance", or "balance" - type of payment
 		amount: Amount for partial payment (required for advance/balance)
-	
+		item_indices: Optional JSON list of DW Repair Item names to include (partial delivery)
+
 	Returns:
-		Name of the created sales invoice
+		Dict with invoice_name, invoice_amount, print_format
 	"""
 	import json
-	
+
 	# Convert amount to float if it's a string
 	if amount:
 		if isinstance(amount, str):
 			amount = float(amount)
+
+	# Parse item_indices
+	covered_item_names = None
+	if item_indices:
+		if isinstance(item_indices, str):
+			try:
+				covered_item_names = json.loads(item_indices)
+			except Exception:
+				covered_item_names = None
+		elif isinstance(item_indices, list):
+			covered_item_names = item_indices
 	
 	# Fetch the repair order
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
@@ -670,7 +717,14 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 		# Ensure we have a generic service item for tasks
 		service_item_code = get_or_create_service_item()
 
-		for item in repair_order.items:
+		# Determine which watch rows to invoice (all, or only selected subset)
+		items_to_invoice = repair_order.items
+		if covered_item_names:
+			items_to_invoice = [i for i in repair_order.items if i.name in covered_item_names]
+			if not items_to_invoice:
+				frappe.throw(_("None of the selected watches were found on this repair order."))
+
+		for item in items_to_invoice:
 			model_name = frappe.db.get_value("DW Watch Model", item.watch_model, "model_name") or item.watch_model
 			watch_item_name = f"Repair - {item.watch_brand} {model_name}"
 
@@ -742,6 +796,24 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 				invoice_part.uom = part_uom
 				invoice_part.dw_is_internal_line = 1
 	
+	# Store which watch rows are covered so finalize_invoice can mark only those as Delivered.
+	# For the quotation path, inherit coverage from the quotation's own remarks (set when quotation was created).
+	if source_type == "quotation" and repair_order.quotation and not covered_item_names:
+		try:
+			_q = frappe.get_doc("Quotation", repair_order.quotation)
+			if _q.remarks and "covered_items:" in _q.remarks:
+				_raw = _q.remarks.split("covered_items:")[1]
+				_end = _raw.index("]") + 1
+				covered_item_names = json.loads(_raw[:_end])
+		except Exception:
+			pass
+
+	if covered_item_names:
+		_covered = covered_item_names
+	else:
+		_covered = [i.name for i in repair_order.items]
+	invoice.remarks = f"covered_items:{json.dumps(_covered)}"
+
 	# Handle partial payments
 	if payment_type == "advance" or payment_type == "balance":
 		if not amount:
@@ -962,28 +1034,60 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 				_("Finalize Invoice Stock Ledger Warning"),
 			)
 	
-	# Update invoiced amount
-	repair_order.db_set('invoiced_amount', invoice.grand_total, update_modified=False)
-	
-	# Update paid amount based on payment mode TYPE
+	# Accumulate invoiced and paid amounts across multiple invoices (advance + balance flows)
 	is_immediate_payment = bool(mode_of_payment_doc and mode_of_payment_doc.type in ['Cash', 'Bank'])
-	if is_immediate_payment:
-		# Immediate payment - mark as paid
-		repair_order.db_set('paid_amount', invoice.grand_total, update_modified=False)
-		repair_order.db_set('balance_amount', 0, update_modified=False)
-	else:
-		# Credit (Pay Later) - balance remains
-		repair_order.db_set('paid_amount', 0, update_modified=False)
-		repair_order.db_set('balance_amount', invoice.grand_total, update_modified=False)
+
+	prev_invoiced = float(frappe.db.get_value("DW Repair Order", repair_order_name, "invoiced_amount") or 0)
+	prev_paid     = float(frappe.db.get_value("DW Repair Order", repair_order_name, "paid_amount") or 0)
+
+	new_invoiced = prev_invoiced + float(invoice.grand_total or 0)
+	new_paid     = prev_paid + (float(invoice.grand_total or 0) if is_immediate_payment else 0)
+
+	# Balance = quotation total minus what has been paid; fall back to total invoiced
+	ref_total   = float(repair_order.quotation_amount or 0) or new_invoiced
+	new_balance = max(0.0, ref_total - new_paid)
+
+	repair_order.db_set('invoiced_amount', new_invoiced, update_modified=False)
+	repair_order.db_set('paid_amount', new_paid, update_modified=False)
+	repair_order.db_set('balance_amount', new_balance, update_modified=False)
 	
+	# Parse which watch rows this invoice covers (stored in remarks by create_sales_invoice)
+	import json as _json
+	covered_item_names = None
+	if invoice.remarks and 'covered_items:' in invoice.remarks:
+		try:
+			raw = invoice.remarks.split('covered_items:')[1]
+			# Grab the JSON array portion
+			end = raw.index(']') + 1
+			covered_item_names = _json.loads(raw[:end])
+		except Exception:
+			covered_item_names = None
+
+	# Mark covered items as Delivered regardless of mark_as_delivered flag
+	if covered_item_names:
+		for item in repair_order.items:
+			if item.name in covered_item_names:
+				frappe.db.set_value('DW Repair Item', item.name, 'status', 'Delivered', update_modified=False)
+
 	# Mark as delivered if requested
 	if mark_as_delivered:
-		# Submit the repair order
 		repair_order.reload()
-		repair_order.flags.ignore_permissions = True
-		if repair_order.docstatus == 0:
-			repair_order.submit()
-			frappe.msgprint(_("Repair order marked as Delivered"))
+		# Only submit (full Frappe docsubmit) when every item has been invoiced+delivered.
+		# "Completed" means repair is done but not yet invoiced — do not submit early.
+		all_done = all(
+			normalize_repair_item_status(item.status) == WATCH_STATUS_DELIVERED
+			for item in repair_order.items
+		)
+		if all_done:
+			repair_order.flags.ignore_permissions = True
+			if repair_order.docstatus == 0:
+				repair_order.submit()
+				frappe.msgprint(_("Repair order marked as Delivered"))
+		else:
+			# Partial delivery: recalculate order status without submitting
+			repair_order.update_order_status_from_items()
+			repair_order.save(ignore_permissions=True)
+			frappe.msgprint(_("Partial delivery recorded — remaining watches still in progress."))
 	
 	frappe.db.commit()
 	

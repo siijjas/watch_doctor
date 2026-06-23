@@ -134,6 +134,14 @@ def get_app_config():
 	return config
 
 
+def _log_settings_change(section: str, changes: dict):
+	"""Record who changed which settings values for audit trail."""
+	frappe.log_error(
+		message=f"Settings changed by {frappe.session.user}: {changes}",
+		title=f"DW Settings Change — {section}",
+	)
+
+
 @frappe.whitelist()
 def get_invoice_workflow_configuration():
 	"""Return centralized invoice workflow settings and selectable options."""
@@ -181,6 +189,7 @@ def save_invoice_workflow_configuration(
 	frappe.db.commit()
 	clear_invoice_settings_cache()
 	frappe.clear_cache()
+	_log_settings_change("Invoice Workflow", config)
 	return {"success": True, "config": get_invoice_workflow_settings()}
 
 
@@ -219,7 +228,13 @@ def rename_and_sync_print_format(old_name, new_name, file_path):
 		frappe.rename_doc("Print Format", old_name, new_name, force=True, ignore_permissions=True)
 
 	doc = frappe.get_doc("Print Format", new_name)
-	doc.html = payload.get("html") or ""
+	incoming_html = (payload.get("html") or "").strip()
+	if doc.html and doc.html.strip() != incoming_html:
+		frappe.log_error(
+			f"Print Format '{new_name}' had local customizations that were overwritten by the app fixture.",
+			"DW Print Format Overwrite Warning",
+		)
+	doc.html = incoming_html
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()
 	frappe.clear_cache()
@@ -252,6 +267,7 @@ def save_general_configuration(
 	cr_number: str = "",
 	vat_registration_number: str = "",
 	repair_receipt_subtitle: str = "",
+	whatsapp_default_country_code: str = "",
 ):
 	"""Persist editable general company information used in print formats."""
 	require_roles(ROLE_EXECUTIVE)
@@ -269,9 +285,12 @@ def save_general_configuration(
 		"cr_number": cr_number or "",
 		"vat_registration_number": vat_registration_number or "",
 		"repair_receipt_subtitle": repair_receipt_subtitle or "",
+		"whatsapp_default_country_code": whatsapp_default_country_code or "",
 	}
 
-	return {"success": True, "config": set_general_configuration(config)}
+	result = set_general_configuration(config)
+	_log_settings_change("General Configuration", config)
+	return {"success": True, "config": result}
 
 
 @frappe.whitelist()
@@ -367,6 +386,11 @@ def save_pms_configuration(
 
 	if pms_enabled and float(pms_vat_divisor or 0) <= 0:
 		frappe.throw("PMS VAT Divisor must be greater than zero")
+	if pms_enabled and float(pms_vat_divisor or 0) < 5:
+		frappe.throw(
+			"PMS VAT Divisor seems unusually low (less than 5). "
+			"For Bahrain's standard 10% VAT, the divisor is typically 11. Verify your entry."
+		)
 
 	if pms_enabled:
 		missing_fields = []
@@ -404,6 +428,13 @@ def save_pms_configuration(
 	clear_pms_runtime_configuration_cache()
 	clear_invoice_settings_cache()
 	frappe.clear_cache()
+	_log_settings_change("PMS Configuration", {
+		"pms_enabled": pms_enabled,
+		"pms_item_group": pms_item_group,
+		"pms_vat_account": pms_vat_account,
+		"pms_vat_divisor": pms_vat_divisor,
+		"pms_print_format": pms_print_format,
+	})
 	return {"success": True, "config": get_pms_configuration()["config"]}
 
 
@@ -606,9 +637,14 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 	service_names = get_auto_task_services_for_item(item)
 	technician = str(item.get("technician") or "").strip()
 	item_key = str(item.idx)
+
 	existing_tasks_by_service = {}
+	manual_tasks_for_item = []
 	for task in (order_doc.all_tasks or []):
 		if str(task.repair_item_key) != item_key:
+			continue
+		if int(task.is_manual or 0):
+			manual_tasks_for_item.append(task)
 			continue
 		service_name = str(task.service or "").strip()
 		if service_name and service_name not in existing_tasks_by_service:
@@ -626,6 +662,21 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 			"rate": task.rate,
 			"auto_rate": task.auto_rate,
 			"price_manually_set": task.price_manually_set,
+			"is_manual": int(task.is_manual or 0),
+		})
+
+	# Re-add manual tasks first (they are always preserved unchanged)
+	for task in manual_tasks_for_item:
+		order_doc.append("all_tasks", {
+			"repair_item_key": item_key,
+			"service": task.service,
+			"technician": task.technician,
+			"notes": task.notes,
+			"status": task.status,
+			"rate": task.rate,
+			"auto_rate": task.auto_rate,
+			"price_manually_set": task.price_manually_set,
+			"is_manual": 1,
 		})
 
 	for service_name in service_names:
@@ -639,6 +690,7 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 			"rate": existing_task.rate if existing_task else None,
 			"auto_rate": existing_task.auto_rate if existing_task else None,
 			"price_manually_set": existing_task.price_manually_set if existing_task else 0,
+			"is_manual": 0,
 		})
 
 	return service_names
@@ -654,25 +706,40 @@ def save_repair_order(doc_json):
 	if doc_dict.get('name'):
 		if not can_access_repair_order(doc_dict['name']):
 			frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
+
+		# Optimistic locking: reject the save if another session already saved a newer version
+		client_modified = str(doc_dict.get('modified') or '').strip()
+		if client_modified:
+			db_modified = str(
+				frappe.db.get_value('DW Repair Order', doc_dict['name'], 'modified') or ''
+			).strip()
+			if db_modified and client_modified != db_modified:
+				frappe.throw(
+					_("This order was modified by another user while you were editing. "
+					  "Please reload the page and re-apply your changes."),
+					title=_("Save Conflict"),
+				)
 	
-	# Remove system fields recursively
-	def clean_dict(d):
+	# Remove system fields recursively.
+	# `modified` is kept on the ROOT doc for optimistic-locking; strip it only from child rows.
+	def clean_dict(d, is_root=False):
 		if isinstance(d, dict):
-			# Remove system fields that cannot be modified
-			for key in ['creation', 'modified_by', 'owner', 'simple_description', 
-			            'docstatus', '__islocal', '__unsaved', '__onload']:
+			keys_to_remove = ['creation', 'modified_by', 'owner', 'simple_description',
+			                  'docstatus', '__islocal', '__unsaved', '__onload']
+			if not is_root:
+				keys_to_remove.append('modified')
+			for key in keys_to_remove:
 				d.pop(key, None)
-			# Recursively clean nested dicts and lists
 			for key, value in d.items():
 				if isinstance(value, dict):
-					clean_dict(value)
+					clean_dict(value, is_root=False)
 				elif isinstance(value, list):
 					for item in value:
 						if isinstance(item, dict):
-							clean_dict(item)
+							clean_dict(item, is_root=False)
 		return d
-	
-	doc_dict = clean_dict(doc_dict)
+
+	doc_dict = clean_dict(doc_dict, is_root=True)
 	
 	# Debug: log what we received
 	frappe.logger().info(f"=== save_repair_order called ===")
@@ -882,6 +949,46 @@ def save_repair_order(doc_json):
 		else:
 			doc_dict['status'] = 'Pending'
 	
+	# Guard: order must have at least one watch
+	if not doc_dict.get('items'):
+		frappe.throw(_("A repair order must contain at least one watch."))
+
+	# Guard: duplicate serial numbers across active orders
+	current_order_name = doc_dict.get('name') or ''
+	for item in doc_dict.get('items', []):
+		serial = (item.get('serial_number') or '').strip()
+		if not serial:
+			continue
+		conflict = frappe.db.sql(
+			"""
+			SELECT ri.parent
+			FROM `tabDW Repair Item` ri
+			JOIN `tabDW Repair Order` ro ON ro.name = ri.parent
+			WHERE ri.serial_number = %s
+			  AND ro.docstatus = 0
+			  AND ro.status NOT IN ('Delivered')
+			  AND ri.name != %s
+			  AND ro.name != %s
+			LIMIT 1
+			""",
+			(serial, item.get('name') or '', current_order_name),
+			as_dict=True,
+		)
+		if conflict:
+			frappe.throw(
+				_("Serial number '{0}' is already active on repair order {1}. "
+				  "Verify the serial number before proceeding.").format(
+					serial, conflict[0]['parent']
+				),
+				title=_("Duplicate Serial Number"),
+			)
+
+	# Promised date must not be before the received date
+	received = doc_dict.get('received_date') or ''
+	promised = doc_dict.get('promised_delivery_date') or ''
+	if received and promised and promised < received:
+		frappe.throw(_("Promised delivery date cannot be before the received date."))
+
 	# Get or create document
 	if doc_dict.get('name'):
 		# Update existing
@@ -944,14 +1051,23 @@ def save_repair_order(doc_json):
 	
 	doc.save()
 	frappe.db.commit()
-	
+
 	# Reload to get all child tables populated
 	doc.reload()
-	
+
 	frappe.logger().info(f"After save: order status={doc.status}")
 	for item in doc.items:
 		frappe.logger().info(f"After save: item {item.idx} status={item.status}, technician={item.technician}")
-	
+
+	# Auto-fire WhatsApp notification when order enters "Create Estimate" status.
+	# Wrapped in try/except so a WhatsApp misconfiguration never blocks a save.
+	try:
+		if doc.status == WATCH_STATUS_APPROVAL_FOR_ESTIMATE and frappe.conf.get("whatsapp_enabled"):
+			from watch_doctor.whatsapp.api import notify_customer
+			notify_customer(doc.name)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Auto-notify Create Estimate failed (non-blocking)")
+
 	return doc.as_dict()
 
 
@@ -1533,6 +1649,28 @@ def search_items(txt: str = "", item_group: str = ""):
 
 
 @frappe.whitelist()
+def get_item_stock(item_code: str, warehouse: str = ""):
+	"""Return available stock qty for a single item across all warehouses (or a specific one)."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	item_code = (item_code or "").strip()
+	if not item_code:
+		frappe.throw(_("item_code is required"))
+	warehouse = (warehouse or "").strip()
+	if warehouse:
+		qty = frappe.db.sql(
+			"SELECT SUM(actual_qty) FROM `tabBin` WHERE item_code = %s AND warehouse = %s",
+			(item_code, warehouse),
+		)
+	else:
+		qty = frappe.db.sql(
+			"SELECT SUM(actual_qty) FROM `tabBin` WHERE item_code = %s",
+			(item_code,),
+		)
+	available = float((qty[0][0] or 0) if qty else 0)
+	return {"item_code": item_code, "available_qty": available}
+
+
+@frappe.whitelist()
 def get_task_templates():
 	"""Get all active task templates."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
@@ -1548,14 +1686,27 @@ def get_task_templates():
 
 @frappe.whitelist()
 def get_employees():
-	"""Get all technicians (employees)."""
+	"""Get all technicians with their current open-item workload count."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	employees = frappe.get_all(
 		"DW Technician",
-		fields=["name", "employee_name"],
+		fields=["name", "technician_name as employee_name"],
 		limit_page_length=100,
-		order_by="employee_name asc"
+		order_by="technician_name asc",
 	)
+	open_counts = frappe.db.sql(
+		"""
+		SELECT technician, COUNT(*) AS open_count
+		FROM `tabDW Repair Item`
+		WHERE status NOT IN ('Completed', 'Delivered', 'Not Repairable', 'Declined')
+		  AND technician IS NOT NULL AND technician != ''
+		GROUP BY technician
+		""",
+		as_dict=True,
+	)
+	count_map = {r.technician: r.open_count for r in open_counts}
+	for emp in employees:
+		emp["open_items"] = count_map.get(emp["name"], 0)
 	return employees
 
 
@@ -1696,6 +1847,40 @@ def get_orders_trend(days: int = 7):
 		})
 	
 	return result
+
+
+@frappe.whitelist()
+def get_outstanding_invoices(days_overdue: int = 0):
+	"""Return submitted Sales Invoices with outstanding (unpaid) amounts.
+
+	Args:
+		days_overdue: Only include invoices at least this many days old (0 = all outstanding).
+	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			si.name,
+			si.customer,
+			c.customer_name,
+			c.mobile_no,
+			si.grand_total,
+			si.outstanding_amount,
+			si.posting_date,
+			DATEDIFF(CURDATE(), si.posting_date) AS days_outstanding,
+			ro.name AS repair_order
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabCustomer` c ON c.name = si.customer
+		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
+		WHERE si.docstatus = 1
+		  AND si.outstanding_amount > 0
+		  AND DATEDIFF(CURDATE(), si.posting_date) >= %s
+		ORDER BY si.posting_date ASC
+		""",
+		(int(days_overdue),),
+		as_dict=True,
+	)
+	return rows
 
 
 @frappe.whitelist()
@@ -2043,6 +2228,62 @@ def get_pos_customers(search: str = "", limit: int = 20):
 
 
 @frappe.whitelist()
+def get_customer_repair_history(customer: str, limit: int = 20):
+	"""Return a customer's prior repair orders, newest first."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	return frappe.db.sql(
+		"""
+		SELECT o.name, o.status, o.received_date, o.delivery_date,
+		       o.invoiced_amount, COUNT(i.name) AS watch_count
+		FROM `tabDW Repair Order` o
+		LEFT JOIN `tabDW Repair Item` i ON i.parent = o.name
+		WHERE o.customer = %s
+		GROUP BY o.name
+		ORDER BY o.received_date DESC
+		LIMIT %s
+		""",
+		(customer, int(limit)),
+		as_dict=True,
+	)
+
+
+@frappe.whitelist()
+def get_repair_history_detail(name: str):
+	"""Return items and tasks for a repair order with resolved display names."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	items = frappe.db.sql(
+		"""
+		SELECT ri.name, ri.idx, ri.watch_brand, ri.watch_model,
+		       COALESCE(wm.model_name, ri.watch_model) AS watch_model_name,
+		       ri.serial_number, ri.status
+		FROM `tabDW Repair Item` ri
+		LEFT JOIN `tabDW Watch Model` wm ON wm.name = ri.watch_model
+		WHERE ri.parent = %s
+		ORDER BY ri.idx
+		""",
+		(name,),
+		as_dict=True,
+	)
+
+	tasks = frappe.db.sql(
+		"""
+		SELECT rt.repair_item_key, rt.service,
+		       COALESCE(tt.task_name, rt.service) AS service_name,
+		       rt.status
+		FROM `tabDW Repair Task` rt
+		LEFT JOIN `tabDW Task Template` tt ON tt.name = rt.service
+		WHERE rt.parent = %s
+		ORDER BY rt.idx
+		""",
+		(name,),
+		as_dict=True,
+	)
+
+	return {"items": items, "all_tasks": tasks}
+
+
+@frappe.whitelist()
 def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_no: str = "", email_id: str = ""):
 	"""Create a new Customer from POS quick-create form."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
@@ -2057,6 +2298,18 @@ def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_n
 
 	if email_id and not frappe.utils.validate_email_address(email_id, throw=False):
 		frappe.throw("Please enter a valid email address")
+
+	if mobile_no:
+		existing = frappe.db.get_value(
+			"Customer", {"mobile_no": mobile_no}, ["name", "customer_name"], as_dict=True
+		)
+		if existing:
+			frappe.throw(
+				f"A customer with mobile {mobile_no} already exists: "
+				f"{existing.customer_name} ({existing.name}). "
+				"Search for the existing customer instead of creating a duplicate.",
+				title="Duplicate Mobile Number",
+			)
 
 	customer_doc = frappe.get_doc({
 		"doctype": "Customer",
@@ -2544,20 +2797,26 @@ def get_daily_report(report_date=None):
 	payment_accounts = list(account_to_mode.keys())
 
 	je_detail_rows = []
+	je_receipt_rows = []  # JE debits on cash/bank = cash received via journal entry
 	if payment_accounts:
 		pa_placeholders = ", ".join(["%s"] * len(payment_accounts))
-		je_rows = frappe.db.sql(
+
+		# JE credits on cash/bank accounts = cash paid out (expenses)
+		# Use a subquery for against_account to avoid Cartesian product when a JE
+		# has multiple debit lines.
+		je_credit_rows = frappe.db.sql(
 			f"""SELECT
 				je.name,
 				jea.account,
 				jea.credit_in_account_currency AS amount,
 				COALESCE(jea.user_remark, je.user_remark, '') AS remarks,
-				jea_debit.account AS debit_account
+				(SELECT GROUP_CONCAT(DISTINCT jea2.account ORDER BY jea2.idx SEPARATOR ', ')
+				 FROM `tabJournal Entry Account` jea2
+				 WHERE jea2.parent = je.name
+				   AND jea2.debit_in_account_currency > 0
+				 LIMIT 1) AS debit_account
 			FROM `tabJournal Entry Account` jea
 			INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
-			LEFT JOIN `tabJournal Entry Account` jea_debit
-				ON jea_debit.parent = je.name
-				AND jea_debit.debit_in_account_currency > 0
 			WHERE je.docstatus = 1
 				AND je.posting_date = %s
 				AND jea.account IN ({pa_placeholders})
@@ -2566,20 +2825,106 @@ def get_daily_report(report_date=None):
 			tuple([report_date] + payment_accounts),
 			as_dict=True
 		)
-		for row in je_rows:
-			row["mode_of_payment"] = account_to_mode.get(row["account"], row["account"])
+		for row in je_credit_rows:
+			mode = account_to_mode.get(row["account"], row["account"])
 			je_detail_rows.append({
 				"name": row["name"],
-				"mode_of_payment": row["mode_of_payment"],
+				"mode_of_payment": mode,
 				"against_account": row.get("debit_account") or "",
 				"amount": float(row["amount"] or 0),
 				"remarks": row.get("remarks") or "",
 			})
-		expense_entries.extend(je_rows)
+		# Extend with je_detail_rows (has resolved mode_of_payment) NOT the raw SQL result
+		# (which only has `account`), otherwise expense_breakdown maps them all to "Other".
+		expense_entries.extend(je_detail_rows)
+
+		# JE debits on cash/bank accounts — three categories:
+		#
+		# 1. PURE CORRECTION (inter-account transfer): ALL credit lines are also cash/bank
+		#    accounts (e.g. Dr Cash, Cr AFS Card to fix a wrong payment mode).
+		#    Not new income; just redistributes cash across modes.
+		#
+		# 2. PURE EXTERNAL RECEIPT: ALL credit lines are non-cash accounts (e.g. Dr Cash,
+		#    Cr Accounts Payable for a supplier refund). Genuine new cash inflow.
+		#
+		# 3. MIXED JE: some credit lines are cash/bank (correction portion) and some are
+		#    non-cash (external portion). e.g. Dr Cash 100, Cr Card 50, Cr Creditors 50.
+		#    Only the proportional external fraction counts as income.
+		#
+		# We fetch the SUM of external credits and internal credits per JE so we can
+		# compute the exact income fraction for each debit line.
+		je_debit_rows = frappe.db.sql(
+			f"""SELECT
+				je.name,
+				jea.account,
+				jea.debit_in_account_currency AS amount,
+				COALESCE(jea.user_remark, je.user_remark, '') AS remarks,
+				(SELECT GROUP_CONCAT(DISTINCT jea2.account ORDER BY jea2.idx SEPARATOR ', ')
+				 FROM `tabJournal Entry Account` jea2
+				 WHERE jea2.parent = je.name
+				   AND jea2.credit_in_account_currency > 0
+				 LIMIT 1) AS credit_account,
+				(SELECT COALESCE(SUM(jea3.credit_in_account_currency), 0)
+				 FROM `tabJournal Entry Account` jea3
+				 WHERE jea3.parent = je.name
+				   AND jea3.credit_in_account_currency > 0
+				   AND jea3.account NOT IN ({pa_placeholders})
+				) AS external_credit_amount,
+				(SELECT COALESCE(SUM(jea4.credit_in_account_currency), 0)
+				 FROM `tabJournal Entry Account` jea4
+				 WHERE jea4.parent = je.name
+				   AND jea4.credit_in_account_currency > 0
+				   AND jea4.account IN ({pa_placeholders})
+				) AS internal_credit_amount
+			FROM `tabJournal Entry Account` jea
+			INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
+			WHERE je.docstatus = 1
+				AND je.posting_date = %s
+				AND jea.account IN ({pa_placeholders})
+				AND jea.debit_in_account_currency > 0
+			ORDER BY je.creation ASC""",
+			tuple(payment_accounts * 2 + [report_date] + payment_accounts),
+			as_dict=True
+		)
+		for row in je_debit_rows:
+			mode     = account_to_mode.get(row["account"], row["account"])
+			ext_cr   = float(row.get("external_credit_amount") or 0)
+			int_cr   = float(row.get("internal_credit_amount") or 0)
+			total_cr = ext_cr + int_cr
+			# Fraction of this debit that is genuinely new income (non-correction)
+			ext_fraction    = (ext_cr / total_cr) if total_cr > 0 else 0.0
+			amount          = float(row["amount"] or 0)
+			external_amount = amount * ext_fraction
+			je_receipt_rows.append({
+				"name": row["name"],
+				"mode_of_payment": mode,
+				"against_account": row.get("credit_account") or "",
+				"amount": amount,
+				"external_amount": external_amount,
+				"is_correction": (ext_fraction == 0.0),
+				"remarks": row.get("remarks") or "",
+			})
 
 	je_count = len(je_detail_rows)
 	je_total = sum(r["amount"] for r in je_detail_rows)
 	je_by_mode = _mode_breakdown_dicts(je_detail_rows)
+	# Sum the proportional external_amount — handles pure corrections (0), pure externals
+	# (full amount), and mixed JEs (fractional) correctly.
+	je_receipt_total = sum(r.get("external_amount", 0) for r in je_receipt_rows)
+	# Build je_receipt_by_mode from the proportional external amounts
+	_je_ext_mode: dict = {}
+	for _r in je_receipt_rows:
+		_ext = _r.get("external_amount", 0)
+		if _ext <= 0:
+			continue
+		_m = _r["mode_of_payment"]
+		if _m not in _je_ext_mode:
+			_je_ext_mode[_m] = {"mode_of_payment": _m, "total": 0.0, "count": 0}
+		_je_ext_mode[_m]["total"] += _ext
+		_je_ext_mode[_m]["count"] += 1
+	je_receipt_by_mode = sorted(_je_ext_mode.values(), key=lambda x: x["total"], reverse=True)
+	# All JE debits (including corrections) for per-mode cash flow table
+	je_all_debits_by_mode = _mode_breakdown_dicts(je_receipt_rows)
 
 	# Paid-at-invoice Purchase Invoices (is_paid=1): cash purchases settled directly
 	# without a separate Payment Entry — must be fetched here so they're included in
@@ -2594,10 +2939,15 @@ def get_daily_report(report_date=None):
 	""", (report_date,), as_dict=True)
 	total_paid_purchases = sum(float(inv["grand_total"] or 0) for inv in paid_purchase_invoices)
 
-	# Group paid invoices by their cash/bank account for mode breakdown
+	def _account_to_payment_mode(acct):
+		"""Resolve a GL cash/bank account name to its payment mode label.
+		Falls back to the account name itself if no mapping exists."""
+		return account_to_mode.get(acct) or acct or "Cash"
+
+	# Group paid invoices by payment mode (not raw account name)
 	paid_purchases_mode_map = {}
 	for inv in paid_purchase_invoices:
-		mode = inv.get("cash_bank_account") or "Cash"
+		mode = _account_to_payment_mode(inv.get("cash_bank_account") or "")
 		if mode not in paid_purchases_mode_map:
 			paid_purchases_mode_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
 		paid_purchases_mode_map[mode]["total"] += float(inv.get("grand_total") or 0)
@@ -2613,7 +2963,7 @@ def get_daily_report(report_date=None):
 		mode_expense_map[mode]["total"] += float(e.get("amount") or 0)
 		mode_expense_map[mode]["count"] += 1
 	for inv in paid_purchase_invoices:
-		mode = inv.get("cash_bank_account") or "Cash"
+		mode = _account_to_payment_mode(inv.get("cash_bank_account") or "")
 		if mode not in mode_expense_map:
 			mode_expense_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
 		mode_expense_map[mode]["total"] += float(inv.get("grand_total") or 0)
@@ -2702,6 +3052,11 @@ def get_daily_report(report_date=None):
 				})
 	total_customer_collections = sum(c["amount"] for c in pe_customer_collections)
 
+	# PE Receives from non-Customer parties (owner deposits, employee advance returns,
+	# supplier refunds received via PE, etc.) — genuine cash in, but not "collections".
+	pe_other_receipts  = [p for p in pe_receive if p.get("party_type") != "Customer"]
+	total_other_receipts = sum(float(p.get("amount") or 0) for p in pe_other_receipts)
+
 	# ---- CREDIT INVOICES FOR THE DAY ----
 	# Credit Sales Invoices: submitted today, outstanding > 0 (not fully paid)
 	credit_sales_invoices = frappe.db.sql("""
@@ -2724,6 +3079,66 @@ def get_daily_report(report_date=None):
 		ORDER BY pi.outstanding_amount DESC
 	""", (report_date,), as_dict=True)
 	total_credit_purchases = sum(float(inv["outstanding_amount"] or 0) for inv in credit_purchase_invoices)
+
+	# ---- GL-BASED CASH POSITION (ground truth — same source as the "Day Report") ----
+	# Query all leaf cash/bank accounts for the company, then sum their GL movements.
+	# This captures every voucher type (PE, JE, PI, SI, POS) without reconstruction bugs.
+	cash_bank_accounts = frappe.db.sql("""
+		SELECT name FROM `tabAccount`
+		WHERE account_type IN ('Cash', 'Bank')
+		  AND is_group = 0
+		  AND company = %s
+	""", (default_company,), pluck="name")
+
+	gl_total_cash_in  = 0.0
+	gl_total_cash_out = 0.0
+	gl_account_summary = []
+
+	if cash_bank_accounts:
+		cb_ph = ", ".join(["%s"] * len(cash_bank_accounts))
+		gl_rows = frappe.db.sql(
+			f"""SELECT
+				gle.account,
+				SUM(gle.debit)  AS total_debit,
+				SUM(gle.credit) AS total_credit
+			FROM `tabGL Entry` gle
+			WHERE gle.posting_date = %s
+			  AND gle.docstatus = 1
+			  AND gle.is_cancelled = 0
+			  AND gle.account IN ({cb_ph})
+			GROUP BY gle.account
+			ORDER BY (SUM(gle.debit) + SUM(gle.credit)) DESC""",
+			tuple([report_date] + list(cash_bank_accounts)),
+			as_dict=True,
+		)
+		for row in gl_rows:
+			d = float(row.get("total_debit")  or 0)
+			c = float(row.get("total_credit") or 0)
+			gl_total_cash_in  += d
+			gl_total_cash_out += c
+			gl_account_summary.append({
+				"account":      row["account"],
+				"total_debit":  d,
+				"total_credit": c,
+				"net":          d - c,
+			})
+
+	# Aggregate per-account GL into a per-mode summary.
+	# This covers ALL voucher types — PE Internal Transfer, SI returns, JE corrections,
+	# anything — without any document-level reconstruction gaps.
+	_gl_mode_map: dict = {}
+	for _row in gl_account_summary:
+		_mode = account_to_mode.get(_row["account"]) or _row["account"]
+		if _mode not in _gl_mode_map:
+			_gl_mode_map[_mode] = {"mode_of_payment": _mode, "total_debit": 0.0, "total_credit": 0.0, "net": 0.0}
+		_gl_mode_map[_mode]["total_debit"]  += _row["total_debit"]
+		_gl_mode_map[_mode]["total_credit"] += _row["total_credit"]
+		_gl_mode_map[_mode]["net"]          += _row["net"]
+	gl_mode_summary = sorted(
+		_gl_mode_map.values(),
+		key=lambda x: abs(x["total_debit"] + x["total_credit"]),
+		reverse=True,
+	)
 
 	# Purchased items summary (for purchase-focused daily view)
 	items_purchased = frappe.db.sql("""
@@ -3032,9 +3447,19 @@ def get_daily_report(report_date=None):
 			"je_count": je_count,
 			"je_total": je_total,
 			"je_by_mode": je_by_mode,
+			# JE debits on cash/bank = cash received via JE
+			# je_receipt_total / je_receipt_by_mode: external only (supplier refunds etc.) → adds to income
+			# je_all_debits_by_mode: all JE debits including mode-corrections → used for per-mode table
+			"je_receipts": je_receipt_rows,
+			"je_receipt_total": je_receipt_total,
+			"je_receipt_by_mode": je_receipt_by_mode,
+			"je_all_debits_by_mode": je_all_debits_by_mode,
 			# Customer collections against credit invoices
 			"pe_customer_collections": pe_customer_collections,
 			"total_customer_collections": total_customer_collections,
+			# Non-Customer PE Receives (owner deposits, supplier refunds, etc.)
+			"pe_other_receipts":    pe_other_receipts,
+			"total_other_receipts": total_other_receipts,
 			# Credit invoices
 			"credit_sales_invoices": credit_sales_invoices,
 			"total_credit_sales": total_credit_sales,
@@ -3048,5 +3473,12 @@ def get_daily_report(report_date=None):
 			"item_profit_summary": item_profit_summary if is_executive else [],
 			"sales_entries": sales_entries,
 			"purchase_entries": purchase_entries,
+			# GL ground-truth cash position (matches "Day Report")
+			"gl_total_cash_in":   gl_total_cash_in,
+			"gl_total_cash_out":  gl_total_cash_out,
+			"gl_net_cash":        gl_total_cash_in - gl_total_cash_out,
+			"gl_account_summary": gl_account_summary,
+			# GL aggregated by payment mode — used for S5 per-mode table (covers all voucher types)
+			"gl_mode_summary":    gl_mode_summary,
 		}
 	}

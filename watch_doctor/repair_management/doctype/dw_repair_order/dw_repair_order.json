@@ -25,6 +25,7 @@
         "invoiced_amount",
         "paid_amount",
         "balance_amount",
+        "public_token",
         "all_tasks",
         "all_parts",
         "all_issues"
@@ -160,6 +161,16 @@
             "label": "Balance Amount",
             "read_only": 1,
             "depends_on": "sales_invoice"
+        },
+        {
+            "fieldname": "public_token",
+            "fieldtype": "Data",
+            "label": "Public Token",
+            "read_only": 1,
+            "hidden": 1,
+            "no_copy": 1,
+            "print_hide": 1,
+            "description": "Random token for future customer-facing portal lookups. Never expose the sequential order name to unauthenticated URLs."
         },
         {
             "fieldname": "all_tasks",

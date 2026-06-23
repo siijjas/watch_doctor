@@ -2192,6 +2192,7 @@ const GeneralSection: React.FC = () => {
         cr_number: '',
         vat_registration_number: '',
         repair_receipt_subtitle: '',
+        whatsapp_default_country_code: '',
     });
     const [saveMsg, setSaveMsg] = useState('');
     const fileRef = useRef<HTMLInputElement>(null);
@@ -2403,6 +2404,24 @@ const GeneralSection: React.FC = () => {
                                     rows={4}
                                     className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-y"
                                 />
+                            </div>
+                        </div>
+
+                        {/* WhatsApp sub-section */}
+                        <div className="mt-4 pt-4 border-t border-gray-100">
+                            <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">WhatsApp</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <Input
+                                        label="Default Country Code"
+                                        placeholder="973"
+                                        value={generalConfig.whatsapp_default_country_code || ''}
+                                        onChange={(e) => updateGeneralConfig('whatsapp_default_country_code', e.target.value)}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        Digits only (e.g. 973 for Bahrain). Prepended to local mobile numbers when sending WhatsApp messages.
+                                    </p>
+                                </div>
                             </div>
                         </div>
 

@@ -187,6 +187,12 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
     const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false);
     const [createCustomerQuery, setCreateCustomerQuery] = useState('');
 
+    // Customer repair history
+    const [repairHistory, setRepairHistory] = useState<apiService.CustomerRepairHistoryRow[]>([]);
+    const [historyExpanded, setHistoryExpanded] = useState(false);
+    const [expandedHistoryRow, setExpandedHistoryRow] = useState<string | null>(null);
+    const [historyDetails, setHistoryDetails] = useState<Record<string, any>>({});
+
     // Brand/Model Creation State
     const [isCreateBrandOpen, setIsCreateBrandOpen] = useState(false);
     const [createBrandQuery, setCreateBrandQuery] = useState('');
@@ -352,6 +358,20 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
             setFormData(newOrder);
         }
     }, [order, isOpen]); // Note: dependencies.customers must NOT be here — adding a new customer updates that list and would reset the form
+
+    // Fetch repair history when customer changes
+    useEffect(() => {
+        const customer = formData?.customer;
+        if (!customer) {
+            setRepairHistory([]);
+            return;
+        }
+        apiService.getCustomerRepairHistory(customer, 5).then(rows => {
+            // Exclude the current order from history if editing
+            const currentName = formData?.name;
+            setRepairHistory(currentName ? rows.filter(r => r.name !== currentName) : rows);
+        }).catch(() => setRepairHistory([]));
+    }, [formData?.customer]);
 
     if (!formData) return null;
 
@@ -714,6 +734,9 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
         const promisedDateIso = toIsoDate(formData.promised_delivery_date);
         if (!receivedDateIso) missingFields.push('Received Date must be in DD/MM/YYYY format');
         if (!promisedDateIso) missingFields.push('Promised Delivery must be in DD/MM/YYYY format');
+        if (receivedDateIso && promisedDateIso && promisedDateIso < receivedDateIso) {
+            missingFields.push('Promised Delivery cannot be before the Received Date');
+        }
 
         if (missingFields.length > 0) {
             setValidationErrors(missingFields);
@@ -784,6 +807,90 @@ export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClos
                             />
 
                         </div>
+
+                        {/* Previous orders for this customer */}
+                        {repairHistory.length > 0 && (
+                            <div className="rounded-xl border border-gray-200 overflow-hidden">
+                                <button
+                                    type="button"
+                                    className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                                    onClick={() => setHistoryExpanded(prev => !prev)}
+                                >
+                                    <span>Previous Orders ({repairHistory.length})</span>
+                                    <svg className={`w-4 h-4 transition-transform ${historyExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </button>
+                                {historyExpanded && (
+                                    <div className="divide-y divide-gray-100">
+                                        {repairHistory.map(row => (
+                                            <div key={row.name}>
+                                                <button
+                                                    type="button"
+                                                    className="w-full px-4 py-2.5 flex items-center justify-between text-sm hover:bg-gray-50 transition-colors"
+                                                    onClick={async () => {
+                                                        const next = expandedHistoryRow === row.name ? null : row.name;
+                                                        setExpandedHistoryRow(next);
+                                                        if (next && !historyDetails[next]) {
+                                                            try {
+                                                                const detail = await apiService.getRepairHistoryDetail(next);
+                                                                setHistoryDetails(prev => ({ ...prev, [next]: detail }));
+                                                            } catch (_) {}
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="text-left">
+                                                        <span className="font-mono text-xs text-gray-500">{row.name}</span>
+                                                        <span className="ml-2 text-gray-600">{row.received_date}</span>
+                                                        {row.watch_count > 0 && (
+                                                            <span className="ml-2 text-xs text-gray-400">{row.watch_count} watch{row.watch_count > 1 ? 'es' : ''}</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                                            row.status === 'Delivered' ? 'bg-green-100 text-green-700' :
+                                                            row.status === 'Repaired' ? 'bg-blue-100 text-blue-700' :
+                                                            row.status === 'In Progress' ? 'bg-yellow-100 text-yellow-700' :
+                                                            'bg-gray-100 text-gray-600'
+                                                        }`}>{row.status}</span>
+                                                        <svg className={`w-3 h-3 text-gray-400 transition-transform ${expandedHistoryRow === row.name ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                                        </svg>
+                                                    </div>
+                                                </button>
+                                                {expandedHistoryRow === row.name && historyDetails[row.name] && (
+                                                    <div className="px-4 pb-3 bg-gray-50 border-t border-gray-100">
+                                                        {(historyDetails[row.name].items || []).map((item: any) => (
+                                                            <div key={item.name} className="pt-2">
+                                                                <div className="flex items-center justify-between">
+                                                                    <span className="text-xs font-medium text-gray-700">{item.watch_brand} {item.watch_model_name || item.watch_model}</span>
+                                                                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                                                                        item.status === 'Completed' || item.status === 'Delivered' ? 'bg-green-100 text-green-700' :
+                                                                        item.status === 'In Progress' ? 'bg-yellow-100 text-yellow-700' :
+                                                                        'bg-gray-100 text-gray-600'
+                                                                    }`}>{item.status}</span>
+                                                                </div>
+                                                                {item.serial_number && <div className="text-xs text-gray-400 mt-0.5">S/N: {item.serial_number}</div>}
+                                                                {(historyDetails[row.name].all_tasks || [])
+                                                                    .filter((t: any) => t.repair_item_key === String(item.idx))
+                                                                    .map((t: any, ti: number) => (
+                                                                        <div key={ti} className="text-xs text-gray-500 ml-2 mt-0.5">• {t.service_name || t.service}</div>
+                                                                    ))
+                                                                }
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {expandedHistoryRow === row.name && !historyDetails[row.name] && (
+                                                    <div className="px-4 py-2 text-xs text-gray-400 bg-gray-50">Loading...</div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {/* Status field removed (defaults to Pending) */}
                         <Input
                             label="Received Date"

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { RepairPartUsed, RepairItem, Item, RepairTask, RepairTaskTemplate } from '../types';
 import * as apiService from '../services/apiService';
 import { isErpNext } from '../services/apiService';
@@ -40,6 +40,7 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
     const [markTaskCompleted, setMarkTaskCompleted] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
+    const [stockWarning, setStockWarning] = useState<string | null>(null);
 
     // Filter tasks that belong to this watch item
     const availableTasks = watchItem?.tasks || [];
@@ -52,6 +53,26 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
             setFormData(prev => ({ ...prev, task: '' }));
         }
     }, [isOpen, initialTask]);
+
+    // Live stock check when part or quantity changes
+    useEffect(() => {
+        if (!formData.part || formData.quantity <= 0) {
+            setStockWarning(null);
+            return;
+        }
+        let cancelled = false;
+        apiService.getItemStock(formData.part).then((result) => {
+            if (cancelled) return;
+            if (formData.quantity > result.available_qty) {
+                setStockWarning(
+                    `Only ${result.available_qty} in stock — verify availability before saving.`
+                );
+            } else {
+                setStockWarning(null);
+            }
+        }).catch(() => setStockWarning(null));
+        return () => { cancelled = true; };
+    }, [formData.part, formData.quantity]);
 
     // Filter tasks that belong to this watch item
     // const availableTasks = watchItem?.tasks || [];
@@ -165,6 +186,13 @@ export const AddPartModal: React.FC<AddPartModalProps> = ({
                         className="bg-gray-100 dark:bg-gray-700"
                     />
                 </div>
+
+                {stockWarning && (
+                    <div className="flex items-start gap-2 rounded-md border border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900/20 px-3 py-2 text-sm text-yellow-800 dark:text-yellow-300">
+                        <span className="mt-0.5 shrink-0">⚠</span>
+                        <span>{stockWarning}</span>
+                    </div>
+                )}
 
                 {/* Task Linking */}
                 <div>

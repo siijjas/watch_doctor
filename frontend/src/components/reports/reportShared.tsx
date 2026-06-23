@@ -210,6 +210,23 @@ export interface FinancialReportData {
     item_profit_summary?: ItemProfitRow[];
     sales_entries?: SalesPurchaseEntry[];
     purchase_entries?: SalesPurchaseEntry[];
+    // JE debits on cash/bank:
+    //   je_receipt_by_mode    = proportional external portion per mode → adds to income KPI
+    //   je_all_debits_by_mode = all JE debits incl. corrections → kept for detail reference
+    je_receipts?: (JournalEntryRow & { is_correction?: boolean; external_amount?: number })[];
+    je_receipt_total?: number;
+    je_receipt_by_mode?: PeModeBreakdown[];
+    je_all_debits_by_mode?: PeModeBreakdown[];
+    // Non-Customer PE Receives (owner deposits, supplier refunds received, etc.)
+    pe_other_receipts?: PaymentEntryRow[];
+    total_other_receipts?: number;
+    // GL ground-truth cash position (matches "Day Report")
+    gl_total_cash_in?: number;
+    gl_total_cash_out?: number;
+    gl_net_cash?: number;
+    gl_account_summary?: Array<{ account: string; total_debit: number; total_credit: number; net: number }>;
+    // GL aggregated by payment mode — most accurate per-mode table (all voucher types)
+    gl_mode_summary?: Array<{ mode_of_payment: string; total_debit: number; total_credit: number; net: number }>;
 }
 
 export interface ItemGroupProfitRow {

@@ -76,7 +76,7 @@ export const AssignTechnicianModal: React.FC<AssignTechnicianModalProps> = ({
                     <option value="">-- Unassigned --</option>
                     {employees.map(emp => (
                         <option key={emp.name} value={emp.name}>
-                            {emp.employee_name}
+                            {emp.employee_name}{emp.open_items ? ` (${emp.open_items} open)` : ''}
                         </option>
                     ))}
                 </Select>

@@ -5,6 +5,7 @@ STATUS_TO_NOTIFICATION_KEY = {
 	"Pending": "order_received",
 	"In Progress": "in_progress",
 	"Awaiting Parts": "awaiting_parts",
+	"Create Estimate": "estimate_ready",
 	"Repaired": "ready_for_collection",
 	"Delivered": "delivered",
 }

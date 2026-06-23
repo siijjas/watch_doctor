@@ -145,11 +145,26 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const customerCollections   = fin.pe_customer_collections ?? [] as CustomerCollectionRow[];
     const totalCollections      = fin.total_customer_collections ?? 0;
 
+    // JE receipts: proportional external portion → counted in income KPI
+    const jeReceipts         = fin.je_receipts          ?? [] as JournalEntryRow[];
+    const jeReceiptTotal     = fin.je_receipt_total     ?? 0;
+    const jeReceiptByMode    = fin.je_receipt_by_mode   ?? [] as PeModeBreakdown[];
+
+    // Non-Customer PE Receives (owner deposits, supplier refunds, etc.)
+    const totalOtherReceipts = fin.total_other_receipts ?? 0;
+
+    // ── GL ground-truth totals (same source as "Day Report") ────
+    const glCashIn  = fin.gl_total_cash_in  ?? null;
+    const glCashOut = fin.gl_total_cash_out ?? null;
+    const glAccountSummary = fin.gl_account_summary ?? [];
+    // GL per-mode summary — covers ALL voucher types (PE Internal Transfer, SI returns, etc.)
+    const glModeSummary = fin.gl_mode_summary ?? [];
+
     // ── Derived values ──────────────────────────────────────────
     const repairRevenue   = repair.revenue;
-    const salesRevenue    = pos.total_retail_sales;
-    const netSalesInCard  = pos.total_retail_sales + repairRevenue;
-    const totalIncome     = repairRevenue + salesRevenue + totalCollections;
+    // Include B2B (non-POS) sales alongside retail, then deduct returns
+    const salesRevenue    = pos.total_retail_sales + pos.total_b2b_sales - pos.total_returns;
+    const totalIncome     = repairRevenue + salesRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts;
 
     const pePurchases         = fin.pe_purchases         ?? [];
     const paidPurchaseInvoices = fin.paid_purchase_invoices ?? [];
@@ -168,35 +183,39 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
 
     const purchaseTotal      = totalPePurchases + totalPaidPurchases;
     const otherExpensesTotal = totalPeOperating + jeTotal;
-    const totalOutflow       = purchaseTotal + otherExpensesTotal;
-    const balance            = totalIncome - totalOutflow;
+
+    // KPI cards use GL totals when available (exact match with "Day Report");
+    // fall back to doc-based sums only when GL data is absent.
+    const kpiIncome  = glCashIn  ?? totalIncome;
+    const kpiOutflow = glCashOut ?? (purchaseTotal + otherExpensesTotal);
+    const balance    = kpiIncome - kpiOutflow;
+    // Keep totalOutflow for internal breakdown consistency
+    const totalOutflow = purchaseTotal + otherExpensesTotal;
 
     const creditSalesInvoices   = fin.credit_sales_invoices     ?? [] as CreditInvoice[];
     const totalCreditSales      = fin.total_credit_sales        ?? 0;
     const creditPurchaseInvoices = fin.credit_purchase_invoices ?? [] as CreditInvoice[];
     const totalCreditPurchases  = fin.total_credit_purchases    ?? 0;
 
-    // ── Per-mode cash flow table ────────────────────────────────
-    const modeBalances = (() => {
-        const allModes = new Set<string>();
-        pos.payment_breakdown.forEach(p => allModes.add(p.mode_of_payment));
-        (fin.repair_payment_breakdown ?? []).forEach(r => allModes.add(r.mode_of_payment));
-        customerCollections.forEach(c => allModes.add(c.mode_of_payment));
-        fin.expense_breakdown.forEach(e => allModes.add(e.mode_of_payment));
-        return Array.from(allModes).map(mode => {
-            const posIn    = pos.payment_breakdown.find(p => p.mode_of_payment === mode)?.total ?? 0;
-            const repIn    = (fin.repair_payment_breakdown ?? []).find(r => r.mode_of_payment === mode)?.total ?? 0;
-            const collIn   = customerCollections
-                .filter(c => c.mode_of_payment === mode)
-                .reduce((s, c) => s + c.amount, 0);
-            const income   = posIn + repIn + collIn;
-            const outflow  = fin.expense_breakdown.find(e => e.mode_of_payment === mode)?.total ?? 0;
-            return { mode, income, outflow, balance: income - outflow };
-        });
-    })();
+    // ── Per-mode cash flow table (GL-based — ground truth) ──────
+    // Uses GL debits/credits per account mapped to payment mode.
+    // Automatically handles every voucher type: PE Internal Transfer, SI returns,
+    // JE mode corrections, Expense Claims, Asset purchases — nothing is missed.
+    const modeBalances = glModeSummary.map(row => ({
+        mode:    row.mode_of_payment,
+        income:  row.total_debit,
+        outflow: row.total_credit,
+        balance: row.net,
+    }));
 
-    const totalOutflowAll = peEntries.filter(e => e.payment_type === 'Pay').reduce((s, e) => s + e.amount, 0) + jeTotal;
+    // Prefer GL ground-truth for the S6 footer; fall back to PE Pay + JE + paid PIs
+    const totalOutflowAll = glCashOut
+        ?? (peEntries.filter(e => e.payment_type === 'Pay').reduce((s, e) => s + e.amount, 0)
+            + jeTotal
+            + (fin.total_paid_purchases ?? 0));
 
+    // By-mode breakdown inside the income card.
+    // Uses only the external (income-contributing) portions so the mode totals sum to totalIncome.
     const incomeModeMap = new Map<string, number>();
     pos.payment_breakdown.forEach(pm => {
         incomeModeMap.set(pm.mode_of_payment, (incomeModeMap.get(pm.mode_of_payment) ?? 0) + pm.total);
@@ -206,6 +225,15 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     });
     customerCollections.forEach(c => {
         incomeModeMap.set(c.mode_of_payment, (incomeModeMap.get(c.mode_of_payment) ?? 0) + c.amount);
+    });
+    // External JE receipts only (proportional fraction — corrections excluded)
+    jeReceiptByMode.forEach(j => {
+        incomeModeMap.set(j.mode_of_payment, (incomeModeMap.get(j.mode_of_payment) ?? 0) + j.total);
+    });
+    // Non-Customer PE Receives
+    (fin.pe_other_receipts ?? []).forEach(p => {
+        const mode = p.mode_of_payment || 'Other';
+        incomeModeMap.set(mode, (incomeModeMap.get(mode) ?? 0) + p.amount);
     });
     const incomeModeBreakdown = Array.from(incomeModeMap.entries())
         .map(([mode, total]) => ({ mode, total }))
@@ -218,11 +246,22 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                 S1 — Executive KPIs (3 cards, no subLabel)
             ══════════════════════════════════════════ */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <StatCard label="Total Income"  value={formatCurrency(totalIncome)}  color="emerald" icon={<TrendingIcon />} />
-                <StatCard label="Total Outflow" value={formatCurrency(totalOutflow)} color="rose"    icon={<ExpenseIcon />} />
                 <StatCard
-                    label="Balance"
+                    label="Cash In"
+                    value={formatCurrency(kpiIncome)}
+                    subLabel={glCashIn != null ? 'From GL entries' : 'Estimated'}
+                    color="emerald" icon={<TrendingIcon />}
+                />
+                <StatCard
+                    label="Cash Out"
+                    value={formatCurrency(kpiOutflow)}
+                    subLabel={glCashOut != null ? 'From GL entries' : 'Estimated'}
+                    color="rose" icon={<ExpenseIcon />}
+                />
+                <StatCard
+                    label="Net Cash"
                     value={`${balance < 0 ? '\u2212' : ''}${formatCurrency(Math.abs(balance))}`}
+                    subLabel={glCashIn != null ? 'From GL entries' : 'Estimated'}
                     color={balance >= 0 ? 'emerald' : 'rose'}
                     icon={<NetIcon />}
                 />
@@ -240,14 +279,23 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                     >
                         <div className="space-y-2">
                             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Sales Stream</p>
-                            <Row label="Retail Sales" value={formatCurrency(pos.total_retail_sales)} />
+                            <Row label="Retail Sales (POS)" value={formatCurrency(pos.total_retail_sales)} />
+                            {pos.total_b2b_sales > 0 && (
+                                <Row label="B2B Sales" value={formatCurrency(pos.total_b2b_sales)} />
+                            )}
                             <Row label="Repair Invoices" value={formatCurrency(repairRevenue)} />
-                            <Row label="Collection" value={formatCurrency(totalCollections)} muted={totalCollections === 0} />
+                            <Row label="Collections" value={formatCurrency(totalCollections)} muted={totalCollections === 0} />
+                            {jeReceiptTotal > 0 && (
+                                <Row label="JE Receipts" value={formatCurrency(jeReceiptTotal)} />
+                            )}
+                            {totalOtherReceipts > 0 && (
+                                <Row label="Other Receipts" value={formatCurrency(totalOtherReceipts)} />
+                            )}
                             {pos.total_returns > 0 && (
                                 <Row label="Returns" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(pos.total_returns)}</span>} />
                             )}
                             <div className="border-t border-gray-100 dark:border-gray-700 pt-1">
-                                <Row label="Net Sales" value={formatCurrency(netSalesInCard)} />
+                                <Row label="Net Sales" value={formatCurrency(pos.net_sales + repairRevenue + totalCollections)} />
                             </div>
                             {incomeModeBreakdown.length > 0 && (
                                 <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
@@ -465,6 +513,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                     <SectionTitle>
                         <CurrencyIcon className="text-indigo-500" />
                         Cash Flow by Payment Mode
+                        <span className="ml-2 text-xs font-normal text-gray-400">(GL — all voucher types)</span>
                     </SectionTitle>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
@@ -495,6 +544,53 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                     <td className="pt-2.5 text-right text-sm text-rose-600 dark:text-rose-400">{formatCurrency(modeBalances.reduce((s, m) => s + m.outflow, 0))}</td>
                                     <td className={`pt-2.5 text-right text-sm font-bold ${balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
                                         {balance < 0 ? '\u2212' : ''}{formatCurrency(Math.abs(balance))}
+                                    </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* ══════════════════════════════════════════
+                S5b — GL Account Breakdown (ground truth)
+            ══════════════════════════════════════════ */}
+            {glAccountSummary.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                    <SectionTitle>
+                        <CurrencyIcon className="text-emerald-500" />
+                        Cash &amp; Bank — GL Breakdown
+                        <span className="ml-2 text-xs font-normal text-gray-400">(matches Day Report)</span>
+                    </SectionTitle>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
+                                    <th className="text-left pb-2 pr-3">Account</th>
+                                    <th className="text-right pb-2 pr-3">Cash In (Dr)</th>
+                                    <th className="text-right pb-2 pr-3">Cash Out (Cr)</th>
+                                    <th className="text-right pb-2">Net</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50 dark:divide-gray-700">
+                                {glAccountSummary.map((row, idx) => (
+                                    <tr key={idx}>
+                                        <td className="py-2.5 pr-3 font-medium text-gray-700 dark:text-gray-300">{row.account}</td>
+                                        <td className="py-2.5 pr-3 text-right text-emerald-600 dark:text-emerald-400">{row.total_debit > 0 ? formatCurrency(row.total_debit) : '—'}</td>
+                                        <td className="py-2.5 pr-3 text-right text-rose-600 dark:text-rose-400">{row.total_credit > 0 ? formatCurrency(row.total_credit) : '—'}</td>
+                                        <td className={`py-2.5 text-right font-semibold ${row.net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                            {row.net < 0 ? '−' : ''}{formatCurrency(Math.abs(row.net))}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                            <tfoot>
+                                <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
+                                    <td className="pt-2.5 text-sm text-gray-700 dark:text-gray-300">Total</td>
+                                    <td className="pt-2.5 text-right text-sm text-emerald-600 dark:text-emerald-400">{formatCurrency(kpiIncome)}</td>
+                                    <td className="pt-2.5 text-right text-sm text-rose-600 dark:text-rose-400">{formatCurrency(kpiOutflow)}</td>
+                                    <td className={`pt-2.5 text-right text-sm font-bold ${balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                        {balance < 0 ? '−' : ''}{formatCurrency(Math.abs(balance))}
                                     </td>
                                 </tr>
                             </tfoot>

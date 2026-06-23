@@ -65,6 +65,17 @@ FIELD_DEFINITIONS = [
 		"label": "Repair Receipt Subtitle",
 		"description": "Shown below the title on repair order drop-off receipts.",
 	},
+	{
+		"fieldname": "whatsapp_section",
+		"fieldtype": "Section Break",
+		"label": "WhatsApp",
+	},
+	{
+		"fieldname": "whatsapp_default_country_code",
+		"fieldtype": "Data",
+		"label": "Default Country Code",
+		"description": "Digits only, e.g. 973 for Bahrain. Prepended to local mobile numbers when sending WhatsApp messages.",
+	},
 ]
 
 CONFIG_FIELDS = [
@@ -76,6 +87,7 @@ CONFIG_FIELDS = [
 	"cr_number",
 	"vat_registration_number",
 	"repair_receipt_subtitle",
+	"whatsapp_default_country_code",
 ]
 
 

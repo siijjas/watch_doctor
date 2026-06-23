@@ -9,7 +9,7 @@ import { useAppConfig } from '../context/AppConfigContext';
 interface CreateInvoiceModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSave: (sourceType: 'quotation' | 'order', paymentType: 'full' | 'advance' | 'balance', amount?: number) => Promise<void>;
+    onSave: (sourceType: 'quotation' | 'order', paymentType: 'full' | 'advance' | 'balance', amount?: number, itemIndices?: string[]) => Promise<void>;
     order: RepairOrder;
     hasQuotation: boolean;
 }
@@ -26,6 +26,19 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
     const [paymentType, setPaymentType] = useState<'full' | 'advance' | 'balance'>('full');
     const [customAmount, setCustomAmount] = useState<string>('');
     const [isSaving, setIsSaving] = useState(false);
+    // Watch selection for per-watch invoicing (only relevant when source is 'order').
+    // Pre-select only Completed items; In-Progress / Pending items are disabled.
+    const [selectedItems, setSelectedItems] = useState<string[]>(() =>
+        (order.items || []).filter(i => i.status === 'Completed').map(i => i.name)
+    );
+
+    const toggleItem = (itemName: string) => {
+        const item = (order.items || []).find(i => i.name === itemName);
+        if (!item || item.status !== 'Completed') return;
+        setSelectedItems(prev =>
+            prev.includes(itemName) ? prev.filter(n => n !== itemName) : [...prev, itemName]
+        );
+    };
 
     // Calculate total amount based on source
     const getTotalAmount = () => {
@@ -73,7 +86,10 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
 
         setIsSaving(true);
         try {
-            await onSave(sourceType, paymentType, amount);
+            const itemIndices = sourceType === 'order' && selectedItems.length < (order.items || []).length
+                ? selectedItems
+                : undefined;
+            await onSave(sourceType, paymentType, amount, itemIndices);
             onClose();
         } catch (error) {
             alert('Failed to create invoice: ' + error);
@@ -103,6 +119,50 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                                 ? 'Use items and prices from the quotation'
                                 : 'Use items and prices directly from the repair order'}
                         </p>
+                    </div>
+                )}
+
+                {/* Watch selection (only for direct order invoicing with multiple watches) */}
+                {sourceType === 'order' && (order.items || []).length > 1 && (
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Watches to Invoice
+                        </label>
+                        <div className="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-2">
+                            {(order.items || []).map(item => {
+                                const canSelect = item.status === 'Completed';
+                                return (
+                                    <label key={item.name} className={`flex items-center gap-3 p-2 rounded-lg ${canSelect ? 'hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedItems.includes(item.name)}
+                                            onChange={() => toggleItem(item.name)}
+                                            disabled={!canSelect}
+                                            className="w-4 h-4 accent-blue-600"
+                                        />
+                                        <span className="text-sm text-gray-800 dark:text-gray-200">
+                                            {item.watch_brand} {item.watch_model}
+                                            {item.serial_number && <span className="ml-1 text-xs text-gray-400">#{item.serial_number}</span>}
+                                            {item.status && (
+                                                <span className={`ml-2 text-xs font-medium px-1.5 py-0.5 rounded ${
+                                                    item.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                                                    item.status === 'Delivered' ? 'bg-blue-100 text-blue-700' :
+                                                    'bg-gray-100 text-gray-600'
+                                                }`}>{item.status}</span>
+                                            )}
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                        {selectedItems.length === 0 && (
+                            <p className="text-xs text-red-500 mt-1">Select at least one completed watch to invoice.</p>
+                        )}
+                        {selectedItems.length < (order.items || []).length && selectedItems.length > 0 && (
+                            <p className="text-xs text-orange-600 mt-1">
+                                Partial delivery: {selectedItems.length} of {(order.items || []).length} watches will be invoiced now.
+                            </p>
+                        )}
                     </div>
                 )}
 
@@ -207,7 +267,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                     <Button type="button" variant="ghost" onClick={onClose} disabled={isSaving}>
                         Cancel
                     </Button>
-                    <Button type="submit" disabled={isSaving}>
+                    <Button type="submit" disabled={isSaving || (sourceType === 'order' && selectedItems.length === 0)}>
                         {isSaving ? 'Creating...' : 'Create Invoice'}
                     </Button>
                 </div>

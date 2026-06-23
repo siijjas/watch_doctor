@@ -902,28 +902,16 @@ function buildFinancialHtml(data: DailyReportData): string {
     const purchasesTotal = (fin.total_pe_purchases ?? 0) + (fin.total_paid_purchases ?? 0);
     const expensesTotal  = (fin.total_pe_operating ?? 0) + (fin.je_total ?? 0);
 
-    const modeSet = new Set<string>();
-    p.payment_breakdown.forEach(pm => modeSet.add(pm.mode_of_payment));
-    (fin.repair_payment_breakdown ?? []).forEach((rp: any) => modeSet.add(rp.mode_of_payment));
-    customerCollections.forEach((c: any) => modeSet.add(c.mode_of_payment));
-    fin.expense_breakdown.forEach((e: any) => modeSet.add(e.mode_of_payment));
+    // Use GL-based per-mode summary — same ground truth as the web view.
+    // Covers PE Internal Transfer, SI returns, JE corrections — every voucher type.
+    const glModeSummary: Array<{ mode_of_payment: string; total_debit: number; total_credit: number; net: number }> =
+        fin.gl_mode_summary ?? [];
 
-    const modeBalances = Array.from(modeSet).map(mode => {
-        const posInc  = p.payment_breakdown.find(pm => pm.mode_of_payment === mode)?.total ?? 0;
-        const repInc  = (fin.repair_payment_breakdown ?? []).find((rp: any) => rp.mode_of_payment === mode)?.total ?? 0;
-        const collIn  = customerCollections
-            .filter((c: any) => c.mode_of_payment === mode)
-            .reduce((s: number, c: any) => s + Number(c.amount || 0), 0);
-        const income   = posInc + repInc + collIn;
-        const expenses = fin.expense_breakdown.find((e: any) => e.mode_of_payment === mode)?.total ?? 0;
-        return { mode, income, expenses, balance: income - expenses };
-    });
-
-    const modeTableTotalIncome = modeBalances.reduce((s, m) => s + m.income, 0);
-    const modeTableTotalExp    = modeBalances.reduce((s, m) => s + m.expenses, 0);
+    const modeTableTotalIncome = glModeSummary.reduce((s, m) => s + m.total_debit, 0);
+    const modeTableTotalExp    = glModeSummary.reduce((s, m) => s + m.total_credit, 0);
     const modeTableNet         = modeTableTotalIncome - modeTableTotalExp;
 
-    const modeTableHtml = modeBalances.length === 0
+    const modeTableHtml = glModeSummary.length === 0
         ? `<p class="empty">No payment mode data</p>`
         : `<table>
             <thead><tr>
@@ -934,14 +922,14 @@ function buildFinancialHtml(data: DailyReportData): string {
                 <th class="right">% of income</th>
             </tr></thead>
             <tbody>
-                ${modeBalances.map((mb, i) => {
-                    const pct      = modeTableTotalIncome > 0 ? Math.round((mb.income / modeTableTotalIncome) * 100) : 0;
+                ${glModeSummary.map((mb, i) => {
+                    const pct      = modeTableTotalIncome > 0 ? Math.round((mb.total_debit / modeTableTotalIncome) * 100) : 0;
                     const dotColor = modeColors[i % modeColors.length];
                     return `<tr>
-                        <td><div class="mode-pill"><div class="mode-dot" style="background:${dotColor}"></div>${mb.mode}</div></td>
-                        <td class="amount-green">${fmt(mb.income)}</td>
-                        <td class="${mb.expenses > 0 ? 'amount-rose' : 'right'}">${mb.expenses > 0 ? fmt(mb.expenses) : '—'}</td>
-                        <td class="${mb.balance >= 0 ? 'amount-green' : 'amount-rose'}">${mb.balance < 0 ? '−' : ''}${fmt(Math.abs(mb.balance))}</td>
+                        <td><div class="mode-pill"><div class="mode-dot" style="background:${dotColor}"></div>${mb.mode_of_payment}</div></td>
+                        <td class="amount-green">${mb.total_debit > 0 ? fmt(mb.total_debit) : '—'}</td>
+                        <td class="${mb.total_credit > 0 ? 'amount-rose' : 'right'}">${mb.total_credit > 0 ? fmt(mb.total_credit) : '—'}</td>
+                        <td class="${mb.net >= 0 ? 'amount-green' : 'amount-rose'}">${mb.net < 0 ? '−' : ''}${fmt(Math.abs(mb.net))}</td>
                         <td class="right" style="color:#9ca3af">${pct}%</td>
                     </tr>`;
                 }).join('')}

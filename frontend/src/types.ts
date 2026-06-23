@@ -110,6 +110,7 @@ export interface Customer extends FrappeDoc {
 
 export interface Employee extends FrappeDoc {
     employee_name: string;
+    open_items?: number;
 }
 
 export interface Item extends FrappeDoc {

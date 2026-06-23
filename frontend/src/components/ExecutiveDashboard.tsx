@@ -13,7 +13,7 @@ import {
 } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
 import * as apiService from '../services/apiService';
-import type { DashboardStats, OrdersTrendItem, TechnicianStats, TopIssue, PendingOrder } from '../services/apiService';
+import type { DashboardStats, OrdersTrendItem, TechnicianStats, TopIssue, PendingOrder, OutstandingInvoice } from '../services/apiService';
 import { isErpNext } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 
@@ -74,6 +74,7 @@ const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ onNavigateToOrd
     const [technicians, setTechnicians] = useState<TechnicianStats[]>([]);
     const [issues, setIssues] = useState<TopIssue[]>([]);
     const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
+    const [outstandingInvoices, setOutstandingInvoices] = useState<OutstandingInvoice[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [periodDays, setPeriodDays] = useState(30);
@@ -85,18 +86,20 @@ const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ onNavigateToOrd
         else setIsLoading(true);
 
         try {
-            const [statsData, trendData, techData, issuesData, pendingData] = await Promise.all([
+            const [statsData, trendData, techData, issuesData, pendingData, arData] = await Promise.all([
                 apiService.getDashboardStats(periodDays),
                 apiService.getOrdersTrend(periodDays),
                 apiService.getTechnicianStats(),
                 apiService.getTopIssues(8),
                 apiService.getAgedPendingOrders(10),
+                apiService.getOutstandingInvoices(0),
             ]);
             setStats(statsData);
             setTrend(trendData);
             setTechnicians(techData);
             setIssues(issuesData);
             setPendingOrders(pendingData);
+            setOutstandingInvoices(arData);
             setLastRefreshed(new Date());
         } catch (error) {
             console.error('Executive dashboard load failed:', error);
@@ -143,6 +146,10 @@ const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ onNavigateToOrd
 
     // Today snapshot: last entry in trend array
     const todayEntry = trend.length > 0 ? trend[trend.length - 1] : null;
+
+    // AR metrics
+    const totalOutstanding = outstandingInvoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0);
+    const overdueCount = outstandingInvoices.filter(inv => inv.days_outstanding > 30).length;
 
     // Urgency breakdown
     const criticalCount = pendingOrders.filter(o => o.days_pending > 14).length;
@@ -291,8 +298,19 @@ const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ onNavigateToOrd
                 )}
             </div>
 
+            {/* ── AR Alert Banner ── */}
+            {overdueCount > 0 && (
+                <div className="mb-4 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                    <span className="text-base">⚠</span>
+                    <span>
+                        <strong>{overdueCount} invoice{overdueCount > 1 ? 's' : ''}</strong> overdue &gt;30 days · total outstanding{' '}
+                        <strong>{formatCurrency(totalOutstanding)}</strong>
+                    </span>
+                </div>
+            )}
+
             {/* ── Primary KPI Cards ── */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mb-4 sm:mb-6">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
                 <ExecKpiCard
                     title="Revenue This Month"
                     value={formatCurrency(stats?.revenue_this_month || 0)}
@@ -347,6 +365,19 @@ const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ onNavigateToOrd
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="#E11D48" strokeWidth={1.5}>
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                                 d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                    }
+                />
+
+                <ExecKpiCard
+                    title="Outstanding Receivables"
+                    value={formatCurrency(totalOutstanding)}
+                    subtitle={overdueCount > 0 ? `${overdueCount} overdue >30 days` : 'All within terms'}
+                    accent={overdueCount > 0 ? '#FCEBEC' : '#EAF0FA'}
+                    icon={
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke={overdueCount > 0 ? '#E11D48' : '#648DDA'} strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round"
+                                d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                         </svg>
                     }
                 />
@@ -552,6 +583,58 @@ const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ onNavigateToOrd
                     </table>
                 </div>
             </div>
+
+            {/* ── Outstanding Receivables Table ── */}
+            {outstandingInvoices.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4" style={{ border: '1px solid #F0EEEB' }}>
+                    <div className="px-4 sm:px-6 py-4 border-b flex items-center justify-between" style={{ borderColor: '#F0EEEB' }}>
+                        <div>
+                            <h3 className="text-lg font-bold text-gray-800">Outstanding Receivables</h3>
+                            <p className="text-xs text-gray-400 mt-0.5">Submitted invoices with unpaid balances</p>
+                        </div>
+                        <span className="text-sm font-semibold text-gray-700">
+                            Total: {formatCurrency(totalOutstanding)}
+                        </span>
+                    </div>
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                <th className="px-4 py-3">Invoice</th>
+                                <th className="px-4 py-3">Customer</th>
+                                <th className="px-4 py-3">Repair Order</th>
+                                <th className="px-4 py-3 text-right">Amount</th>
+                                <th className="px-4 py-3 text-right">Outstanding</th>
+                                <th className="px-4 py-3 text-right">Days</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {outstandingInvoices.map(inv => (
+                                <tr key={inv.name} className={inv.days_outstanding > 30 ? 'bg-red-50' : ''}>
+                                    <td className="px-4 py-3 font-mono text-xs">{inv.name}</td>
+                                    <td className="px-4 py-3">
+                                        <div className="font-medium text-gray-900">{inv.customer_name || inv.customer}</div>
+                                        {inv.mobile_no && <div className="text-xs text-gray-400">{inv.mobile_no}</div>}
+                                    </td>
+                                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{inv.repair_order || '—'}</td>
+                                    <td className="px-4 py-3 text-right">{formatCurrency(inv.grand_total)}</td>
+                                    <td className="px-4 py-3 text-right font-semibold text-red-600">{formatCurrency(inv.outstanding_amount)}</td>
+                                    <td className="px-4 py-3 text-right">
+                                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
+                                            inv.days_outstanding > 30
+                                                ? 'bg-red-100 text-red-700'
+                                                : inv.days_outstanding > 14
+                                                    ? 'bg-orange-100 text-orange-700'
+                                                    : 'bg-gray-100 text-gray-600'
+                                        }`}>
+                                            {inv.days_outstanding}d
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 };
