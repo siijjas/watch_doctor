@@ -953,36 +953,6 @@ def save_repair_order(doc_json):
 	if not doc_dict.get('items'):
 		frappe.throw(_("A repair order must contain at least one watch."))
 
-	# Guard: duplicate serial numbers across active orders
-	current_order_name = doc_dict.get('name') or ''
-	for item in doc_dict.get('items', []):
-		serial = (item.get('serial_number') or '').strip()
-		if not serial:
-			continue
-		conflict = frappe.db.sql(
-			"""
-			SELECT ri.parent
-			FROM `tabDW Repair Item` ri
-			JOIN `tabDW Repair Order` ro ON ro.name = ri.parent
-			WHERE ri.serial_number = %s
-			  AND ro.docstatus = 0
-			  AND ro.status NOT IN ('Delivered')
-			  AND ri.name != %s
-			  AND ro.name != %s
-			LIMIT 1
-			""",
-			(serial, item.get('name') or '', current_order_name),
-			as_dict=True,
-		)
-		if conflict:
-			frappe.throw(
-				_("Serial number '{0}' is already active on repair order {1}. "
-				  "Verify the serial number before proceeding.").format(
-					serial, conflict[0]['parent']
-				),
-				title=_("Duplicate Serial Number"),
-			)
-
 	# Promised date must not be before the received date
 	received = doc_dict.get('received_date') or ''
 	promised = doc_dict.get('promised_delivery_date') or ''
