@@ -836,12 +836,21 @@ function buildFinancialHtml(data: DailyReportData): string {
     const fin = data.financial ?? { total_expenses: 0, expense_breakdown: [], expense_entries: [], repair_payment_breakdown: [] };
 
     const retailSales        = p.total_retail_sales ?? 0;
+    const b2bSales           = p.total_b2b_sales ?? 0;
     const repairRevenue      = r.revenue;
     const totalCollections   = fin.total_customer_collections ?? 0;
     const customerCollections = fin.pe_customer_collections ?? [];
     const returns_           = p.total_returns ?? 0;
-    const totalIncome        = retailSales + repairRevenue + totalCollections;
-    const totalOutflow       = fin.total_expenses;
+    // Unpaid (outstanding) portion of today's sales invoices — credit sales not yet
+    // collected; shown under "Credit Invoices", excluded from income.
+    const unpaidCreditSales  = fin.total_credit_sales ?? 0;
+    // KPI cards use EXTERNAL cash flow (GL totals minus internal cash↔cash transfers),
+    // falling back to document sums when GL data is unavailable. This keeps the cards,
+    // the breakdown subtotals and the Cash Flow table all on the same basis. docIncome
+    // is COLLECTED income: gross sales + repair + collections, less unpaid credit sales.
+    const docIncome          = retailSales + b2bSales + repairRevenue + totalCollections - returns_ - unpaidCreditSales;
+    const totalIncome        = fin.gl_external_cash_in  ?? docIncome;
+    const totalOutflow       = fin.gl_external_cash_out ?? (fin.total_expenses ?? 0);
     const net                = totalIncome - totalOutflow;
     const netClass           = net >= 0 ? 'text-green' : 'text-rose';
     const netLabel           = net >= 0 ? '▲ Positive day' : '▼ Negative day';
@@ -943,6 +952,63 @@ function buildFinancialHtml(data: DailyReportData): string {
             </tr></tfoot>
         </table>`;
 
+    // Cash & Bank — per-account GL breakdown (ground truth, matches the Day Report).
+    // Raw totals here INCLUDE internal transfers, so the footer uses the raw GL totals
+    // to reconcile with the per-account rows above.
+    const glAccountSummary: Array<{ account: string; total_debit: number; total_credit: number; net: number }> =
+        fin.gl_account_summary ?? [];
+    const glRawIn  = fin.gl_total_cash_in  ?? glAccountSummary.reduce((s, a) => s + a.total_debit, 0);
+    const glRawOut = fin.gl_total_cash_out ?? glAccountSummary.reduce((s, a) => s + a.total_credit, 0);
+    const glRawNet = glRawIn - glRawOut;
+    const glBreakdownHtml = glAccountSummary.length === 0 ? '' : `
+        <div class="card-full">
+            <div class="section-title">Cash &amp; Bank — GL Breakdown <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— matches Day Report</span></div>
+            <table>
+                <thead><tr>
+                    <th>Account</th>
+                    <th class="right">Cash In (Dr)</th>
+                    <th class="right">Cash Out (Cr)</th>
+                    <th class="right">Net</th>
+                </tr></thead>
+                <tbody>
+                    ${glAccountSummary.map(a => `<tr>
+                        <td>${a.account}</td>
+                        <td class="${a.total_debit  > 0 ? 'amount-green' : 'right'}">${a.total_debit  > 0 ? fmt(a.total_debit)  : '—'}</td>
+                        <td class="${a.total_credit > 0 ? 'amount-rose'  : 'right'}">${a.total_credit > 0 ? fmt(a.total_credit) : '—'}</td>
+                        <td class="${a.net >= 0 ? 'amount-green' : 'amount-rose'}">${a.net < 0 ? '−' : ''}${fmt(Math.abs(a.net))}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td>Total</td>
+                    <td class="amount-green">${fmt(glRawIn)}</td>
+                    <td class="amount-rose">${fmt(glRawOut)}</td>
+                    <td class="${glRawNet >= 0 ? 'amount-green' : 'amount-rose'}">${glRawNet < 0 ? '−' : ''}${fmt(Math.abs(glRawNet))}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
+    // Internal transfers (cash↔cash) — shown for audit, excluded from income/expense
+    const internalTransfers = fin.internal_transfers ?? [];
+    const internalTransfersHtml = internalTransfers.length === 0 ? '' : `
+        <div class="card-full">
+            <div class="section-title">Internal Transfers <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— excluded from income &amp; expense</span></div>
+            <table>
+                <thead><tr><th>Voucher</th><th>From</th><th>To</th><th class="right">Amount</th></tr></thead>
+                <tbody>
+                    ${internalTransfers.map((t: any) => `<tr>
+                        <td class="mono">${t.voucher}</td>
+                        <td>${t.from || '—'}</td>
+                        <td>${t.to || '—'}</td>
+                        <td class="amount" style="color:#6b7280">${fmt(Number(t.amount || 0))}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td colspan="3">Total Transferred</td>
+                    <td class="amount" style="color:#6b7280">${fmt(internalTransfers.reduce((s: number, t: any) => s + Number(t.amount || 0), 0))}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
     const peEntries = fin.pe_entries ?? [];
     const allEntriesRows = [
         ...peEntries.map((e: any) => ({
@@ -1029,9 +1095,12 @@ function buildFinancialHtml(data: DailyReportData): string {
                     <div class="stream-label-line"></div>
                 </div>
                 <div class="net-row"><span>Retail (POS)</span><span class="text-green">${fmt(retailSales)}</span></div>
+                ${b2bSales > 0 ? `<div class="net-row"><span>B2B sales</span><span class="text-green">${fmt(b2bSales)}</span></div>` : ''}
                 <div class="net-row"><span>Repair invoices</span><span class="text-green">${fmt(repairRevenue)}</span></div>
                 <div class="net-row"><span>Collection</span><span class="text-green">${fmt(totalCollections)}</span></div>
-                <div class="net-row"><span style="color:#9ca3af">Returns</span><span class="text-rose">− ${fmt(returns_)}</span></div>
+                ${returns_ > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns</span><span class="text-rose">− ${fmt(returns_)}</span></div>` : ''}
+                ${unpaidCreditSales > 0 ? `<div class="net-row"><span style="color:#9ca3af">Less: unpaid credit sales</span><span class="text-rose">− ${fmt(unpaidCreditSales)}</span></div>` : ''}
+                ${(returns_ > 0 || unpaidCreditSales > 0) ? `<div class="net-row subtotal"><span>Net collected income</span><span class="text-green">${fmt(totalIncome)}</span></div>` : ''}
                 <div class="stream-label" style="margin-top:14px">
                     <div class="stream-dot" style="background:#1a365d"></div>
                     <div class="stream-label-text" style="color:#1a365d">By payment mode</div>
@@ -1067,6 +1136,10 @@ function buildFinancialHtml(data: DailyReportData): string {
             <div class="section-title">Cash flow by payment mode</div>
             ${modeTableHtml}
         </div>
+
+        ${glBreakdownHtml}
+
+        ${internalTransfersHtml}
 
         ${allEntriesHtml}
 

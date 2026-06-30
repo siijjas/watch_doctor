@@ -2771,9 +2771,12 @@ def get_daily_report(report_date=None):
 	if payment_accounts:
 		pa_placeholders = ", ".join(["%s"] * len(payment_accounts))
 
-		# JE credits on cash/bank accounts = cash paid out (expenses)
-		# Use a subquery for against_account to avoid Cartesian product when a JE
-		# has multiple debit lines.
+		# JE credits on cash/bank accounts = cash paid out.
+		# A credit is only a genuine EXPENSE to the extent its offsetting DEBIT lines
+		# hit non-cash accounts. When the debit side is another cash/bank account the
+		# JE is a pure internal transfer (e.g. EOD float: Dr HO CASH / Cr AUB) and must
+		# NOT be counted as an expense. This mirrors the debit→income logic below, which
+		# already splits internal corrections from external receipts.
 		je_credit_rows = frappe.db.sql(
 			f"""SELECT
 				je.name,
@@ -2784,7 +2787,19 @@ def get_daily_report(report_date=None):
 				 FROM `tabJournal Entry Account` jea2
 				 WHERE jea2.parent = je.name
 				   AND jea2.debit_in_account_currency > 0
-				 LIMIT 1) AS debit_account
+				 LIMIT 1) AS debit_account,
+				(SELECT COALESCE(SUM(jea3.debit_in_account_currency), 0)
+				 FROM `tabJournal Entry Account` jea3
+				 WHERE jea3.parent = je.name
+				   AND jea3.debit_in_account_currency > 0
+				   AND jea3.account NOT IN ({pa_placeholders})
+				) AS external_debit_amount,
+				(SELECT COALESCE(SUM(jea4.debit_in_account_currency), 0)
+				 FROM `tabJournal Entry Account` jea4
+				 WHERE jea4.parent = je.name
+				   AND jea4.debit_in_account_currency > 0
+				   AND jea4.account IN ({pa_placeholders})
+				) AS internal_debit_amount
 			FROM `tabJournal Entry Account` jea
 			INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
 			WHERE je.docstatus = 1
@@ -2792,18 +2807,27 @@ def get_daily_report(report_date=None):
 				AND jea.account IN ({pa_placeholders})
 				AND jea.credit_in_account_currency > 0
 			ORDER BY je.creation ASC""",
-			tuple([report_date] + payment_accounts),
+			tuple(payment_accounts * 2 + [report_date] + payment_accounts),
 			as_dict=True
 		)
 		for row in je_credit_rows:
-			mode = account_to_mode.get(row["account"], row["account"])
-			je_detail_rows.append({
-				"name": row["name"],
-				"mode_of_payment": mode,
-				"against_account": row.get("debit_account") or "",
-				"amount": float(row["amount"] or 0),
-				"remarks": row.get("remarks") or "",
-			})
+			mode      = account_to_mode.get(row["account"], row["account"])
+			ext_dr    = float(row.get("external_debit_amount") or 0)
+			int_dr    = float(row.get("internal_debit_amount") or 0)
+			total_dr  = ext_dr + int_dr
+			# Fraction of this credit that funds a genuine (non-cash) expense account
+			ext_fraction = (ext_dr / total_dr) if total_dr > 0 else 0.0
+			amount       = float(row["amount"] or 0)
+			expense_amt  = amount * ext_fraction
+			# Pure internal transfers (ext_fraction == 0) contribute no expense
+			if expense_amt > 0:
+				je_detail_rows.append({
+					"name": row["name"],
+					"mode_of_payment": mode,
+					"against_account": row.get("debit_account") or "",
+					"amount": expense_amt,
+					"remarks": row.get("remarks") or "",
+				})
 		# Extend with je_detail_rows (has resolved mode_of_payment) NOT the raw SQL result
 		# (which only has `account`), otherwise expense_breakdown maps them all to "Other".
 		expense_entries.extend(je_detail_rows)
@@ -3109,6 +3133,91 @@ def get_daily_report(report_date=None):
 		key=lambda x: abs(x["total_debit"] + x["total_credit"]),
 		reverse=True,
 	)
+
+	# ---- INTERNAL TRANSFERS (cash ↔ cash) ----
+	# Vouchers that only move money between the shop's own cash/bank accounts are
+	# neither income nor expense (e.g. the EOD float: Dr HO CASH / Cr AUB, or the till
+	# being topped up from head-office cash). They show up in the raw GL totals on both
+	# sides and inflate them. We identify these so the KPI cards and the per-mode table
+	# reflect EXTERNAL cash flow only, while still surfacing the transfers for audit.
+	cash_bank_set = set(cash_bank_accounts)
+	transfer_mode_in:  dict = {}   # mode -> cash that entered it via a transfer
+	transfer_mode_out: dict = {}   # mode -> cash that left it via a transfer
+	internal_transfers = []
+	gl_transfer_total = 0.0
+	if cash_bank_set:
+		# JEs whose EVERY posting line hits a cash/bank account = pure internal transfer
+		_je_lines = frappe.db.sql(
+			"""SELECT jea.parent AS je, jea.account,
+				jea.debit_in_account_currency  AS dr,
+				jea.credit_in_account_currency AS cr
+			FROM `tabJournal Entry Account` jea
+			INNER JOIN `tabJournal Entry` je ON jea.parent = je.name
+			WHERE je.docstatus = 1 AND je.posting_date = %s""",
+			(report_date,), as_dict=True
+		)
+		_by_je: dict = {}
+		for _l in _je_lines:
+			_by_je.setdefault(_l["je"], []).append(_l)
+		for _je, _lines in _by_je.items():
+			if not _lines or not all(l["account"] in cash_bank_set for l in _lines):
+				continue
+			for _l in _lines:
+				_mode = account_to_mode.get(_l["account"], _l["account"])
+				_cr = float(_l["cr"] or 0)
+				_dr = float(_l["dr"] or 0)
+				if _cr > 0:
+					transfer_mode_out[_mode] = transfer_mode_out.get(_mode, 0.0) + _cr
+					gl_transfer_total += _cr
+				if _dr > 0:
+					transfer_mode_in[_mode] = transfer_mode_in.get(_mode, 0.0) + _dr
+			_outs = [l for l in _lines if float(l["cr"] or 0) > 0]
+			_ins  = [l for l in _lines if float(l["dr"] or 0) > 0]
+			internal_transfers.append({
+				"voucher": _je,
+				"from": ", ".join(account_to_mode.get(l["account"], l["account"]) for l in _outs),
+				"to":   ", ".join(account_to_mode.get(l["account"], l["account"]) for l in _ins),
+				"amount": sum(float(l["cr"] or 0) for l in _outs),
+			})
+		# Payment Entries explicitly typed as Internal Transfer between two cash/bank accts
+		_pe_xfers = frappe.db.sql(
+			"""SELECT name, paid_from, paid_to, paid_amount
+			FROM `tabPayment Entry`
+			WHERE docstatus = 1 AND posting_date = %s AND payment_type = 'Internal Transfer'""",
+			(report_date,), as_dict=True
+		)
+		for _t in _pe_xfers:
+			if _t["paid_from"] in cash_bank_set and _t["paid_to"] in cash_bank_set:
+				_om = account_to_mode.get(_t["paid_from"], _t["paid_from"])
+				_im = account_to_mode.get(_t["paid_to"], _t["paid_to"])
+				_amt = float(_t["paid_amount"] or 0)
+				transfer_mode_out[_om] = transfer_mode_out.get(_om, 0.0) + _amt
+				transfer_mode_in[_im]  = transfer_mode_in.get(_im, 0.0) + _amt
+				gl_transfer_total += _amt
+				internal_transfers.append({"voucher": _t["name"], "from": _om, "to": _im, "amount": _amt})
+
+	# External (non-transfer) cash flow — what the KPI cards should show
+	gl_external_cash_in  = gl_total_cash_in  - gl_transfer_total
+	gl_external_cash_out = gl_total_cash_out - gl_transfer_total
+
+	# Strip internal transfers out of the per-mode table so its gross totals stop
+	# inflating; drop any mode that becomes entirely a transfer (nothing external left).
+	_net_mode_summary = []
+	for _m in gl_mode_summary:
+		_md = _m["mode_of_payment"]
+		_d = _m["total_debit"]  - transfer_mode_in.get(_md, 0.0)
+		_c = _m["total_credit"] - transfer_mode_out.get(_md, 0.0)
+		_d = _d if _d > 0.0001 else 0.0
+		_c = _c if _c > 0.0001 else 0.0
+		if _d == 0.0 and _c == 0.0:
+			continue
+		_net_mode_summary.append({
+			"mode_of_payment": _md,
+			"total_debit": _d,
+			"total_credit": _c,
+			"net": _d - _c,
+		})
+	gl_mode_summary = _net_mode_summary
 
 	# Purchased items summary (for purchase-focused daily view)
 	items_purchased = frappe.db.sql("""
@@ -3448,6 +3557,13 @@ def get_daily_report(report_date=None):
 			"gl_total_cash_out":  gl_total_cash_out,
 			"gl_net_cash":        gl_total_cash_in - gl_total_cash_out,
 			"gl_account_summary": gl_account_summary,
+			# External cash flow = GL totals minus internal (cash↔cash) transfers.
+			# These drive the KPI cards so they reflect real income/expense, not float moves.
+			"gl_external_cash_in":  gl_external_cash_in,
+			"gl_external_cash_out": gl_external_cash_out,
+			"gl_external_net_cash": gl_external_cash_in - gl_external_cash_out,
+			"gl_transfer_total":    gl_transfer_total,
+			"internal_transfers":   internal_transfers,
 			# GL aggregated by payment mode — used for S5 per-mode table (covers all voucher types)
 			"gl_mode_summary":    gl_mode_summary,
 		}

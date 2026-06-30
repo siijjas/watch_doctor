@@ -154,8 +154,13 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const totalOtherReceipts = fin.total_other_receipts ?? 0;
 
     // ── GL ground-truth totals (same source as "Day Report") ────
+    // Raw = every cash/bank movement incl. internal transfers (drives the per-account table).
+    // External = raw minus internal cash↔cash transfers (drives the KPI cards).
     const glCashIn  = fin.gl_total_cash_in  ?? null;
     const glCashOut = fin.gl_total_cash_out ?? null;
+    const glExtIn   = fin.gl_external_cash_in  ?? glCashIn;
+    const glExtOut  = fin.gl_external_cash_out ?? glCashOut;
+    const internalTransfers = fin.internal_transfers ?? [];
     const glAccountSummary = fin.gl_account_summary ?? [];
     // GL per-mode summary — covers ALL voucher types (PE Internal Transfer, SI returns, etc.)
     const glModeSummary = fin.gl_mode_summary ?? [];
@@ -164,7 +169,12 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const repairRevenue   = repair.revenue;
     // Include B2B (non-POS) sales alongside retail, then deduct returns
     const salesRevenue    = pos.total_retail_sales + pos.total_b2b_sales - pos.total_returns;
-    const totalIncome     = repairRevenue + salesRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts;
+    // Unpaid (outstanding) portion of today's sales invoices — credit sales not yet
+    // collected. These are shown under "Credit Invoices" and must NOT count as income.
+    const unpaidCreditSales = fin.total_credit_sales ?? 0;
+    // Total Income is COLLECTED income: gross sales + repair + collections + receipts,
+    // minus the still-outstanding credit-sale portion.
+    const totalIncome     = repairRevenue + salesRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales;
 
     const pePurchases         = fin.pe_purchases         ?? [];
     const paidPurchaseInvoices = fin.paid_purchase_invoices ?? [];
@@ -184,10 +194,11 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const purchaseTotal      = totalPePurchases + totalPaidPurchases;
     const otherExpensesTotal = totalPeOperating + jeTotal;
 
-    // KPI cards use GL totals when available (exact match with "Day Report");
+    // KPI cards use EXTERNAL GL totals (internal cash↔cash transfers removed) so the
+    // headline income/expense reflects real business activity, not float movements;
     // fall back to doc-based sums only when GL data is absent.
-    const kpiIncome  = glCashIn  ?? totalIncome;
-    const kpiOutflow = glCashOut ?? (purchaseTotal + otherExpensesTotal);
+    const kpiIncome  = glExtIn  ?? totalIncome;
+    const kpiOutflow = glExtOut ?? (purchaseTotal + otherExpensesTotal);
     const balance    = kpiIncome - kpiOutflow;
     // Keep totalOutflow for internal breakdown consistency
     const totalOutflow = purchaseTotal + otherExpensesTotal;
@@ -294,8 +305,11 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             {pos.total_returns > 0 && (
                                 <Row label="Returns" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(pos.total_returns)}</span>} />
                             )}
+                            {unpaidCreditSales > 0 && (
+                                <Row label="Less: Unpaid Credit Sales" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(unpaidCreditSales)}</span>} />
+                            )}
                             <div className="border-t border-gray-100 dark:border-gray-700 pt-1">
-                                <Row label="Net Sales" value={formatCurrency(pos.net_sales + repairRevenue + totalCollections)} />
+                                <Row label="Net Collected Income" value={formatCurrency(totalIncome)} />
                             </div>
                             {incomeModeBreakdown.length > 0 && (
                                 <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
@@ -585,13 +599,55 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                 ))}
                             </tbody>
                             <tfoot>
+                                {/* Raw GL totals (incl. internal transfers) so the footer matches the per-account rows above */}
                                 <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
                                     <td className="pt-2.5 text-sm text-gray-700 dark:text-gray-300">Total</td>
-                                    <td className="pt-2.5 text-right text-sm text-emerald-600 dark:text-emerald-400">{formatCurrency(kpiIncome)}</td>
-                                    <td className="pt-2.5 text-right text-sm text-rose-600 dark:text-rose-400">{formatCurrency(kpiOutflow)}</td>
-                                    <td className={`pt-2.5 text-right text-sm font-bold ${balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                                        {balance < 0 ? '−' : ''}{formatCurrency(Math.abs(balance))}
+                                    <td className="pt-2.5 text-right text-sm text-emerald-600 dark:text-emerald-400">{formatCurrency(glCashIn ?? 0)}</td>
+                                    <td className="pt-2.5 text-right text-sm text-rose-600 dark:text-rose-400">{formatCurrency(glCashOut ?? 0)}</td>
+                                    <td className={`pt-2.5 text-right text-sm font-bold ${((glCashIn ?? 0) - (glCashOut ?? 0)) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                        {((glCashIn ?? 0) - (glCashOut ?? 0)) < 0 ? '−' : ''}{formatCurrency(Math.abs((glCashIn ?? 0) - (glCashOut ?? 0)))}
                                     </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* ══════════════════════════════════════════
+                S5c — Internal Transfers (cash ↔ cash, excluded from income/expense)
+            ══════════════════════════════════════════ */}
+            {internalTransfers.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                    <SectionTitle>
+                        <CurrencyIcon className="text-gray-400" />
+                        Internal Transfers
+                        <span className="ml-2 text-xs font-normal text-gray-400">(excluded from income &amp; expense)</span>
+                    </SectionTitle>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
+                                    <th className="text-left pb-2 pr-3">Voucher</th>
+                                    <th className="text-left pb-2 pr-3">From</th>
+                                    <th className="text-left pb-2 pr-3">To</th>
+                                    <th className="text-right pb-2">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50 dark:divide-gray-700">
+                                {internalTransfers.map((t, idx) => (
+                                    <tr key={idx}>
+                                        <td className="py-2.5 pr-3 font-mono text-xs text-gray-500 dark:text-gray-400">{t.voucher}</td>
+                                        <td className="py-2.5 pr-3 text-gray-700 dark:text-gray-300">{t.from || '—'}</td>
+                                        <td className="py-2.5 pr-3 text-gray-700 dark:text-gray-300">{t.to || '—'}</td>
+                                        <td className="py-2.5 text-right font-medium text-gray-500 dark:text-gray-400">{formatCurrency(t.amount)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                            <tfoot>
+                                <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
+                                    <td colSpan={3} className="pt-2.5 text-sm text-gray-700 dark:text-gray-300">Total Transferred</td>
+                                    <td className="pt-2.5 text-right text-sm text-gray-500 dark:text-gray-400">{formatCurrency(internalTransfers.reduce((s, t) => s + t.amount, 0))}</td>
                                 </tr>
                             </tfoot>
                         </table>
