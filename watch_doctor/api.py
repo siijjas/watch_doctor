@@ -2924,14 +2924,21 @@ def get_daily_report(report_date=None):
 	# without a separate Payment Entry — must be fetched here so they're included in
 	# expense_breakdown (→ Cash Flow by Payment Mode) and paid_purchases_by_mode.
 	paid_purchase_invoices = frappe.db.sql("""
-		SELECT pi.name, pi.supplier, pi.grand_total,
+		SELECT pi.name, pi.supplier, pi.grand_total, pi.paid_amount,
 			COALESCE(pi.supplier_name, '') AS supplier_name,
 			COALESCE(pi.cash_bank_account, '') AS cash_bank_account
 		FROM `tabPurchase Invoice` pi
 		WHERE pi.docstatus = 1 AND pi.posting_date = %s AND pi.is_paid = 1
 		ORDER BY pi.grand_total DESC
 	""", (report_date,), as_dict=True)
-	total_paid_purchases = sum(float(inv["grand_total"] or 0) for inv in paid_purchase_invoices)
+	# Cash outflow for a paid invoice is the amount actually disbursed (paid_amount),
+	# NOT the invoice face value — these differ when part of the bill is settled by an
+	# advance or write-off (e.g. a 700 invoice with 650 paid in cash). Fall back to
+	# grand_total when paid_amount is not set.
+	for inv in paid_purchase_invoices:
+		pa = inv.get("paid_amount")
+		inv["cash_paid"] = float(pa if pa not in (None, 0) else (inv.get("grand_total") or 0))
+	total_paid_purchases = sum(inv["cash_paid"] for inv in paid_purchase_invoices)
 
 	def _account_to_payment_mode(acct):
 		"""Resolve a GL cash/bank account name to its payment mode label.
@@ -2944,7 +2951,7 @@ def get_daily_report(report_date=None):
 		mode = _account_to_payment_mode(inv.get("cash_bank_account") or "")
 		if mode not in paid_purchases_mode_map:
 			paid_purchases_mode_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
-		paid_purchases_mode_map[mode]["total"] += float(inv.get("grand_total") or 0)
+		paid_purchases_mode_map[mode]["total"] += inv["cash_paid"]
 		paid_purchases_mode_map[mode]["count"] += 1
 	paid_purchases_by_mode = sorted(paid_purchases_mode_map.values(), key=lambda x: x["total"], reverse=True)
 
@@ -2960,7 +2967,7 @@ def get_daily_report(report_date=None):
 		mode = _account_to_payment_mode(inv.get("cash_bank_account") or "")
 		if mode not in mode_expense_map:
 			mode_expense_map[mode] = {"mode_of_payment": mode, "total": 0.0, "count": 0}
-		mode_expense_map[mode]["total"] += float(inv.get("grand_total") or 0)
+		mode_expense_map[mode]["total"] += inv["cash_paid"]
 		mode_expense_map[mode]["count"] += 1
 
 	expense_breakdown = sorted(mode_expense_map.values(), key=lambda x: x["total"], reverse=True)
@@ -3077,11 +3084,18 @@ def get_daily_report(report_date=None):
 	# ---- GL-BASED CASH POSITION (ground truth — same source as the "Day Report") ----
 	# Query all leaf cash/bank accounts for the company, then sum their GL movements.
 	# This captures every voucher type (PE, JE, PI, SI, POS) without reconstruction bugs.
+	# We also UNION in every Mode of Payment account: such an account is a cash/settlement
+	# account by definition, so it must be in the cash position even if its account_type
+	# field was left blank (otherwise that payment mode's cash flow goes uncounted).
 	cash_bank_accounts = frappe.db.sql("""
 		SELECT name FROM `tabAccount`
-		WHERE account_type IN ('Cash', 'Bank')
-		  AND is_group = 0
+		WHERE is_group = 0
 		  AND company = %s
+		  AND (account_type IN ('Cash', 'Bank') OR name IN (
+		        SELECT mopa.default_account
+		        FROM `tabMode of Payment Account` mopa
+		        WHERE mopa.default_account IS NOT NULL AND mopa.default_account != ''
+		  ))
 	""", (default_company,), pluck="name")
 
 	gl_total_cash_in  = 0.0
@@ -3438,7 +3452,7 @@ def get_daily_report(report_date=None):
 		purchase_entries.append({
 			"id": inv.get("name"),
 			"party_name": inv.get("supplier_name") or inv.get("supplier") or "",
-			"amount": float(inv.get("grand_total") or 0),
+			"amount": inv.get("cash_paid", float(inv.get("grand_total") or 0)),
 			"payment_status": "Paid",
 			"payment_mode": inv.get("cash_bank_account") or "Cash",
 			"source": "Purchase Invoice",

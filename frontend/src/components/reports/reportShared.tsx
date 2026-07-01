@@ -202,7 +202,7 @@ export interface FinancialReportData {
     total_credit_sales?: number;
     credit_purchase_invoices?: CreditInvoice[];
     total_credit_purchases?: number;
-    paid_purchase_invoices?: Array<{ name: string; supplier: string; supplier_name: string; grand_total: number; cash_bank_account: string }>;
+    paid_purchase_invoices?: Array<{ name: string; supplier: string; supplier_name: string; grand_total: number; paid_amount?: number; cash_paid?: number; cash_bank_account: string }>;
     total_paid_purchases?: number;
     paid_purchases_by_mode?: PeModeBreakdown[];
     items_purchased?: ItemSold[];

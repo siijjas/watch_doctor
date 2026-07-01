@@ -894,9 +894,11 @@ function buildFinancialHtml(data: DailyReportData): string {
         ...pePurchases.map((pu: any) =>
             `<div class="net-row"><span>${pu.party_name || pu.party || '—'}</span><span class="text-rose">${fmt(pu.amount)}</span></div>`
         ),
-        ...paidPurchaseInvoices.map((inv: any) =>
-            `<div class="net-row"><span>${inv.supplier_name || inv.supplier || '—'} <span style="color:#9ca3af;font-size:10px" class="mono">${inv.name}</span></span><span class="text-rose">${fmt(inv.grand_total)}</span></div>`
-        ),
+        ...paidPurchaseInvoices.map((inv: any) => {
+            const paid = inv.cash_paid ?? inv.grand_total;
+            const partial = paid < inv.grand_total ? ` <span style="color:#9ca3af;font-size:10px">of ${fmt(inv.grand_total)}</span>` : '';
+            return `<div class="net-row"><span>${inv.supplier_name || inv.supplier || '—'} <span style="color:#9ca3af;font-size:10px" class="mono">${inv.name}</span></span><span class="text-rose">${fmt(paid)}${partial}</span></div>`;
+        }),
     ].join('');
     const purchaseRowsHtml = allPurchaseRowsHtml || `<p class="empty" style="padding:6px 0">No purchase entries</p>`;
 

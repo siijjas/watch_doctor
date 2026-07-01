@@ -462,7 +462,12 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                                                 <span className="text-gray-700 dark:text-gray-300 truncate">{inv.supplier_name || inv.supplier || '\u2014'}</span>
                                                                 <span className="text-xs text-gray-400 font-mono">{inv.name}</span>
                                                             </div>
-                                                            <span className="font-semibold text-rose-600 dark:text-rose-400">{formatCurrency(inv.grand_total)}</span>
+                                                            <span className="font-semibold text-rose-600 dark:text-rose-400">
+                                                                {formatCurrency(inv.cash_paid ?? inv.grand_total)}
+                                                                {(inv.cash_paid ?? inv.grand_total) < inv.grand_total && (
+                                                                    <span className="ml-1 text-xs font-normal text-gray-400">of {formatCurrency(inv.grand_total)}</span>
+                                                                )}
+                                                            </span>
                                                         </div>
                                                     ))}
                                                 </div>
