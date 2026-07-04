@@ -1284,20 +1284,20 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     }
   };
 
-  const handleSubmit = async () => {
-    if (!confirm('Submit this repair order? This will mark it as Delivered and make it read-only.')) {
+  const handleCloseWithoutInvoice = async () => {
+    if (!confirm('Close this order and return the watch(es) to the customer without repair? No invoice will be created.')) {
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await apiService.submitRepairOrder(order.name);
-      alert('Repair order submitted successfully!');
+      await apiService.closeOrderWithoutInvoice(order.name);
+      alert('Repair order closed successfully!');
       if (onRefresh) {
         await onRefresh(order.name);
       }
     } catch (error: any) {
-      alert(`Failed to submit: ${error.message || error}`);
+      alert(`Failed to close order: ${error.message || error}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -1475,6 +1475,15 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   };
   const canManageWorkflowStatus = hasRole('executive', 'data_entry');
 
+  // Some watches may be returned to the customer without repair (declined quotation,
+  // or not repairable). Those never need an invoice — the order can be closed directly
+  // once every watch is either invoiced/delivered or resolved this way.
+  const noInvoiceNeededStatuses = ['Delivered', 'Not Repairable', 'Declined'];
+  const canCloseWithoutInvoice = order.docstatus === 0
+    && (order.items || []).length > 0
+    && (order.items || []).every(i => noInvoiceNeededStatuses.includes(i.status))
+    && (order.items || []).some(i => i.status === 'Not Repairable' || i.status === 'Declined');
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -1534,6 +1543,13 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               icon: '💰',
               onClick: () => setCreateInvoiceModalOpen(true),
               hidden: !(order.docstatus === 0 && (order.items || []).some(i => i.status === 'Completed')),
+            },
+            {
+              label: 'Close Order (Returned Without Repair)',
+              icon: '↩️',
+              onClick: handleCloseWithoutInvoice,
+              hidden: !canCloseWithoutInvoice,
+              disabled: isSubmitting,
             },
             // View actions
             {

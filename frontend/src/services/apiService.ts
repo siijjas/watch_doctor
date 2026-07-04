@@ -587,19 +587,6 @@ export const deleteRepairOrder = (name: string): Promise<any> => {
     });
 };
 
-export const submitRepairOrder = async (name: string): Promise<void> => {
-    // First, get the latest version of the document
-    const doc = await getDoc('DW Repair Order', name);
-
-    // Then submit it with the latest modified timestamp
-    await apiFetch('/api/method/frappe.client.submit', {
-        method: 'POST',
-        body: JSON.stringify({
-            doc: JSON.stringify(doc)
-        }),
-    });
-};
-
 export const cancelRepairOrder = async (name: string): Promise<void> => {
     await apiFetch('/api/method/frappe.client.cancel', {
         method: 'POST',
@@ -1010,6 +997,16 @@ export const finalizeInvoice = async (
             discount: discount,
             payment_mode: paymentMode,
             mark_as_delivered: markAsDelivered
+        }),
+    });
+    return res.message;
+};
+
+export const closeOrderWithoutInvoice = async (repairOrderName: string): Promise<{ success: boolean }> => {
+    const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.close_repair_order_without_invoice', {
+        method: 'POST',
+        body: JSON.stringify({
+            repair_order_name: repairOrderName
         }),
     });
     return res.message;

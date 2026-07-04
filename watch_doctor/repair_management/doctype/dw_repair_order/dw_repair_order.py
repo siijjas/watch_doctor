@@ -262,17 +262,29 @@ class DWRepairOrder(Document):
 	
 	def before_submit(self):
 		"""Validate before submitting the order."""
-		# Check all items are Completed or Delivered
+		# Check all items are resolved: either repaired (Completed/Delivered) or
+		# returned to the customer without repair (Not Repairable/Declined).
+		resolved_statuses = [
+			WATCH_STATUS_COMPLETED,
+			WATCH_STATUS_DELIVERED,
+			WATCH_STATUS_NOT_REPAIRABLE,
+			WATCH_STATUS_DECLINED,
+		]
 		for item in self.items:
-			if normalize_repair_item_status(item.status) not in [WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED]:
+			if normalize_repair_item_status(item.status) not in resolved_statuses:
 				frappe.throw(
-					_("Cannot submit: Item '{0}' is still in '{1}' status. All items must be Completed or Delivered.").format(
+					_("Cannot submit: Item '{0}' is still in '{1}' status. All items must be Completed, Delivered, Not Repairable, or Declined.").format(
 						f"{item.watch_brand} {item.watch_model}", item.status
 					)
 				)
-		
-		# Check invoice exists
-		if not self.sales_invoice:
+
+		# An invoice is only required if at least one watch was actually repaired/billable.
+		# Watches returned without repair (Not Repairable/Declined) never need an invoice.
+		has_billable_item = any(
+			normalize_repair_item_status(item.status) in (WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED)
+			for item in self.items
+		)
+		if has_billable_item and not self.sales_invoice:
 			frappe.throw(_("Cannot submit: A Sales Invoice must be created before delivering the order."))
 	
 	def on_submit(self):
@@ -318,19 +330,24 @@ class DWRepairOrder(Document):
 			return "Pending"
 
 		item_statuses = [normalize_repair_item_status(status) for status in item_statuses]
-		
+
+		# Watches returned to the customer without repair are just as "resolved" as
+		# completed/delivered ones — they don't need an invoice to close the order.
+		returned_without_repair = {WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED}
+		resolved_statuses = {WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED} | returned_without_repair
+
 		# All items Delivered → Delivered (but this requires submit)
 		if all(s == WATCH_STATUS_DELIVERED for s in item_statuses):
 			return "Repaired"  # Will become Delivered on submit
-		
-		# All items Completed/Delivered → Repaired
-		if all(s in {WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED} for s in item_statuses):
+
+		# All items resolved (Completed/Delivered/Not Repairable/Declined) → Repaired
+		if all(s in resolved_statuses for s in item_statuses):
 			return "Repaired"
 
 		# If any watch is awaiting estimate approval, bubble the order to Create Estimate.
 		if any(s == WATCH_STATUS_APPROVAL_FOR_ESTIMATE for s in item_statuses):
 			return WATCH_STATUS_APPROVAL_FOR_ESTIMATE
-		
+
 		# Any active item beyond intake/diagnosis → In Progress
 		if any(s in {
 			WATCH_STATUS_UNDER_DIAGNOSIS,
@@ -338,9 +355,9 @@ class DWRepairOrder(Document):
 			WATCH_STATUS_QUOTED,
 			WATCH_STATUS_IN_REPAIR,
 			WATCH_STATUS_COMPLETED,
-		} for s in item_statuses):
+		} | returned_without_repair for s in item_statuses):
 			return "In Progress"
-		
+
 		# Otherwise Pending
 		return "Pending"
 	
@@ -492,11 +509,18 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 			part_rate = flt(part.rate) if part.rate else flt(frappe.db.get_value("Item", part.part, "standard_rate") or 0)
 			customer_total += flt(part.quantity) * part_rate
 
+		# A Declined watch (customer rejected the quotation) is not being charged for —
+		# zero it out so re-quoting the rest of the order doesn't carry its old estimate.
+		is_declined = normalize_repair_item_status(item.status) == WATCH_STATUS_DECLINED
+		if is_declined:
+			customer_total = 0
+
 		# Visible service line: full customer price (tasks + parts markup).
 		quotation_item = quotation.append("items", {})
 		quotation_item.item_code = service_item_code
 		quotation_item.item_name = watch_item_name
-		quotation_item.description = desc_lines or watch_item_name
+		quotation_item.description = (_("{0} (Declined — No Charge)").format(desc_lines or watch_item_name)
+			if is_declined else (desc_lines or watch_item_name))
 		quotation_item.qty = 1
 		quotation_item.rate = customer_total
 		quotation_item.uom = "Nos"
@@ -1063,19 +1087,27 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 		except Exception:
 			covered_item_names = None
 
-	# Mark covered items as Delivered regardless of mark_as_delivered flag
+	# Mark covered items as Delivered regardless of mark_as_delivered flag.
+	# Skip watches already resolved as Not Repairable/Declined — those were only
+	# swept into "covered_items" because it defaults to every watch on the order,
+	# not because this invoice actually billed them, so their status must stay intact.
 	if covered_item_names:
 		for item in repair_order.items:
-			if item.name in covered_item_names:
+			if item.name in covered_item_names and normalize_repair_item_status(item.status) not in (
+				WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED
+			):
 				frappe.db.set_value('DW Repair Item', item.name, 'status', 'Delivered', update_modified=False)
 
 	# Mark as delivered if requested
 	if mark_as_delivered:
 		repair_order.reload()
-		# Only submit (full Frappe docsubmit) when every item has been invoiced+delivered.
+		# Only submit (full Frappe docsubmit) when every item has been invoiced+delivered,
+		# or was returned to the customer without repair (Not Repairable/Declined).
 		# "Completed" means repair is done but not yet invoiced — do not submit early.
 		all_done = all(
-			normalize_repair_item_status(item.status) == WATCH_STATUS_DELIVERED
+			normalize_repair_item_status(item.status) in (
+				WATCH_STATUS_DELIVERED, WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED
+			)
 			for item in repair_order.items
 		)
 		if all_done:
@@ -1099,3 +1131,53 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 		"payment_mode": payment_mode,
 		"order_delivered": mark_as_delivered
 	}
+
+
+@frappe.whitelist()
+def close_repair_order_without_invoice(repair_order_name):
+	"""
+	Close a repair order where no invoice is needed — every watch is either
+	already invoiced/delivered, or is being handed back to the customer without
+	repair (Not Repairable, or the customer declined the quotation).
+
+	This replaces the old workaround of creating a zero-amount Sales Invoice
+	just to satisfy the "invoice required before delivery" rule.
+
+	Args:
+		repair_order_name: Name of the repair order
+
+	Returns:
+		Dictionary with success status
+	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
+	repair_order.flags.ignore_permissions = True
+
+	if repair_order.docstatus != 0:
+		frappe.throw(_("Repair order {0} is already {1}.").format(repair_order_name, repair_order.status))
+
+	no_invoice_needed_statuses = {WATCH_STATUS_DELIVERED, WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED}
+	unresolved = [
+		item for item in repair_order.items
+		if normalize_repair_item_status(item.status) not in no_invoice_needed_statuses
+	]
+	if unresolved:
+		frappe.throw(
+			_("Cannot close order: {0} still need an invoice or a final diagnosis (Not Repairable/Declined).").format(
+				", ".join(f"{item.watch_brand} {item.watch_model}" for item in unresolved)
+			)
+		)
+
+	if not any(
+		normalize_repair_item_status(item.status) in (WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED)
+		for item in repair_order.items
+	):
+		frappe.throw(_("This action is only needed when a watch is being returned without repair."))
+
+	repair_order.submit()
+	frappe.db.commit()
+
+	frappe.msgprint(_("Repair order closed — watch(es) returned to customer without repair."))
+
+	return {"success": True}
