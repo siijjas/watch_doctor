@@ -1029,15 +1029,6 @@ def save_repair_order(doc_json):
 	for item in doc.items:
 		frappe.logger().info(f"After save: item {item.idx} status={item.status}, technician={item.technician}")
 
-	# Auto-fire WhatsApp notification when order enters "Create Estimate" status.
-	# Wrapped in try/except so a WhatsApp misconfiguration never blocks a save.
-	try:
-		if doc.status == WATCH_STATUS_APPROVAL_FOR_ESTIMATE and frappe.conf.get("whatsapp_enabled"):
-			from watch_doctor.whatsapp.api import notify_customer
-			notify_customer(doc.name)
-	except Exception:
-		frappe.log_error(frappe.get_traceback(), "Auto-notify Create Estimate failed (non-blocking)")
-
 	return doc.as_dict()
 
 
