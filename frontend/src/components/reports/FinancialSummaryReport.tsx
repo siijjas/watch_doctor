@@ -172,9 +172,14 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     // Unpaid (outstanding) portion of today's sales invoices — credit sales not yet
     // collected. These are shown under "Credit Invoices" and must NOT count as income.
     const unpaidCreditSales = fin.total_credit_sales ?? 0;
-    // Total Income is COLLECTED income: gross sales + repair + collections + receipts,
-    // minus the still-outstanding credit-sale portion.
-    const totalIncome     = repairRevenue + salesRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales;
+    // Total Income is COLLECTED income: gross sales + collections + receipts, minus the
+    // still-outstanding credit-sale portion.
+    // NOTE: repairRevenue is deliberately NOT added here. A repair invoice IS a Sales
+    // Invoice, so it is already inside pos.total_retail_sales / total_b2b_sales (i.e. in
+    // salesRevenue). Adding repairRevenue again would double-count it. It is displayed
+    // below for information only. Because it flows through salesRevenue, its unpaid
+    // portion is also correctly netted out by unpaidCreditSales.
+    const totalIncome     = salesRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales;
 
     const pePurchases         = fin.pe_purchases         ?? [];
     const paidPurchaseInvoices = fin.paid_purchase_invoices ?? [];
@@ -294,7 +299,9 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             {pos.total_b2b_sales > 0 && (
                                 <Row label="B2B Sales" value={formatCurrency(pos.total_b2b_sales)} />
                             )}
-                            <Row label="Repair Invoices" value={formatCurrency(repairRevenue)} />
+                            {repairRevenue > 0 && (
+                                <Row label="Repair Invoices (incl. in sales above)" value={formatCurrency(repairRevenue)} muted />
+                            )}
                             <Row label="Collections" value={formatCurrency(totalCollections)} muted={totalCollections === 0} />
                             {jeReceiptTotal > 0 && (
                                 <Row label="JE Receipts" value={formatCurrency(jeReceiptTotal)} />

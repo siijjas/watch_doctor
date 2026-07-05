@@ -3026,12 +3026,19 @@ def get_daily_report(report_date=None):
 		if p.get("party_type") == "Customer":
 			# Check if this PE references a Sales Invoice
 			refs = frappe.db.sql("""
-				SELECT reference_doctype, reference_name, allocated_amount
-				FROM `tabPayment Entry Reference`
-				WHERE parent = %s AND reference_doctype = 'Sales Invoice'
+				SELECT per.reference_name, per.allocated_amount, si.posting_date
+				FROM `tabPayment Entry Reference` per INNER JOIN `tabSales Invoice` si ON si.name = per.reference_name
+				WHERE per.parent = %s AND per.reference_doctype = 'Sales Invoice'
 			""", (p["name"],), as_dict=True)
 			if refs:
 				for ref in refs:
+					# Skip settlements of invoices posted on the report date itself: the paid
+					# portion of today's invoices is already captured by the sales figure
+					# (grand_total − outstanding), so counting the same-day payment here as a
+					# "collection" would double-count it. Only prior-day receivable collections
+					# are genuine new income.
+					if ref["posting_date"] and frappe.utils.getdate(ref["posting_date"]) >= frappe.utils.getdate(report_date):
+						continue
 					pe_customer_collections.append({
 						"pe_name": p["name"],
 						"customer": p.get("party") or "",

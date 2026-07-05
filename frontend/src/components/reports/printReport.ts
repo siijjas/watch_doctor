@@ -847,8 +847,11 @@ function buildFinancialHtml(data: DailyReportData): string {
     // KPI cards use EXTERNAL cash flow (GL totals minus internal cash↔cash transfers),
     // falling back to document sums when GL data is unavailable. This keeps the cards,
     // the breakdown subtotals and the Cash Flow table all on the same basis. docIncome
-    // is COLLECTED income: gross sales + repair + collections, less unpaid credit sales.
-    const docIncome          = retailSales + b2bSales + repairRevenue + totalCollections - returns_ - unpaidCreditSales;
+    // is COLLECTED income: gross sales + collections, less returns and unpaid credit sales.
+    // repairRevenue is deliberately excluded: a repair invoice IS a Sales Invoice, so it is
+    // already inside retailSales / b2bSales. Adding it again would double-count it (it is
+    // shown as an informational sub-line in the breakdown below).
+    const docIncome          = retailSales + b2bSales + totalCollections - returns_ - unpaidCreditSales;
     const totalIncome        = fin.gl_external_cash_in  ?? docIncome;
     const totalOutflow       = fin.gl_external_cash_out ?? (fin.total_expenses ?? 0);
     const net                = totalIncome - totalOutflow;
@@ -1098,7 +1101,7 @@ function buildFinancialHtml(data: DailyReportData): string {
                 </div>
                 <div class="net-row"><span>Retail (POS)</span><span class="text-green">${fmt(retailSales)}</span></div>
                 ${b2bSales > 0 ? `<div class="net-row"><span>B2B sales</span><span class="text-green">${fmt(b2bSales)}</span></div>` : ''}
-                <div class="net-row"><span>Repair invoices</span><span class="text-green">${fmt(repairRevenue)}</span></div>
+                ${repairRevenue > 0 ? `<div class="net-row"><span style="color:#9ca3af">Repair invoices (incl. in sales above)</span><span style="color:#9ca3af">${fmt(repairRevenue)}</span></div>` : ''}
                 <div class="net-row"><span>Collection</span><span class="text-green">${fmt(totalCollections)}</span></div>
                 ${returns_ > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns</span><span class="text-rose">− ${fmt(returns_)}</span></div>` : ''}
                 ${unpaidCreditSales > 0 ? `<div class="net-row"><span style="color:#9ca3af">Less: unpaid credit sales</span><span class="text-rose">− ${fmt(unpaidCreditSales)}</span></div>` : ''}
