@@ -3266,7 +3266,73 @@ def get_daily_report(report_date=None):
 	total_b2b_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 0 and inv["is_return"] == 0)
 	total_returns = sum(abs(inv["grand_total"]) for inv in all_sales_invoices if inv["is_return"] == 1)
 	net_sales = (total_retail_sales + total_b2b_sales) - total_returns
-	
+
+	# Only the portion of a return actually refunded in cash should reduce collected
+	# income; a credit note with no cash paid back (store credit, unsettled B2B
+	# adjustment) has zero GL cash impact. Read this straight from the GL (credits on a
+	# cash/bank account posted against the return voucher) rather than inferring it from
+	# grand_total/outstanding_amount, so it is denominated in exactly the same figures
+	# used below to adjust gl_external_cash_in/out — guaranteeing "Net Collected Income"
+	# and the "Cash In" KPI reconcile exactly instead of merely being close.
+	return_invoice_names = [inv["name"] for inv in all_sales_invoices if inv["is_return"] == 1]
+	return_invoice_customers = {inv["name"]: (inv.get("customer_name") or inv.get("customer") or "") for inv in all_sales_invoices}
+	cash_refunded_returns = 0.0
+	cash_refunded_by_mode: dict = {}
+	customer_refunds = []  # visible list, like internal_transfers: one row per refund voucher/mode
+	if return_invoice_names and cash_bank_set:
+		ri_ph = ", ".join(["%s"] * len(return_invoice_names))
+		refund_gl_rows = frappe.db.sql(
+			f"""SELECT gle.voucher_no, gle.account, SUM(gle.credit) AS amount
+			FROM `tabGL Entry` gle
+			WHERE gle.voucher_no IN ({ri_ph})
+				AND gle.docstatus = 1
+				AND gle.is_cancelled = 0
+				AND gle.account IN ({cb_ph})
+			GROUP BY gle.voucher_no, gle.account
+			ORDER BY gle.voucher_no""",
+			tuple(return_invoice_names + list(cash_bank_accounts)),
+			as_dict=True,
+		)
+		for row in refund_gl_rows:
+			amt = float(row.get("amount") or 0)
+			if amt <= 0:
+				continue
+			mode = account_to_mode.get(row["account"], row["account"])
+			cash_refunded_by_mode[mode] = cash_refunded_by_mode.get(mode, 0.0) + amt
+			cash_refunded_returns += amt
+			customer_refunds.append({
+				"voucher": row["voucher_no"],
+				"customer": return_invoice_customers.get(row["voucher_no"], ""),
+				"mode_of_payment": mode,
+				"amount": amt,
+			})
+	non_cash_returns = total_returns - cash_refunded_returns
+
+	# Customer refunds are a return of previously collected income, not a new business
+	# expense — net them out of both sides of the external GL totals (same treatment as
+	# internal transfers above) so the KPI cards and per-mode table stay in the same
+	# "external, collected-income" basis as the doc-based Total Income calc.
+	gl_external_cash_in  -= cash_refunded_returns
+	gl_external_cash_out -= cash_refunded_returns
+	if cash_refunded_by_mode:
+		_refund_adjusted_mode_summary = []
+		for _m in gl_mode_summary:
+			_md = _m["mode_of_payment"]
+			_refund = cash_refunded_by_mode.get(_md, 0.0)
+			_c = _m["total_credit"] - _refund
+			_c = _c if _c > 0.0001 else 0.0
+			_d = _m["total_debit"] - _refund
+			_d = _d if _d > 0.0001 else 0.0
+			if _d == 0.0 and _c == 0.0:
+				continue
+			_refund_adjusted_mode_summary.append({
+				"mode_of_payment": _md,
+				"total_debit": _d,
+				"total_credit": _c,
+				"net": _d - _c,
+			})
+		gl_mode_summary = _refund_adjusted_mode_summary
+
 	transaction_count = len([inv for inv in all_sales_invoices if inv["is_return"] == 0])
 	sales_inv_names = [inv["name"] for inv in all_sales_invoices]
 
@@ -3499,6 +3565,8 @@ def get_daily_report(report_date=None):
 			"total_retail_sales": total_retail_sales,
 			"total_b2b_sales": total_b2b_sales,
 			"total_returns": total_returns,
+			"cash_refunded_returns": cash_refunded_returns,
+			"non_cash_returns": non_cash_returns,
 			"net_sales": net_sales,
 			"transaction_count": transaction_count,
 			"payment_breakdown": payment_breakdown,
@@ -3576,6 +3644,12 @@ def get_daily_report(report_date=None):
 			"gl_external_net_cash": gl_external_cash_in - gl_external_cash_out,
 			"gl_transfer_total":    gl_transfer_total,
 			"internal_transfers":   internal_transfers,
+			# Customer cash refunds — netted out of gl_external_cash_in/out above (same
+			# treatment as internal transfers: not new income, not a business expense) but
+			# surfaced here for visibility, same pattern as the Internal Transfers table.
+			"cash_refunded_returns": cash_refunded_returns,
+			"non_cash_returns":      non_cash_returns,
+			"customer_refunds":      customer_refunds,
 			# GL aggregated by payment mode — used for S5 per-mode table (covers all voucher types)
 			"gl_mode_summary":    gl_mode_summary,
 		}

@@ -8,9 +8,17 @@ import RepairSummaryReport from './reports/RepairSummaryReport';
 import SalesSummaryReport from './reports/SalesSummaryReport';
 import FinancialSummaryReport from './reports/FinancialSummaryReport';
 import ProfitSummaryReport from './reports/ProfitSummaryReport';
-import { printReport } from './reports/printReport';
+import { printReport, printMonthlyExecutiveReport, printMonthlySalesReport, printMonthlyFinancialReport } from './reports/printReport';
+import MonthlyExecutiveSummaryReport from './reports/MonthlyExecutiveSummaryReport';
+import MonthlySalesPurchaseReport from './reports/MonthlySalesPurchaseReport';
+import MonthlySalesReport from './reports/MonthlySalesReport';
+import MonthlyFinancialReport from './reports/MonthlyFinancialReport';
+import { currentMonthISO, formatMonthLabel, monthEnd, monthStart } from './reports/monthlyReportShared';
+import type { MonthlyExecutiveSummaryData, MonthlySalesPurchaseSummaryData, MonthlySalesReportData, MonthlyFinancialReportData } from './reports/monthlyReportShared';
 
 type ReportTab = 'repair' | 'sales' | 'financial' | 'profit';
+type PeriodMode = 'daily' | 'monthly';
+type MonthlyTab = 'exec' | 'salespurchase' | 'salesreport' | 'financial';
 
 const TABS: { id: ReportTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -52,6 +60,45 @@ const TABS: { id: ReportTab; label: string; icon: React.ReactNode }[] = [
     },
 ];
 
+const MONTHLY_TABS: { id: MonthlyTab; label: string; icon: React.ReactNode }[] = [
+    {
+        id: 'exec',
+        label: 'Executive Summary',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+        ),
+    },
+    {
+        id: 'salespurchase',
+        label: 'Sales & Purchase',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'salesreport',
+        label: 'Sales Report',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'financial',
+        label: 'Financial Summary',
+        icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+        ),
+    },
+];
+
 interface DailyReportProps {
     onSelectOrder?: (orderId: string) => void;
 }
@@ -59,12 +106,22 @@ interface DailyReportProps {
 const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
     const { hasRole } = useAuth();
     const isExecutive = hasRole('executive');
+    const [periodMode, setPeriodMode] = useState<PeriodMode>('daily');
     const [activeTab, setActiveTab] = useState<ReportTab>('repair');
     const [reportDate, setReportDate] = useState(todayISO());
     const [data, setData] = useState<DailyReportData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const { config } = useAppConfig();
+
+    const [activeMonthlyTab, setActiveMonthlyTab] = useState<MonthlyTab>('exec');
+    const [reportMonth, setReportMonth] = useState(currentMonthISO());
+    const [monthlyExecData, setMonthlyExecData] = useState<MonthlyExecutiveSummaryData | null>(null);
+    const [monthlySalesPurchaseData, setMonthlySalesPurchaseData] = useState<MonthlySalesPurchaseSummaryData | null>(null);
+    const [monthlySalesReportData, setMonthlySalesReportData] = useState<MonthlySalesReportData | null>(null);
+    const [monthlyFinancialData, setMonthlyFinancialData] = useState<MonthlyFinancialReportData | null>(null);
+    const [isMonthlyLoading, setIsMonthlyLoading] = useState(false);
+    const [monthlyError, setMonthlyError] = useState<string | null>(null);
 
     const loadReport = useCallback(async (date: string) => {
         if (!isErpNext) {
@@ -92,11 +149,58 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
         }
     }, []);
 
+    const loadMonthlyReport = useCallback(async (month: string, tab: MonthlyTab) => {
+        if (!isErpNext) {
+            setMonthlyError('Reports are only available in production (ERPNext).');
+            return;
+        }
+        const method = tab === 'exec'
+            ? 'watch_doctor.monthly_executive_report.get_monthly_executive_summary'
+            : tab === 'salespurchase'
+            ? 'watch_doctor.monthly_sales_purchase_report.get_monthly_sales_purchase_summary'
+            : tab === 'salesreport'
+            ? 'watch_doctor.monthly_sales_report.get_monthly_sales_report'
+            : 'watch_doctor.monthly_financial_report.get_monthly_financial_report';
+        setIsMonthlyLoading(true);
+        setMonthlyError(null);
+        try {
+            const res = await fetch(`/api/method/${method}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Frappe-CSRF-Token': (window as any).csrf_token || '',
+                },
+                body: JSON.stringify({ from_date: monthStart(month), to_date: monthEnd(month) }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            if (tab === 'exec') setMonthlyExecData(json.message);
+            else if (tab === 'salespurchase') setMonthlySalesPurchaseData(json.message);
+            else if (tab === 'salesreport') setMonthlySalesReportData(json.message);
+            else setMonthlyFinancialData(json.message);
+        } catch (e: any) {
+            setMonthlyError(e.message || 'Failed to load report');
+        } finally {
+            setIsMonthlyLoading(false);
+        }
+    }, []);
+
     useEffect(() => {
-        loadReport(reportDate);
-    }, [reportDate, loadReport]);
+        if (periodMode === 'daily') loadReport(reportDate);
+    }, [periodMode, reportDate, loadReport]);
+
+    useEffect(() => {
+        if (periodMode === 'monthly') loadMonthlyReport(reportMonth, activeMonthlyTab);
+    }, [periodMode, reportMonth, activeMonthlyTab, loadMonthlyReport]);
 
     const visibleTabs = TABS.filter(tab => (tab.id === 'profit' ? isExecutive : true));
+    const monthlyData = activeMonthlyTab === 'exec'
+        ? monthlyExecData
+        : activeMonthlyTab === 'salespurchase'
+        ? monthlySalesPurchaseData
+        : activeMonthlyTab === 'salesreport'
+        ? monthlySalesReportData
+        : monthlyFinancialData;
 
     return (
         <div className="space-y-6 print:space-y-4">
@@ -104,63 +208,142 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 print:hidden">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Reports</h1>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Daily performance overview</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                        {periodMode === 'daily' ? 'Daily performance overview' : 'Monthly performance overview'}
+                    </p>
                 </div>
                 <div className="flex items-center gap-3">
-                    <input
-                        type="date"
-                        value={reportDate}
-                        onChange={e => setReportDate(e.target.value)}
-                        max={todayISO()}
-                        className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
+                    {isExecutive && (
+                        <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                            {(['daily', 'monthly'] as PeriodMode[]).map(mode => (
+                                <button
+                                    key={mode}
+                                    onClick={() => setPeriodMode(mode)}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium capitalize transition-colors ${
+                                        periodMode === mode
+                                            ? 'bg-white dark:bg-gray-700 text-purple-700 dark:text-purple-300 shadow-sm'
+                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                                    }`}
+                                >
+                                    {mode}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {periodMode === 'daily' ? (
+                        <input
+                            type="date"
+                            value={reportDate}
+                            onChange={e => setReportDate(e.target.value)}
+                            max={todayISO()}
+                            className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                    ) : (
+                        <input
+                            type="month"
+                            value={reportMonth}
+                            onChange={e => setReportMonth(e.target.value)}
+                            max={currentMonthISO()}
+                            className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                    )}
                     <button
-                        onClick={() => loadReport(reportDate)}
-                        disabled={isLoading}
+                        onClick={() => periodMode === 'daily' ? loadReport(reportDate) : loadMonthlyReport(reportMonth, activeMonthlyTab)}
+                        disabled={periodMode === 'daily' ? isLoading : isMonthlyLoading}
                         className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white rounded-lg text-sm font-medium transition-colors"
                     >
-                        {isLoading ? 'Loading…' : 'Refresh'}
+                        {(periodMode === 'daily' ? isLoading : isMonthlyLoading) ? 'Loading…' : 'Refresh'}
                     </button>
-                    <button
-                        onClick={() => data && printReport(activeTab, data, { logoUrl: config.logoUrl, currencySymbol: config.currencySymbol, decimalPlaces: config.decimalPlaces })}
-                        disabled={!data}
-                        className="px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-40"
-                    >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                        </svg>
-                        Print
-                    </button>
+                    {periodMode === 'daily' ? (
+                        <button
+                            onClick={() => data && printReport(activeTab, data, { logoUrl: config.logoUrl, currencySymbol: config.currencySymbol, decimalPlaces: config.decimalPlaces })}
+                            disabled={!data}
+                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-40"
+                        >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                            </svg>
+                            Print
+                        </button>
+                    ) : (
+                        <button
+                            onClick={() => {
+                                if (activeMonthlyTab === 'exec' && monthlyExecData) {
+                                    printMonthlyExecutiveReport(monthlyExecData, formatMonthLabel(reportMonth), {
+                                        logoUrl: config.logoUrl,
+                                        currencySymbol: config.currencySymbol,
+                                        decimalPlaces: config.decimalPlaces,
+                                    });
+                                } else if (activeMonthlyTab === 'salesreport' && monthlySalesReportData) {
+                                    printMonthlySalesReport(monthlySalesReportData, formatMonthLabel(reportMonth), {
+                                        logoUrl: config.logoUrl,
+                                        currencySymbol: config.currencySymbol,
+                                        decimalPlaces: config.decimalPlaces,
+                                    });
+                                } else if (activeMonthlyTab === 'financial' && monthlyFinancialData) {
+                                    printMonthlyFinancialReport(monthlyFinancialData, formatMonthLabel(reportMonth), {
+                                        logoUrl: config.logoUrl,
+                                        currencySymbol: config.currencySymbol,
+                                        decimalPlaces: config.decimalPlaces,
+                                    });
+                                } else {
+                                    window.print();
+                                }
+                            }}
+                            disabled={!monthlyData}
+                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-40"
+                        >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                            </svg>
+                            Print
+                        </button>
+                    )}
                 </div>
             </div>
 
             {/* Tab Bar */}
             <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 w-fit print:hidden">
-                {visibleTabs.map(tab => (
-                    <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                            activeTab === tab.id
-                                ? 'bg-white dark:bg-gray-700 text-purple-700 dark:text-purple-300 shadow-sm'
-                                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                        }`}
-                    >
-                        {tab.icon}
-                        {tab.label}
-                    </button>
-                ))}
+                {periodMode === 'daily'
+                    ? visibleTabs.map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                                activeTab === tab.id
+                                    ? 'bg-white dark:bg-gray-700 text-purple-700 dark:text-purple-300 shadow-sm'
+                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                            }`}
+                        >
+                            {tab.icon}
+                            {tab.label}
+                        </button>
+                    ))
+                    : MONTHLY_TABS.map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveMonthlyTab(tab.id)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                                activeMonthlyTab === tab.id
+                                    ? 'bg-white dark:bg-gray-700 text-purple-700 dark:text-purple-300 shadow-sm'
+                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                            }`}
+                        >
+                            {tab.icon}
+                            {tab.label}
+                        </button>
+                    ))}
             </div>
 
             {/* Error */}
-            {error && (
+            {(periodMode === 'daily' ? error : monthlyError) && (
                 <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 text-red-700 dark:text-red-300 text-sm">
-                    {error}
+                    {periodMode === 'daily' ? error : monthlyError}
                 </div>
             )}
 
             {/* Loading skeleton */}
-            {isLoading && (
+            {(periodMode === 'daily' ? isLoading : isMonthlyLoading) && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     {[...Array(8)].map((_, i) => (
                         <div key={i} className="h-24 bg-gray-100 dark:bg-gray-800 rounded-2xl animate-pulse" />
@@ -169,7 +352,7 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
             )}
 
             {/* Report Body */}
-            {!isLoading && data && (
+            {periodMode === 'daily' && !isLoading && data && (
                 <>
                     {activeTab === 'repair' && (
                         <RepairSummaryReport data={data.repair} onSelectOrder={onSelectOrder} />
@@ -182,6 +365,23 @@ const DailyReport: React.FC<DailyReportProps> = ({ onSelectOrder }) => {
                     )}
                     {activeTab === 'profit' && isExecutive && (
                         <ProfitSummaryReport repair={data.repair} pos={data.pos} financial={data.financial} />
+                    )}
+                </>
+            )}
+
+            {periodMode === 'monthly' && !isMonthlyLoading && (
+                <>
+                    {activeMonthlyTab === 'exec' && monthlyExecData && (
+                        <MonthlyExecutiveSummaryReport data={monthlyExecData} monthLabel={formatMonthLabel(reportMonth)} />
+                    )}
+                    {activeMonthlyTab === 'salespurchase' && monthlySalesPurchaseData && (
+                        <MonthlySalesPurchaseReport data={monthlySalesPurchaseData} monthLabel={formatMonthLabel(reportMonth)} />
+                    )}
+                    {activeMonthlyTab === 'salesreport' && monthlySalesReportData && (
+                        <MonthlySalesReport data={monthlySalesReportData} monthLabel={formatMonthLabel(reportMonth)} />
+                    )}
+                    {activeMonthlyTab === 'financial' && monthlyFinancialData && (
+                        <MonthlyFinancialReport data={monthlyFinancialData} monthLabel={formatMonthLabel(reportMonth)} />
                     )}
                 </>
             )}

@@ -1,4 +1,5 @@
 import type { DailyReportData } from './reportShared';
+import type { MonthlyExecutiveSummaryData, MonthlySalesReportData, MonthlyFinancialReportData } from './monthlyReportShared';
 
 // These are set once per print call via printReport()
 let _currencySymbol = '$';
@@ -841,17 +842,23 @@ function buildFinancialHtml(data: DailyReportData): string {
     const totalCollections   = fin.total_customer_collections ?? 0;
     const customerCollections = fin.pe_customer_collections ?? [];
     const returns_           = p.total_returns ?? 0;
+    // Only the cash-refunded portion of a return should reduce collected income; a
+    // credit note with no cash paid back has zero GL cash impact (falls back to
+    // returns_ for older payloads that don't yet split the two out).
+    const cashRefundedReturns = p.cash_refunded_returns ?? returns_;
+    const nonCashReturns      = p.non_cash_returns ?? 0;
     // Unpaid (outstanding) portion of today's sales invoices — credit sales not yet
     // collected; shown under "Credit Invoices", excluded from income.
     const unpaidCreditSales  = fin.total_credit_sales ?? 0;
     // KPI cards use EXTERNAL cash flow (GL totals minus internal cash↔cash transfers),
     // falling back to document sums when GL data is unavailable. This keeps the cards,
     // the breakdown subtotals and the Cash Flow table all on the same basis. docIncome
-    // is COLLECTED income: gross sales + collections, less returns and unpaid credit sales.
-    // repairRevenue is deliberately excluded: a repair invoice IS a Sales Invoice, so it is
-    // already inside retailSales / b2bSales. Adding it again would double-count it (it is
-    // shown as an informational sub-line in the breakdown below).
-    const docIncome          = retailSales + b2bSales + totalCollections - returns_ - unpaidCreditSales;
+    // is COLLECTED income: gross sales + collections, less cash-refunded returns and
+    // unpaid credit sales. repairRevenue MUST be included: the backend excludes Repair
+    // Order-linked invoices from retailSales/b2bSales (see get_daily_report's
+    // all_sales_invoices query, filtered by `ro.name IS NULL`), so it is never already
+    // inside those totals.
+    const docIncome          = retailSales + b2bSales + repairRevenue + totalCollections - cashRefundedReturns - unpaidCreditSales;
     const totalIncome        = fin.gl_external_cash_in  ?? docIncome;
     const totalOutflow       = fin.gl_external_cash_out ?? (fin.total_expenses ?? 0);
     const net                = totalIncome - totalOutflow;
@@ -1014,6 +1021,28 @@ function buildFinancialHtml(data: DailyReportData): string {
             </table>
         </div>`;
 
+    // Customer refunds — netted against collections, shown for audit like internal transfers
+    const customerRefunds = fin.customer_refunds ?? [];
+    const customerRefundsHtml = customerRefunds.length === 0 ? '' : `
+        <div class="card-full">
+            <div class="section-title">Customer Refunds <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— netted against collections, excluded from income &amp; expense</span></div>
+            <table>
+                <thead><tr><th>Invoice</th><th>Customer</th><th>Mode</th><th class="right">Amount</th></tr></thead>
+                <tbody>
+                    ${customerRefunds.map((r: any) => `<tr>
+                        <td class="mono">${r.voucher}</td>
+                        <td>${r.customer || '—'}</td>
+                        <td>${r.mode_of_payment || '—'}</td>
+                        <td class="amount" style="color:#6b7280">${fmt(Number(r.amount || 0))}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td colspan="3">Total Refunded</td>
+                    <td class="amount" style="color:#6b7280">${fmt(customerRefunds.reduce((s: number, r: any) => s + Number(r.amount || 0), 0))}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
     const peEntries = fin.pe_entries ?? [];
     const allEntriesRows = [
         ...peEntries.map((e: any) => ({
@@ -1101,11 +1130,12 @@ function buildFinancialHtml(data: DailyReportData): string {
                 </div>
                 <div class="net-row"><span>Retail (POS)</span><span class="text-green">${fmt(retailSales)}</span></div>
                 ${b2bSales > 0 ? `<div class="net-row"><span>B2B sales</span><span class="text-green">${fmt(b2bSales)}</span></div>` : ''}
-                ${repairRevenue > 0 ? `<div class="net-row"><span style="color:#9ca3af">Repair invoices (incl. in sales above)</span><span style="color:#9ca3af">${fmt(repairRevenue)}</span></div>` : ''}
+                ${repairRevenue > 0 ? `<div class="net-row"><span>Repair invoices</span><span class="text-green">${fmt(repairRevenue)}</span></div>` : ''}
                 <div class="net-row"><span>Collection</span><span class="text-green">${fmt(totalCollections)}</span></div>
-                ${returns_ > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns</span><span class="text-rose">− ${fmt(returns_)}</span></div>` : ''}
+                ${cashRefundedReturns > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns (refunded)</span><span class="text-rose">− ${fmt(cashRefundedReturns)}</span></div>` : ''}
+                ${nonCashReturns > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns (store credit, no cash impact)</span><span style="color:#9ca3af">${fmt(nonCashReturns)}</span></div>` : ''}
                 ${unpaidCreditSales > 0 ? `<div class="net-row"><span style="color:#9ca3af">Less: unpaid credit sales</span><span class="text-rose">− ${fmt(unpaidCreditSales)}</span></div>` : ''}
-                ${(returns_ > 0 || unpaidCreditSales > 0) ? `<div class="net-row subtotal"><span>Net collected income</span><span class="text-green">${fmt(totalIncome)}</span></div>` : ''}
+                ${(cashRefundedReturns > 0 || unpaidCreditSales > 0) ? `<div class="net-row subtotal"><span>Net collected income</span><span class="text-green">${fmt(totalIncome)}</span></div>` : ''}
                 <div class="stream-label" style="margin-top:14px">
                     <div class="stream-dot" style="background:#1a365d"></div>
                     <div class="stream-label-text" style="color:#1a365d">By payment mode</div>
@@ -1145,6 +1175,8 @@ function buildFinancialHtml(data: DailyReportData): string {
         ${glBreakdownHtml}
 
         ${internalTransfersHtml}
+
+        ${customerRefundsHtml}
 
         ${allEntriesHtml}
 
@@ -1223,6 +1255,696 @@ function buildProfitHtml(data: DailyReportData): string {
         <div class="rpt-footer">
             WatchDoc · Confidential · For internal use only
         </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MONTHLY EXECUTIVE SUMMARY
+// ─────────────────────────────────────────────────────────────────────────────
+function monthlyHeader(title: string, monthLabel: string): string {
+    const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    const logoHtml = _logoUrl
+        ? `<img src="${_logoUrl}" alt="Logo" style="max-height:44px;max-width:180px;object-fit:contain;" />`
+        : `<div class="rpt-logo-icon">⌚</div><div class="rpt-logo-name">WatchDoc</div>`;
+    return `
+    <div class="rpt-header">
+        <div class="rpt-logo">${logoHtml}</div>
+        <div class="rpt-meta">
+            <div class="rpt-title">${title}</div>
+            <div class="rpt-date">${monthLabel}</div>
+            <div class="rpt-printed">Printed: ${now}</div>
+        </div>
+    </div>`;
+}
+
+const monthlyPctChange = (curVal: number, prevVal: number) => (prevVal ? ((curVal - prevVal) / Math.abs(prevVal)) * 100 : null);
+
+function monthlyDeltaColorHex(deltaPct: number | null, higherIsBetter: boolean = true): string {
+    if (deltaPct === null || deltaPct === 0) return '#9ca3af';
+    const improved = higherIsBetter ? deltaPct > 0 : deltaPct < 0;
+    return improved ? '#059669' : '#f43f5e';
+}
+
+function monthlyFormatDeltaPct(deltaPct: number | null): string {
+    if (deltaPct === null) return '—';
+    const sign = deltaPct > 0 ? '+' : '';
+    return `${sign}${deltaPct.toFixed(1)}%`;
+}
+
+function buildMonthlyExecutiveHtml(data: MonthlyExecutiveSummaryData, monthLabel: string): string {
+    const { current, previous, comparison } = data;
+    const byMetric = (metric: string) => comparison.find(c => c.metric === metric);
+    const netRevenueChange = byMetric('net_revenue');
+    const grossProfitChange = byMetric('gross_profit');
+    const opexChange = byMetric('operating_expenses_total');
+    const netProfitChange = byMetric('net_profit');
+
+    const revenueRows: { label: string; current: number; previous: number }[] = [
+        { label: 'Repair Revenue', current: current.repair_revenue_gross, previous: previous.repair_revenue_gross },
+        { label: 'Retail Sales', current: current.retail_sales_gross, previous: previous.retail_sales_gross },
+        { label: 'B2B Sales', current: current.b2b_sales_gross, previous: previous.b2b_sales_gross },
+        { label: 'Less: Returns', current: -current.returns_gross, previous: -previous.returns_gross },
+    ];
+
+    const revenueRowsHtml = revenueRows.map(row => {
+        const pct = monthlyPctChange(row.current, row.previous);
+        return `<tr>
+            <td>${row.label}</td>
+            <td class="amount">${fmt(row.current)}</td>
+            <td class="right" style="color:#9ca3af">${fmt(row.previous)}</td>
+            <td class="right" style="color:${monthlyDeltaColorHex(pct)};font-weight:600">${monthlyFormatDeltaPct(pct)}</td>
+        </tr>`;
+    }).join('');
+
+    // Merge current + previous expense-by-account so an account that disappeared
+    // (or is brand new) still shows up with a zero side — same logic as the on-screen view.
+    const expenseAccounts = new Map<string, { account: string; current: number; previous: number }>();
+    for (const row of current.expense_by_account) {
+        expenseAccounts.set(row.account, { account: row.account, current: row.total, previous: 0 });
+    }
+    for (const row of previous.expense_by_account) {
+        const existing = expenseAccounts.get(row.account);
+        if (existing) existing.previous = row.total;
+        else expenseAccounts.set(row.account, { account: row.account, current: 0, previous: row.total });
+    }
+    const expenseRows = Array.from(expenseAccounts.values()).sort((a, b) => b.current - a.current);
+
+    const expenseSectionHtml = expenseRows.length === 0
+        ? `<p class="empty">No operating expenses recorded for this month</p>`
+        : `<table>
+            <thead><tr>
+                <th>Account</th><th class="right">This Month</th><th class="right">Last Month</th><th class="right">Change</th>
+            </tr></thead>
+            <tbody>
+                ${expenseRows.map(row => {
+                    const pct = monthlyPctChange(row.current, row.previous);
+                    return `<tr>
+                        <td>${row.account}</td>
+                        <td class="amount">${fmt(row.current)}</td>
+                        <td class="right" style="color:#9ca3af">${fmt(row.previous)}</td>
+                        <td class="right" style="color:${monthlyDeltaColorHex(pct, false)};font-weight:600">${monthlyFormatDeltaPct(pct)}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+            <tfoot><tr class="total-row">
+                <td>Total Operating Expenses</td>
+                <td class="amount">${fmt(current.operating_expenses_total)}</td>
+                <td class="right" style="color:#9ca3af">${fmt(previous.operating_expenses_total)}</td>
+                <td class="right" style="color:${monthlyDeltaColorHex(opexChange?.delta_pct ?? null, false)}">${monthlyFormatDeltaPct(opexChange?.delta_pct ?? null)}</td>
+            </tr></tfoot>
+        </table>`;
+
+    const itemGroupSectionHtml = current.item_group_breakdown.length === 0
+        ? `<p class="empty">No item sales recorded for this month</p>`
+        : `<table>
+            <thead><tr>
+                <th>Item Group</th><th class="right">Qty</th><th class="right">Sales</th><th class="right">COGS</th><th class="right">Gross Profit</th>
+            </tr></thead>
+            <tbody>
+                ${current.item_group_breakdown.map(row => `<tr>
+                    <td>${row.item_group}</td>
+                    <td class="right">${row.qty_sold.toFixed(2)}</td>
+                    <td class="amount">${fmt(row.sales_amount)}</td>
+                    <td class="right" style="color:#9ca3af">${fmt(row.cogs_amount)}</td>
+                    <td class="${row.gross_profit >= 0 ? 'amount-green' : 'amount-rose'}">${fmt(row.gross_profit)}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
+
+    return `
+        ${monthlyHeader('Monthly Executive Summary', monthLabel)}
+
+        <div class="stats stats-4">
+            <div class="stat stat-blue">
+                <div class="stat-label">Total Revenue (incl. VAT)</div>
+                <div class="stat-value">${fmt(current.gross_revenue)}</div>
+                <div class="stat-sub" style="color:${monthlyDeltaColorHex(netRevenueChange?.delta_pct ?? null)}">${monthlyFormatDeltaPct(netRevenueChange?.delta_pct ?? null)} vs. last month</div>
+            </div>
+            <div class="stat stat-green">
+                <div class="stat-label">Gross Profit (${current.gross_margin_pct.toFixed(1)}%)</div>
+                <div class="stat-value text-green">${fmt(current.gross_profit)}</div>
+                <div class="stat-sub" style="color:${monthlyDeltaColorHex(grossProfitChange?.delta_pct ?? null)}">${monthlyFormatDeltaPct(grossProfitChange?.delta_pct ?? null)} vs. last month</div>
+            </div>
+            <div class="stat stat-rose">
+                <div class="stat-label">Operating Expenses</div>
+                <div class="stat-value text-rose">${fmt(current.operating_expenses_total)}</div>
+                <div class="stat-sub" style="color:${monthlyDeltaColorHex(opexChange?.delta_pct ?? null, false)}">${monthlyFormatDeltaPct(opexChange?.delta_pct ?? null)} vs. last month</div>
+            </div>
+            <div class="stat stat-teal">
+                <div class="stat-label">Net Profit (${current.net_margin_pct.toFixed(1)}%)</div>
+                <div class="stat-value" style="color:#0d9488">${fmt(current.net_profit)}</div>
+                <div class="stat-sub" style="color:${monthlyDeltaColorHex(netProfitChange?.delta_pct ?? null)}">${monthlyFormatDeltaPct(netProfitChange?.delta_pct ?? null)} vs. last month</div>
+            </div>
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Revenue</div>
+            <table>
+                <thead><tr>
+                    <th>Stream</th><th class="right">This Month</th><th class="right">Last Month</th><th class="right">Change</th>
+                </tr></thead>
+                <tbody>
+                    ${revenueRowsHtml}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td>Total Revenue (incl. VAT)</td>
+                    <td class="amount">${fmt(current.gross_revenue)}</td>
+                    <td class="right" style="color:#9ca3af">${fmt(previous.gross_revenue)}</td>
+                    <td class="right" style="color:${monthlyDeltaColorHex(netRevenueChange?.delta_pct ?? null)}">${monthlyFormatDeltaPct(netRevenueChange?.delta_pct ?? null)}</td>
+                </tr></tfoot>
+            </table>
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Operating Expenses by Account</div>
+            ${expenseSectionHtml}
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Item Group Profitability (This Month)</div>
+            ${itemGroupSectionHtml}
+        </div>
+
+        <div class="rpt-footer">
+            WatchDoc &middot; Confidential &middot; For internal use only
+        </div>`;
+}
+
+export function printMonthlyExecutiveReport(
+    data: MonthlyExecutiveSummaryData,
+    monthLabel: string,
+    options?: { logoUrl?: string; currencySymbol?: string; decimalPlaces?: number }
+): void {
+    _logoUrl        = options?.logoUrl        ?? '';
+    _currencySymbol = options?.currencySymbol ?? '$';
+    _decimalPlaces  = typeof options?.decimalPlaces === 'number' ? options.decimalPlaces : 2;
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) return;
+
+    win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WatchDoc — Monthly Executive Summary</title>
+    <style>${BASE_STYLES}</style>
+</head>
+<body>
+    ${buildMonthlyExecutiveHtml(data, monthLabel)}
+    <script>
+        window.onload = function() {
+            window.print();
+            window.onafterprint = function() { window.close(); };
+        };
+    <\/script>
+</body>
+</html>`);
+    win.document.close();
+}
+
+function buildMonthlySalesHtml(data: MonthlySalesReportData, monthLabel: string): string {
+    const grossSales = data.total_retail_sales + data.total_b2b_sales;
+    const avgOrder = data.transaction_count > 0 ? data.net_sales / data.transaction_count : 0;
+    const purchaseTotal = data.total_pe_purchases + data.total_paid_purchases;
+    const totalPurchaseExposure = purchaseTotal + data.total_unpaid_purchases;
+    const netPosition = data.net_sales - totalPurchaseExposure;
+
+    const purchasesByModeMap = new Map<string, { mode_of_payment: string; total: number; count: number }>();
+    [...data.pe_purchases_by_mode, ...data.paid_purchases_by_mode].forEach(pm => {
+        const existing = purchasesByModeMap.get(pm.mode_of_payment);
+        if (existing) { existing.total += pm.total; existing.count += pm.count; }
+        else purchasesByModeMap.set(pm.mode_of_payment, { ...pm });
+    });
+    const combinedPurchasesByMode = Array.from(purchasesByModeMap.values()).sort((a, b) => b.total - a.total);
+
+    const categorySection = data.category_breakdown.length === 0
+        ? `<p class="empty">No category data</p>`
+        : data.category_breakdown.map(cat => {
+            const pct = data.net_sales > 0 ? Math.max(0, Math.round((cat.total_amount / data.net_sales) * 100)) : 0;
+            return `<div class="bar-row">
+                <div class="bar-meta">
+                    <span style="font-weight:600">${cat.item_group}</span>
+                    <span style="font-weight:600">${fmt(cat.total_amount)} <span style="color:#9ca3af;font-weight:400">${pct}%</span></span>
+                </div>
+                <div class="bar-track"><div class="bar-fill bar-fill-navy" style="width:${pct}%"></div></div>
+            </div>`;
+        }).join('');
+
+    const cashierSection = data.cashier_breakdown.length === 0
+        ? `<p class="empty">No cashier data</p>`
+        : data.cashier_breakdown.map((c, i) => {
+            const pct = data.net_sales > 0 ? Math.round((c.total / data.net_sales) * 100) : 0;
+            const col = CASHIER_COLORS[i % CASHIER_COLORS.length];
+            const initials = c.owner.split(/[\s@]/)[0].charAt(0).toUpperCase() +
+                             (c.owner.split(/[\s@]/)[1]?.charAt(0).toUpperCase() ?? '');
+            return `<div class="cashier-row">
+                <div class="cashier-avatar" style="background:${col.bg};color:${col.text}">${initials}</div>
+                <div class="cashier-info">
+                    <div class="cashier-name">${c.owner} <span style="color:#9ca3af;font-weight:400;font-size:10px">${c.count} txn${c.count !== 1 ? 's' : ''}</span></div>
+                    <div class="cashier-bar-track">
+                        <div class="cashier-bar-fill" style="background:${col.bar};width:${pct}%"></div>
+                    </div>
+                </div>
+                <div class="cashier-total" style="color:${col.bar}">
+                    ${fmt(c.total)}<br>
+                    <span style="font-size:10px;color:#9ca3af;font-weight:400">${pct}%</span>
+                </div>
+            </div>`;
+        }).join('');
+
+    const paymentSection = data.payment_breakdown.length === 0
+        ? `<p class="empty">No payments recorded</p>`
+        : data.payment_breakdown.map(pm => {
+            const pct = grossSales > 0 ? Math.round((pm.total / grossSales) * 100) : 0;
+            return `<div class="bar-row">
+                <div class="bar-meta">
+                    <span>${pm.mode_of_payment} <span style="color:#9ca3af;font-size:10px">(${pm.txn_count} txn${pm.txn_count !== 1 ? 's' : ''})</span></span>
+                    <span style="font-weight:600">${fmt(pm.total)} <span style="color:#9ca3af;font-weight:400">${pct}%</span></span>
+                </div>
+                <div class="bar-track"><div class="bar-fill bar-fill-teal" style="width:${pct}%"></div></div>
+            </div>`;
+        }).join('');
+
+    const purchaseModeSection = combinedPurchasesByMode.length === 0
+        ? `<p class="empty">No paid purchases this month</p>`
+        : combinedPurchasesByMode.map(pm => {
+            const pct = purchaseTotal > 0 ? Math.round((pm.total / purchaseTotal) * 100) : 0;
+            return `<div class="bar-row">
+                <div class="bar-meta">
+                    <span>${pm.mode_of_payment} <span style="color:#9ca3af;font-size:10px">(${pm.count} txn${pm.count !== 1 ? 's' : ''})</span></span>
+                    <span style="font-weight:600">${fmt(pm.total)} <span style="color:#9ca3af;font-weight:400">${pct}%</span></span>
+                </div>
+                <div class="bar-track"><div class="bar-fill bar-fill-purple" style="width:${pct}%"></div></div>
+            </div>`;
+        }).join('') + (combinedPurchasesByMode.length > 0 ? `
+        <div style="border-top:1px solid #e5e7eb;padding-top:8px;margin-top:6px;display:flex;justify-content:space-between;font-size:12px">
+            <span style="color:#6b7280">Total Paid</span>
+            <span style="font-weight:700">${fmt(purchaseTotal)}</span>
+        </div>` : '');
+
+    const topSalesInvoicesHtml = data.top_sales_invoices.length === 0
+        ? `<p class="empty">No sales invoices this month</p>`
+        : `<table>
+            <thead><tr><th>Invoice</th><th>Customer</th><th>Status</th><th>Mode</th><th class="right">Amount</th></tr></thead>
+            <tbody>
+                ${data.top_sales_invoices.map(inv => `<tr>
+                    <td class="mono">${inv.name}</td>
+                    <td>${inv.party_name || '—'}</td>
+                    <td>${paymentStatusBadge(inv.payment_status)}</td>
+                    <td>${inv.payment_mode || '—'}</td>
+                    <td class="${amountClass(inv.payment_status)}">${fmt(inv.amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
+
+    const topPurchaseInvoicesHtml = data.top_purchase_invoices.length === 0
+        ? `<p class="empty">No purchase invoices this month</p>`
+        : `<table>
+            <thead><tr><th>Invoice</th><th>Supplier</th><th>Status</th><th class="right">Amount</th></tr></thead>
+            <tbody>
+                ${data.top_purchase_invoices.map(inv => `<tr>
+                    <td class="mono">${inv.name}</td>
+                    <td>${inv.party_name || '—'}</td>
+                    <td>${paymentStatusBadge(inv.payment_status)}</td>
+                    <td class="${amountClass(inv.payment_status)}">${fmt(inv.amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
+
+    const unpaidSalesHtml = data.unpaid_sales_invoices.length === 0
+        ? `<p class="empty">No unpaid sales invoices</p>`
+        : `<table>
+            <thead><tr><th>Invoice</th><th>Customer</th><th class="right">Grand Total</th><th class="right">Outstanding</th></tr></thead>
+            <tbody>
+                ${data.unpaid_sales_invoices.map(inv => `<tr>
+                    <td class="mono">${inv.name}</td>
+                    <td>${inv.party_name || '—'}</td>
+                    <td class="right" style="color:#9ca3af">${fmt(inv.grand_total)}</td>
+                    <td class="amount-rose">${fmt(inv.outstanding_amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot><tr class="total-row">
+                <td colspan="3">Total Outstanding</td>
+                <td class="amount-rose">${fmt(data.total_unpaid_sales)}</td>
+            </tr></tfoot>
+        </table>`;
+
+    const unpaidPurchaseHtml = data.unpaid_purchase_invoices.length === 0
+        ? `<p class="empty">No outstanding purchase invoices</p>`
+        : `<table>
+            <thead><tr><th>Invoice</th><th>Supplier</th><th class="right">Grand Total</th><th class="right">Outstanding</th></tr></thead>
+            <tbody>
+                ${data.unpaid_purchase_invoices.map(inv => `<tr>
+                    <td class="mono">${inv.name}</td>
+                    <td>${inv.party_name || '—'}</td>
+                    <td class="right" style="color:#9ca3af">${fmt(inv.grand_total)}</td>
+                    <td class="amount-amber">${fmt(inv.outstanding_amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot><tr class="total-row">
+                <td colspan="3">Total Outstanding</td>
+                <td class="amount-amber">${fmt(data.total_unpaid_purchases)}</td>
+            </tr></tfoot>
+        </table>`;
+
+    return `
+        ${monthlyHeader('Monthly Sales & Purchase Report', monthLabel)}
+
+        <div class="kpi-strip">
+            <div class="kpi">
+                <div class="kpi-label">Net sales</div>
+                <div class="kpi-value" style="color:#059669">${fmt(data.net_sales)}</div>
+                <div class="kpi-sub">Gross minus returns</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Transactions</div>
+                <div class="kpi-value" style="color:#1a365d">${data.transaction_count}</div>
+                <div class="kpi-sub">Avg ${fmt(avgOrder)} / order</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Total purchases</div>
+                <div class="kpi-value" style="color:${totalPurchaseExposure > data.net_sales ? '#e11d48' : '#2563eb'}">${fmt(totalPurchaseExposure)}</div>
+                <div class="kpi-sub">Paid + unpaid</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Net position</div>
+                <div class="kpi-value" style="color:${netPosition >= 0 ? '#059669' : '#e11d48'}">${netPosition < 0 ? '−' : ''}${fmt(Math.abs(netPosition))}</div>
+                <div class="kpi-sub">Sales minus purchases</div>
+            </div>
+        </div>
+
+        <div class="stats stats-3">
+            <div class="stat stat-indigo">
+                <div class="stat-label">Retail (POS)</div>
+                <div class="stat-value">${fmt(data.total_retail_sales)}</div>
+            </div>
+            <div class="stat stat-blue">
+                <div class="stat-label">B2B / Custom</div>
+                <div class="stat-value">${fmt(data.total_b2b_sales)}</div>
+            </div>
+            <div class="stat stat-rose">
+                <div class="stat-label">Returns</div>
+                <div class="stat-value text-rose">${fmt(data.total_returns)}</div>
+            </div>
+        </div>
+
+        <div class="grid-3">
+            <div class="card">
+                <div class="section-title">Sales by category</div>
+                ${categorySection}
+            </div>
+            <div class="card">
+                <div class="section-title">Sales by cashier</div>
+                ${cashierSection}
+            </div>
+            <div class="card">
+                <div class="section-title">Payment methods</div>
+                ${paymentSection}
+            </div>
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Paid purchases by mode</div>
+            ${purchaseModeSection}
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="section-title">Top ${data.top_sales_invoices.length} High-Value Sales Invoices</div>
+                ${topSalesInvoicesHtml}
+            </div>
+            <div class="card">
+                <div class="section-title">Top ${data.top_purchase_invoices.length} High-Value Purchase Invoices</div>
+                ${topPurchaseInvoicesHtml}
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="section-title">Unpaid Sales Invoices</div>
+                ${unpaidSalesHtml}
+            </div>
+            <div class="card">
+                <div class="section-title">Unpaid Purchase Invoices</div>
+                ${unpaidPurchaseHtml}
+            </div>
+        </div>
+
+        <div class="rpt-footer">
+            WatchDoc &middot; Confidential &middot; For internal use only
+        </div>`;
+}
+
+export function printMonthlySalesReport(
+    data: MonthlySalesReportData,
+    monthLabel: string,
+    options?: { logoUrl?: string; currencySymbol?: string; decimalPlaces?: number }
+): void {
+    _logoUrl        = options?.logoUrl        ?? '';
+    _currencySymbol = options?.currencySymbol ?? '$';
+    _decimalPlaces  = typeof options?.decimalPlaces === 'number' ? options.decimalPlaces : 2;
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) return;
+
+    win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WatchDoc — Monthly Sales & Purchase Report</title>
+    <style>${BASE_STYLES}</style>
+</head>
+<body>
+    ${buildMonthlySalesHtml(data, monthLabel)}
+    <script>
+        window.onload = function() {
+            window.print();
+            window.onafterprint = function() { window.close(); };
+        };
+    <\/script>
+</body>
+</html>`);
+    win.document.close();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MONTHLY FINANCIAL REPORT
+// ─────────────────────────────────────────────────────────────────────────────
+function buildMonthlyFinancialHtml(data: MonthlyFinancialReportData, monthLabel: string): string {
+    const salesRevenue = data.total_retail_sales + data.total_b2b_sales - data.total_returns;
+
+    const topOutflowHtml = data.top_outflow_entries.length === 0
+        ? `<p class="empty">No outflow entries this month</p>`
+        : `<table>
+            <thead><tr><th>Entry</th><th>Category</th><th>Party / Account</th><th>Mode</th><th class="right">Amount</th></tr></thead>
+            <tbody>
+                ${data.top_outflow_entries.map(e => `<tr>
+                    <td class="mono">${e.name}</td>
+                    <td><span class="badge badge-gray">${e.category}</span></td>
+                    <td>${e.party_or_account || '—'}</td>
+                    <td>${e.mode_of_payment || '—'}</td>
+                    <td class="amount-rose">${fmt(e.amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
+
+    const glModeTable = data.gl_mode_summary.length === 0
+        ? `<p class="empty">No payment mode data</p>`
+        : `<table>
+            <thead><tr><th>Mode</th><th class="right">Income</th><th class="right">Outflow</th><th class="right">Balance</th></tr></thead>
+            <tbody>
+                ${data.gl_mode_summary.map(mb => `<tr>
+                    <td>${mb.mode_of_payment}</td>
+                    <td class="amount-green">${mb.total_debit > 0 ? fmt(mb.total_debit) : '—'}</td>
+                    <td class="${mb.total_credit > 0 ? 'amount-rose' : 'right'}">${mb.total_credit > 0 ? fmt(mb.total_credit) : '—'}</td>
+                    <td class="${mb.net >= 0 ? 'amount-green' : 'amount-rose'}">${mb.net < 0 ? '−' : ''}${fmt(Math.abs(mb.net))}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot><tr class="total-row">
+                <td>Total</td>
+                <td class="amount-green">${fmt(data.gl_mode_summary.reduce((s, m) => s + m.total_debit, 0))}</td>
+                <td class="amount-rose">${fmt(data.gl_mode_summary.reduce((s, m) => s + m.total_credit, 0))}</td>
+                <td class="${data.net_cash >= 0 ? 'amount-green' : 'amount-rose'}">${data.net_cash < 0 ? '−' : ''}${fmt(Math.abs(data.net_cash))}</td>
+            </tr></tfoot>
+        </table>`;
+
+    const glAccountTable = data.gl_account_summary.length === 0 ? '' : `
+        <div class="card-full">
+            <div class="section-title">Cash &amp; Bank — GL Breakdown</div>
+            <table>
+                <thead><tr><th>Account</th><th class="right">Cash In (Dr)</th><th class="right">Cash Out (Cr)</th><th class="right">Net</th></tr></thead>
+                <tbody>
+                    ${data.gl_account_summary.map(row => `<tr>
+                        <td>${row.account}</td>
+                        <td class="${row.total_debit > 0 ? 'amount-green' : 'right'}">${row.total_debit > 0 ? fmt(row.total_debit) : '—'}</td>
+                        <td class="${row.total_credit > 0 ? 'amount-rose' : 'right'}">${row.total_credit > 0 ? fmt(row.total_credit) : '—'}</td>
+                        <td class="${row.net >= 0 ? 'amount-green' : 'amount-rose'}">${row.net < 0 ? '−' : ''}${fmt(Math.abs(row.net))}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td>Total</td>
+                    <td class="amount-green">${fmt(data.gl_total_cash_in)}</td>
+                    <td class="amount-rose">${fmt(data.gl_total_cash_out)}</td>
+                    <td class="${(data.gl_total_cash_in - data.gl_total_cash_out) >= 0 ? 'amount-green' : 'amount-rose'}">${(data.gl_total_cash_in - data.gl_total_cash_out) < 0 ? '−' : ''}${fmt(Math.abs(data.gl_total_cash_in - data.gl_total_cash_out))}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
+    const internalTransfersTable = data.internal_transfers.length === 0 ? '' : `
+        <div class="card-full">
+            <div class="section-title">Top ${data.internal_transfers.length} Internal Transfers <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— of ${data.internal_transfers_count} this month, excluded from income &amp; expense</span></div>
+            <table>
+                <thead><tr><th>Voucher</th><th>From</th><th>To</th><th class="right">Amount</th></tr></thead>
+                <tbody>
+                    ${data.internal_transfers.map(t => `<tr>
+                        <td class="mono">${t.voucher}</td>
+                        <td>${t.from || '—'}</td>
+                        <td>${t.to || '—'}</td>
+                        <td class="amount" style="color:#6b7280">${fmt(t.amount)}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td colspan="3">Total Transferred (this month)</td>
+                    <td class="amount" style="color:#6b7280">${fmt(data.gl_transfer_total)}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
+    const customerRefunds = data.customer_refunds ?? [];
+    const customerRefundsTable = customerRefunds.length === 0 ? '' : `
+        <div class="card-full">
+            <div class="section-title">Top ${customerRefunds.length} Customer Refunds <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— of ${data.customer_refunds_count ?? customerRefunds.length} this month, netted against collections, excluded from income &amp; expense</span></div>
+            <table>
+                <thead><tr><th>Invoice</th><th>Customer</th><th>Mode</th><th class="right">Amount</th></tr></thead>
+                <tbody>
+                    ${customerRefunds.map(r => `<tr>
+                        <td class="mono">${r.voucher}</td>
+                        <td>${r.customer || '—'}</td>
+                        <td>${r.mode_of_payment || '—'}</td>
+                        <td class="amount" style="color:#6b7280">${fmt(r.amount)}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot><tr class="total-row">
+                    <td colspan="3">Total Refunded (this month)</td>
+                    <td class="amount" style="color:#6b7280">${fmt(data.cash_refunded_returns ?? 0)}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+
+    return `
+        ${monthlyHeader('Monthly Financial Report', monthLabel)}
+
+        <div class="stats stats-3">
+            <div class="stat stat-green">
+                <div class="stat-label">Cash In</div>
+                <div class="stat-value text-green">${fmt(data.kpi_income)}</div>
+                <div class="stat-sub">From GL entries</div>
+            </div>
+            <div class="stat stat-rose">
+                <div class="stat-label">Cash Out</div>
+                <div class="stat-value text-rose">${fmt(data.kpi_outflow)}</div>
+                <div class="stat-sub">From GL entries</div>
+            </div>
+            <div class="stat ${data.net_cash >= 0 ? 'stat-indigo' : 'stat-rose'}">
+                <div class="stat-label">Net Cash</div>
+                <div class="stat-value ${data.net_cash >= 0 ? 'text-green' : 'text-rose'}">${data.net_cash < 0 ? '−' : ''}${fmt(Math.abs(data.net_cash))}</div>
+                <div class="stat-sub">From GL entries</div>
+            </div>
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Total Income</div>
+            <div class="stream-label">
+                <div class="stream-dot" style="background:#059669"></div>
+                <div class="stream-label-text" style="color:#059669">Sales Stream</div>
+                <div class="stream-label-line"></div>
+            </div>
+            <div class="net-row"><span>Retail Sales (POS)</span><span class="text-green">${fmt(data.total_retail_sales)}</span></div>
+            ${data.total_b2b_sales > 0 ? `<div class="net-row"><span>B2B Sales</span><span class="text-green">${fmt(data.total_b2b_sales)}</span></div>` : ''}
+            ${data.repair_revenue > 0 ? `<div class="net-row"><span>Repair Invoices</span><span class="text-green">${fmt(data.repair_revenue)}</span></div>` : ''}
+            <div class="net-row"><span>Collections</span><span class="text-green">${fmt(data.total_customer_collections)}</span></div>
+            ${data.je_receipt_total > 0 ? `<div class="net-row"><span>JE Receipts</span><span class="text-green">${fmt(data.je_receipt_total)}</span></div>` : ''}
+            ${data.total_other_receipts > 0 ? `<div class="net-row"><span>Other Receipts</span><span class="text-green">${fmt(data.total_other_receipts)}</span></div>` : ''}
+            ${(data.cash_refunded_returns ?? data.total_returns) > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns (refunded)</span><span class="text-rose">− ${fmt(data.cash_refunded_returns ?? data.total_returns)}</span></div>` : ''}
+            ${(data.non_cash_returns ?? 0) > 0 ? `<div class="net-row"><span style="color:#9ca3af">Returns (store credit, no cash impact)</span><span style="color:#9ca3af">${fmt(data.non_cash_returns ?? 0)}</span></div>` : ''}
+            ${data.unpaid_credit_sales > 0 ? `<div class="net-row"><span style="color:#9ca3af">Less: Unpaid Credit Sales</span><span class="text-rose">− ${fmt(data.unpaid_credit_sales)}</span></div>` : ''}
+            <div class="net-row subtotal"><span>Net Collected Income</span><span class="text-green">${fmt(data.total_income)}</span></div>
+            ${data.income_mode_breakdown.length > 0 ? `
+            <div class="stream-label" style="margin-top:14px">
+                <div class="stream-dot" style="background:#1a365d"></div>
+                <div class="stream-label-text" style="color:#1a365d">By Payment Mode</div>
+                <div class="stream-label-line"></div>
+            </div>
+            ${data.income_mode_breakdown.map(m => `<div class="net-row"><span>${m.mode_of_payment}</span><span>${fmt(m.total)}</span></div>`).join('')}` : ''}
+            <div class="net-row total"><span>Total Income</span><span class="text-green">${fmt(data.total_income)}</span></div>
+        </div>
+        ${salesRevenue !== data.total_income ? `<p style="font-size:10px;color:#9ca3af;margin-top:-14px;margin-bottom:14px">Gross sales revenue this month: ${fmt(salesRevenue)} (before collections/receipts and unpaid-credit adjustments above).</p>` : ''}
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="section-title">Purchases <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— by mode</span></div>
+                ${data.pe_purchases_by_mode.length === 0 ? '<p class="empty">No purchase payments this month</p>' : data.pe_purchases_by_mode.map(m => `<div class="net-row"><span>${m.mode_of_payment} <span style="color:#9ca3af;font-size:10px">×${m.count}</span></span><span class="text-rose">${fmt(m.total)}</span></div>`).join('')}
+                <div class="net-row bold" style="padding-top:6px"><span>Purchases Total</span><span class="text-rose">${fmt(data.purchase_total)}</span></div>
+            </div>
+            <div class="card">
+                <div class="section-title">Expenses <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— by mode</span></div>
+                ${data.pe_operating_by_mode.length === 0 && data.je_by_mode.length === 0 ? '<p class="empty">No other expenses this month</p>' : `
+                ${data.pe_operating_by_mode.length > 0 ? `<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#9ca3af;margin-bottom:4px">Payment Entries</div>${data.pe_operating_by_mode.map(m => `<div class="net-row"><span>${m.mode_of_payment} <span style="color:#9ca3af;font-size:10px">×${m.count}</span></span><span class="text-rose">${fmt(m.total)}</span></div>`).join('')}` : ''}
+                ${data.je_by_mode.length > 0 ? `<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#9ca3af;margin:8px 0 4px">Journal Entries</div>${data.je_by_mode.map(m => `<div class="net-row"><span>${m.mode_of_payment} <span style="color:#9ca3af;font-size:10px">×${m.count}</span></span><span class="text-rose">${fmt(m.total)}</span></div>`).join('')}` : ''}`}
+                <div class="net-row bold" style="padding-top:6px"><span>Expenses Total</span><span class="text-rose">${fmt(data.other_expenses_total)}</span></div>
+            </div>
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Top ${data.top_outflow_entries.length} High-Value Outflow Entries</div>
+            ${topOutflowHtml}
+        </div>
+
+        <div class="card-full">
+            <div class="section-title">Cash Flow by Payment Mode <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">(GL — all voucher types)</span></div>
+            ${glModeTable}
+        </div>
+
+        ${glAccountTable}
+
+        ${internalTransfersTable}
+
+        ${customerRefundsTable}
+
+        <div class="rpt-footer">
+            WatchDoc &middot; Confidential &middot; For internal use only
+        </div>`;
+}
+
+export function printMonthlyFinancialReport(
+    data: MonthlyFinancialReportData,
+    monthLabel: string,
+    options?: { logoUrl?: string; currencySymbol?: string; decimalPlaces?: number }
+): void {
+    _logoUrl        = options?.logoUrl        ?? '';
+    _currencySymbol = options?.currencySymbol ?? '$';
+    _decimalPlaces  = typeof options?.decimalPlaces === 'number' ? options.decimalPlaces : 2;
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) return;
+
+    win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WatchDoc — Monthly Financial Report</title>
+    <style>${BASE_STYLES}</style>
+</head>
+<body>
+    ${buildMonthlyFinancialHtml(data, monthLabel)}
+    <script>
+        window.onload = function() {
+            window.print();
+            window.onafterprint = function() { window.close(); };
+        };
+    <\/script>
+</body>
+</html>`);
+    win.document.close();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

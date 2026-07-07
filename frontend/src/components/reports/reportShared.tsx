@@ -84,6 +84,8 @@ export interface PosReportData {
     total_retail_sales: number;
     total_b2b_sales: number;
     total_returns: number;
+    cash_refunded_returns?: number;
+    non_cash_returns?: number;
     net_sales: number;
     transaction_count: number;
     payment_breakdown: PaymentBreakdown[];
@@ -233,6 +235,18 @@ export interface FinancialReportData {
     gl_external_net_cash?: number;
     gl_transfer_total?: number;
     internal_transfers?: Array<{ voucher: string; from: string; to: string; amount: number }>;
+    // Customer cash refunds — netted out of gl_external_cash_in/out (not new income, not
+    // a business expense) but surfaced here for visibility, same pattern as internal_transfers.
+    cash_refunded_returns?: number;
+    non_cash_returns?: number;
+    customer_refunds?: CustomerRefundRow[];
+}
+
+export interface CustomerRefundRow {
+    voucher: string;
+    customer: string;
+    mode_of_payment: string;
+    amount: number;
 }
 
 export interface ItemGroupProfitRow {

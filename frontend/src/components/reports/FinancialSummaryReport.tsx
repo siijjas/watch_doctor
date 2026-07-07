@@ -161,25 +161,33 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     const glExtIn   = fin.gl_external_cash_in  ?? glCashIn;
     const glExtOut  = fin.gl_external_cash_out ?? glCashOut;
     const internalTransfers = fin.internal_transfers ?? [];
+    const customerRefunds = fin.customer_refunds ?? [];
     const glAccountSummary = fin.gl_account_summary ?? [];
     // GL per-mode summary — covers ALL voucher types (PE Internal Transfer, SI returns, etc.)
     const glModeSummary = fin.gl_mode_summary ?? [];
 
     // ── Derived values ──────────────────────────────────────────
     const repairRevenue   = repair.revenue;
-    // Include B2B (non-POS) sales alongside retail, then deduct returns
-    const salesRevenue    = pos.total_retail_sales + pos.total_b2b_sales - pos.total_returns;
+    // Only the cash-refunded portion of a return reduces collected income. A credit
+    // note with no cash paid back (store credit, unsettled B2B adjustment) has zero GL
+    // cash impact, so it must not be netted out of "Net Collected Income" — fall back to
+    // total_returns for older payloads that don't yet split the two out.
+    const cashRefundedReturns = pos.cash_refunded_returns ?? pos.total_returns;
+    const nonCashReturns      = pos.non_cash_returns ?? 0;
+    // Include B2B (non-POS) sales alongside retail, then deduct cash-refunded returns
+    const salesRevenue    = pos.total_retail_sales + pos.total_b2b_sales - cashRefundedReturns;
     // Unpaid (outstanding) portion of today's sales invoices — credit sales not yet
     // collected. These are shown under "Credit Invoices" and must NOT count as income.
     const unpaidCreditSales = fin.total_credit_sales ?? 0;
     // Total Income is COLLECTED income: gross sales + collections + receipts, minus the
     // still-outstanding credit-sale portion.
-    // NOTE: repairRevenue is deliberately NOT added here. A repair invoice IS a Sales
-    // Invoice, so it is already inside pos.total_retail_sales / total_b2b_sales (i.e. in
-    // salesRevenue). Adding repairRevenue again would double-count it. It is displayed
-    // below for information only. Because it flows through salesRevenue, its unpaid
-    // portion is also correctly netted out by unpaidCreditSales.
-    const totalIncome     = salesRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales;
+    // NOTE: repairRevenue MUST be added here. Although a repair invoice is a Sales
+    // Invoice, the backend query for pos.total_retail_sales / total_b2b_sales explicitly
+    // excludes invoices linked to a Repair Order (see get_daily_report's all_sales_invoices
+    // query, filtered by `ro.name IS NULL`), so repairRevenue is never inside salesRevenue.
+    // Omitting it here undercounts Total Income relative to the GL-based Cash In KPI,
+    // which does include repair invoice cash movements.
+    const totalIncome     = salesRevenue + repairRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales;
 
     const pePurchases         = fin.pe_purchases         ?? [];
     const paidPurchaseInvoices = fin.paid_purchase_invoices ?? [];
@@ -300,7 +308,7 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                 <Row label="B2B Sales" value={formatCurrency(pos.total_b2b_sales)} />
                             )}
                             {repairRevenue > 0 && (
-                                <Row label="Repair Invoices (incl. in sales above)" value={formatCurrency(repairRevenue)} muted />
+                                <Row label="Repair Invoices" value={formatCurrency(repairRevenue)} />
                             )}
                             <Row label="Collections" value={formatCurrency(totalCollections)} muted={totalCollections === 0} />
                             {jeReceiptTotal > 0 && (
@@ -309,8 +317,11 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             {totalOtherReceipts > 0 && (
                                 <Row label="Other Receipts" value={formatCurrency(totalOtherReceipts)} />
                             )}
-                            {pos.total_returns > 0 && (
-                                <Row label="Returns" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(pos.total_returns)}</span>} />
+                            {cashRefundedReturns > 0 && (
+                                <Row label="Returns (refunded)" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(cashRefundedReturns)}</span>} />
+                            )}
+                            {nonCashReturns > 0 && (
+                                <Row label="Returns (store credit, no cash impact)" value={formatCurrency(nonCashReturns)} muted />
                             )}
                             {unpaidCreditSales > 0 && (
                                 <Row label="Less: Unpaid Credit Sales" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(unpaidCreditSales)}</span>} />
@@ -660,6 +671,49 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                                 <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
                                     <td colSpan={3} className="pt-2.5 text-sm text-gray-700 dark:text-gray-300">Total Transferred</td>
                                     <td className="pt-2.5 text-right text-sm text-gray-500 dark:text-gray-400">{formatCurrency(internalTransfers.reduce((s, t) => s + t.amount, 0))}</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* ══════════════════════════════════════════
+                S5d — Customer Refunds (cash paid back on returns, excluded from
+                income/expense — netted out of Cash In/Out the same way as internal
+                transfers, but surfaced here for visibility)
+            ══════════════════════════════════════════ */}
+            {customerRefunds.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-5">
+                    <SectionTitle>
+                        <CurrencyIcon className="text-gray-400" />
+                        Customer Refunds
+                        <span className="ml-2 text-xs font-normal text-gray-400">(netted against collections, excluded from income &amp; expense)</span>
+                    </SectionTitle>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
+                                    <th className="text-left pb-2 pr-3">Invoice</th>
+                                    <th className="text-left pb-2 pr-3">Customer</th>
+                                    <th className="text-left pb-2 pr-3">Mode</th>
+                                    <th className="text-right pb-2">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50 dark:divide-gray-700">
+                                {customerRefunds.map((r, idx) => (
+                                    <tr key={idx}>
+                                        <td className="py-2.5 pr-3 font-mono text-xs text-gray-500 dark:text-gray-400">{r.voucher}</td>
+                                        <td className="py-2.5 pr-3 text-gray-700 dark:text-gray-300 truncate max-w-[160px]">{r.customer || '—'}</td>
+                                        <td className="py-2.5 pr-3 text-gray-700 dark:text-gray-300">{r.mode_of_payment || '—'}</td>
+                                        <td className="py-2.5 text-right font-medium text-gray-500 dark:text-gray-400">{formatCurrency(r.amount)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                            <tfoot>
+                                <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
+                                    <td colSpan={3} className="pt-2.5 text-sm text-gray-700 dark:text-gray-300">Total Refunded</td>
+                                    <td className="pt-2.5 text-right text-sm text-gray-500 dark:text-gray-400">{formatCurrency(customerRefunds.reduce((s, r) => s + r.amount, 0))}</td>
                                 </tr>
                             </tfoot>
                         </table>
