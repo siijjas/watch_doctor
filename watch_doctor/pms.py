@@ -215,6 +215,56 @@ def _calc_pms_vat(selling_price: float, purchase_cost: float) -> dict:
     return {"margin": margin, "vat": vat, "net_revenue": net_revenue}
 
 
+def _find_original_pms_sale(item_code: str, doc) -> dict | None:
+    """
+    Find the original PMS sale line that a return line is reversing.
+
+    Priority:
+      1. The specific line on doc.return_against (when the credit note is linked
+         to its source invoice via the standard Return flow).
+      2. The most recent submitted, non-return PMS sale of the same item_code on
+         or before this document's posting date — items here are qty=1 unique
+         serialized watches, so this is an unambiguous stand-in when no explicit
+         link exists (e.g. a standalone credit note).
+
+    Returns a dict with purchase_cost/margin/vat keys, or None if no original sale
+    can be found.
+    """
+    if doc.get("return_against"):
+        row = frappe.db.get_value(
+            "Sales Invoice Item",
+            {"parent": doc.return_against, "item_code": item_code, CF_IS_PMS: 1},
+            [CF_PMS_PURCHASE_COST, CF_PMS_MARGIN, CF_PMS_VAT],
+            as_dict=True,
+        )
+        if row:
+            return {"purchase_cost": flt(row[CF_PMS_PURCHASE_COST]), "margin": flt(row[CF_PMS_MARGIN]), "vat": flt(row[CF_PMS_VAT])}
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT sii.{CF_PMS_PURCHASE_COST} AS purchase_cost, sii.{CF_PMS_MARGIN} AS margin, sii.{CF_PMS_VAT} AS vat
+        FROM `tabSales Invoice Item` sii
+        INNER JOIN `tabSales Invoice` si ON sii.parent = si.name
+        WHERE sii.item_code = %(item_code)s AND sii.{CF_IS_PMS} = 1
+            AND si.docstatus = 1 AND si.is_return = 0
+            AND si.posting_date <= %(posting_date)s
+            AND si.name != %(invoice)s
+        ORDER BY si.posting_date DESC, si.creation DESC
+        LIMIT 1
+        """,
+        {
+            "item_code": item_code,
+            "posting_date": doc.posting_date,
+            "invoice": doc.name or "",
+        },
+        as_dict=True,
+    )
+    if rows:
+        return {"purchase_cost": flt(rows[0].purchase_cost), "margin": flt(rows[0].margin), "vat": flt(rows[0].vat)}
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Sales Invoice — validate  (called on every save)
 # ---------------------------------------------------------------------------
@@ -237,6 +287,27 @@ def si_validate(doc, method=None):
     for item in doc.items:
         if _is_pms_item(item.item_code):
             has_pms = True
+
+            if doc.is_return:
+                # A credit note must exactly reverse the VAT charged on the sale it is
+                # returning, not recompute from scratch: the item's own selling price is
+                # negative while the looked-up purchase cost is always positive, so the
+                # forward margin/loss formula would wrongly read as "sold below cost" and
+                # zero out the VAT every time.
+                original = _find_original_pms_sale(item.item_code, doc)
+                if original:
+                    item.set(CF_IS_PMS, 1)
+                    item.set(CF_PMS_PURCHASE_COST, -original["purchase_cost"])
+                    item.set(CF_PMS_MARGIN, -original["margin"])
+                    item.set(CF_PMS_VAT, -original["vat"])
+                    total_pms_vat += -original["vat"]
+                else:
+                    item.set(CF_IS_PMS, 1)
+                    item.set(CF_PMS_PURCHASE_COST, 0)
+                    item.set(CF_PMS_MARGIN, 0)
+                    item.set(CF_PMS_VAT, 0)
+                continue
+
             selling_price = flt(item.amount)  # qty × rate (qty is always 1)
             warehouse = item.warehouse or doc.set_warehouse
             purchase_cost = _get_purchase_cost(item.item_code, warehouse)
@@ -284,12 +355,16 @@ def si_on_submit(doc, method=None):
     We need to add:
         Dr  Sales Revenue     27.273   (reduce revenue by VAT amount)
         Cr  Configured PMS VAT account  27.273   (recognize the VAT liability)
+
+    For a return, dw_pms_vat on each line is already the negated original VAT (see
+    si_validate), so the loop below naturally swaps the debit/credit legs to undo
+    exactly what the original sale posted.
     """
     if not doc.get(CF_HAS_PMS):
         return
 
     total_pms_vat = flt(doc.get(CF_PMS_TOTAL_VAT), 3)
-    if total_pms_vat <= 0:
+    if total_pms_vat == 0:
         return
 
     company = doc.company
@@ -303,7 +378,7 @@ def si_on_submit(doc, method=None):
     # Determine the income account used on the invoice items
     income_accounts = set()
     for item in doc.items:
-        if item.get(CF_IS_PMS) and flt(item.get(CF_PMS_VAT)) > 0:
+        if item.get(CF_IS_PMS) and flt(item.get(CF_PMS_VAT)) != 0:
             income_accounts.add(item.income_account)
 
     if not income_accounts:
@@ -319,36 +394,39 @@ def si_on_submit(doc, method=None):
     # Aggregate PMS VAT per income account for cleaner GL
     account_vat_map = {}
     for item in doc.items:
-        if item.get(CF_IS_PMS) and flt(item.get(CF_PMS_VAT)) > 0:
+        if item.get(CF_IS_PMS) and flt(item.get(CF_PMS_VAT)) != 0:
             acc = item.income_account
             account_vat_map[acc] = flt(account_vat_map.get(acc, 0)) + flt(item.get(CF_PMS_VAT))
 
     for income_account, vat_amount in account_vat_map.items():
         vat_amount = flt(vat_amount, 3)
-        if vat_amount <= 0:
+        if not vat_amount:
             continue
 
-        # Dr: Income Account (reduce revenue)
+        amount = abs(vat_amount)
+        # Forward sale: Dr Income / Cr VAT account. Return: mirror it — Dr VAT
+        # account / Cr Income — to undo exactly what the original sale posted.
+        debit_account, credit_account = (income_account, vat_account) if vat_amount > 0 else (vat_account, income_account)
+
         gl_entries.append(
             doc.get_gl_dict({
-                "account": income_account,
-                "debit": vat_amount,
-                "debit_in_account_currency": vat_amount,
+                "account": debit_account,
+                "debit": amount,
+                "debit_in_account_currency": amount,
                 "cost_center": cost_center,
-                "against": vat_account,
+                "against": credit_account,
                 "remarks": f"PMS VAT reclassification — {doc.name}",
                 "is_opening": "No",
             })
         )
 
-        # Cr: configured PMS VAT account (recognize liability)
         gl_entries.append(
             doc.get_gl_dict({
-                "account": vat_account,
-                "credit": vat_amount,
-                "credit_in_account_currency": vat_amount,
+                "account": credit_account,
+                "credit": amount,
+                "credit_in_account_currency": amount,
                 "cost_center": cost_center,
-                "against": income_account,
+                "against": debit_account,
                 "remarks": f"PMS VAT on {doc.name}",
                 "is_opening": "No",
             })
