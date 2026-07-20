@@ -144,6 +144,9 @@ const MonthlyFinancialReport: React.FC<MonthlyFinancialReportProps> = ({ data, m
                         {data.unpaid_credit_sales > 0 && (
                             <Row label="Less: Unpaid Credit Sales" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(data.unpaid_credit_sales)}</span>} />
                         )}
+                        {(data.total_written_off ?? 0) > 0 && (
+                            <Row label="Less: Written Off (non-cash)" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(data.total_written_off ?? 0)}</span>} />
+                        )}
                         <div className="border-t border-gray-100 dark:border-gray-700 pt-1">
                             <Row label="Net Collected Income" value={formatCurrency(data.total_income)} />
                         </div>

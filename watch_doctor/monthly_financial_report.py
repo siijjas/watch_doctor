@@ -63,13 +63,18 @@ def get_monthly_financial_report(from_date, to_date):
 	return_invoice_names = [inv["name"] for inv in all_sales_invoices if inv["is_return"] == 1]
 	return_invoice_customers = {inv["name"]: (inv.get("customer_name") or inv.get("customer") or "") for inv in all_sales_invoices}
 
-	sales_inv_names = [inv["name"] for inv in all_sales_invoices]
+	# Returns are excluded from both payment-breakdown queries below: their refund is
+	# derived from the GL further down (cash_refunded_by_mode) instead, since a return's
+	# `Sales Invoice Payment` row is not reliably negative (seen in production data with
+	# a positive-amount refund row) — trusting that sign here would silently flip a
+	# refund into income instead of netting it out.
+	sales_inv_names = [inv["name"] for inv in all_sales_invoices if not inv["is_return"]]
 	repair_payment_breakdown = []
 	if repair_revenue_rows:
 		ri_names = frappe.db.sql_list(
 			"SELECT si.name FROM `tabSales Invoice` si "
 			"INNER JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name "
-			"WHERE si.docstatus = 1 AND si.posting_date BETWEEN %s AND %s",
+			"WHERE si.docstatus = 1 AND si.posting_date BETWEEN %s AND %s AND si.is_return = 0",
 			(from_date, to_date),
 		)
 		if ri_names:
@@ -253,6 +258,14 @@ def get_monthly_financial_report(from_date, to_date):
 
 	# ---- Customer collections (PE Receive against credit Sales Invoices posted BEFORE this period) ----
 	pe_customer_collections = []
+	# Settlements of invoices posted within this same period: their paid portion is
+	# already reflected in this period's sales figure (grand_total minus outstanding),
+	# so they must NOT be added to total_customer_collections (that would double-count
+	# the sale). But that sale's payment mode is otherwise invisible — a non-POS invoice
+	# has no `Sales Invoice Payment` row, and a POS invoice settled by a later top-up PE
+	# only has its initial partial payment there — so the mode-of-payment breakdown below
+	# still needs to see this amount even though the income total must not.
+	same_period_settlements = []
 	for p in pe_receive:
 		if p.get("party_type") != "Customer":
 			continue
@@ -263,10 +276,11 @@ def get_monthly_financial_report(from_date, to_date):
 		""", (p["name"],), as_dict=True)
 		if refs:
 			for ref in refs:
-				# Skip settlements of invoices posted within this same period: their paid
-				# portion is already reflected in this period's sales figure (grand_total
-				# minus outstanding). Only prior-period receivable collections are new income.
 				if ref["posting_date"] and frappe.utils.getdate(ref["posting_date"]) >= frappe.utils.getdate(from_date):
+					same_period_settlements.append({
+						"mode_of_payment": p.get("mode_of_payment") or "",
+						"amount": float(ref["allocated_amount"] or 0),
+					})
 					continue
 				pe_customer_collections.append({
 					"pe_name": p["name"],
@@ -288,16 +302,110 @@ def get_monthly_financial_report(from_date, to_date):
 	pe_other_receipts = [p for p in pe_receive if p.get("party_type") != "Customer"]
 	total_other_receipts = sum(float(p.get("amount") or 0) for p in pe_other_receipts)
 
-	# ---- Credit invoices outstanding (submitted within this period, still owing) ----
-	credit_sales_invoices = frappe.db.sql("""
-		SELECT si.name, si.customer, si.grand_total, si.outstanding_amount,
+	# ---- Credit invoices outstanding (submitted within this period, still owing AS OF to_date) ----
+	# `outstanding_amount` is a live, mutable field: a payment, write-off, or credit note
+	# posted in a LATER period retroactively shrinks it. Trusting it here would silently
+	# understate this period's still-owed figure (inflating this period's Total Income)
+	# AND double-count the same cash — once here (the invoice now looks paid) and again
+	# in the later period's own collections total. Reconstruct the balance as of `to_date`
+	# instead, from the documents that actually settle an invoice's receivable balance:
+	#   - Sales Invoice Payment (immediate POS payment, always same-day as the invoice)
+	#   - Payment Entry Reference (works for both single- and multi-invoice reconciliations
+	#     — GL Entry.against_voucher is NOT reliable here: a Payment Entry that settles
+	#     several invoices in one go posts ONE lump Debtors GL line with no per-invoice
+	#     link, and some single-invoice PEs also carry an extra unlinked leftover line)
+	#   - Journal Entry Account (write-offs / corrections — GL Entry.against_voucher is
+	#     NEVER populated for Journal-Entry-sourced postings, only the source document row)
+	#   - Return invoices explicitly reconciled against this invoice, read from the GL: a
+	#     return's own Debtors line posted with against_voucher = this invoice (not
+	#     itself) — a return merely referencing this invoice via return_against without
+	#     such a GL linkage settled independently and must NOT be netted out here.
+	# This combination was validated against every historical invoice in this system: it
+	# reproduces the live `outstanding_amount` field exactly, present-day, for all but two
+	# invoices (off by 0.02-0.04 BHD of float rounding).
+	credit_candidate_invoices = frappe.db.sql("""
+		SELECT si.name, si.customer, si.grand_total,
 			COALESCE(si.customer_name, '') AS customer_name
 		FROM `tabSales Invoice` si
 		WHERE si.docstatus = 1 AND si.posting_date BETWEEN %s AND %s
-			AND si.outstanding_amount > 0
-		ORDER BY si.outstanding_amount DESC
 	""", (from_date, to_date), as_dict=True)
-	total_credit_sales = sum(float(inv["outstanding_amount"] or 0) for inv in credit_sales_invoices)
+
+	credit_sales_invoices = []
+	total_credit_sales = 0.0
+	# Sum of Journal-Entry write-offs applying to invoices posted THIS period (see je_map
+	# below) — a write-off reduces the reconstructed balance above just like a real
+	# payment, but no cash actually moved and it has no mode_of_payment, so it never
+	# appears in any income_mode_breakdown component. Netted out of total_income further
+	# down (mirrors how cash_refunded_returns is netted out for real cash refunds), or
+	# Total Income would silently count non-cash write-offs as collected revenue.
+	total_written_off = 0.0
+	if credit_candidate_invoices:
+		cci_names = [inv["name"] for inv in credit_candidate_invoices]
+		cci_ph = ", ".join(["%s"] * len(cci_names))
+
+		sip_rows = frappe.db.sql(
+			f"""SELECT parent, SUM(amount) AS t FROM `tabSales Invoice Payment`
+			WHERE parent IN ({cci_ph}) GROUP BY parent""",
+			tuple(cci_names), as_dict=True,
+		)
+		sip_map = {r["parent"]: float(r["t"] or 0) for r in sip_rows}
+
+		pe_rows = frappe.db.sql(
+			f"""SELECT per.reference_name AS invoice, SUM(per.allocated_amount) AS t
+			FROM `tabPayment Entry Reference` per
+			INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
+			WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name IN ({cci_ph})
+				AND pe.docstatus = 1 AND pe.posting_date <= %s
+			GROUP BY per.reference_name""",
+			tuple(cci_names + [to_date]), as_dict=True,
+		)
+		pe_map = {r["invoice"]: float(r["t"] or 0) for r in pe_rows}
+
+		je_rows = frappe.db.sql(
+			f"""SELECT jea.reference_name AS invoice,
+				SUM(jea.credit_in_account_currency - jea.debit_in_account_currency) AS t
+			FROM `tabJournal Entry Account` jea
+			INNER JOIN `tabJournal Entry` je ON je.name = jea.parent
+			WHERE jea.reference_type = 'Sales Invoice' AND jea.reference_name IN ({cci_ph})
+				AND je.docstatus = 1 AND je.posting_date <= %s
+			GROUP BY jea.reference_name""",
+			tuple(cci_names + [to_date]), as_dict=True,
+		)
+		je_map = {r["invoice"]: float(r["t"] or 0) for r in je_rows}
+		total_written_off = sum(je_map.values())
+
+		return_rows = frappe.db.sql(
+			f"""SELECT gle.against_voucher AS invoice, SUM(gle.credit - gle.debit) AS t
+			FROM `tabGL Entry` gle
+			WHERE gle.voucher_type = 'Sales Invoice'
+				AND gle.against_voucher_type = 'Sales Invoice'
+				AND gle.against_voucher IN ({cci_ph})
+				AND gle.voucher_no != gle.against_voucher
+				AND gle.docstatus = 1 AND gle.is_cancelled = 0
+				AND gle.posting_date <= %s
+			GROUP BY gle.against_voucher""",
+			tuple(cci_names + [to_date]), as_dict=True,
+		)
+		return_map = {r["invoice"]: float(r["t"] or 0) for r in return_rows}
+
+		for inv in credit_candidate_invoices:
+			balance = (
+				float(inv["grand_total"])
+				- sip_map.get(inv["name"], 0.0)
+				- pe_map.get(inv["name"], 0.0)
+				- je_map.get(inv["name"], 0.0)
+				- return_map.get(inv["name"], 0.0)
+			)
+			if balance > 0.0009:
+				credit_sales_invoices.append({
+					"name": inv["name"],
+					"customer": inv["customer"],
+					"grand_total": inv["grand_total"],
+					"outstanding_amount": balance,
+					"customer_name": inv["customer_name"],
+				})
+		credit_sales_invoices.sort(key=lambda x: x["outstanding_amount"], reverse=True)
+		total_credit_sales = sum(inv["outstanding_amount"] for inv in credit_sales_invoices)
 
 	credit_purchase_invoices = frappe.db.sql("""
 		SELECT pi.name, pi.supplier, pi.grand_total, pi.outstanding_amount,
@@ -534,7 +642,10 @@ def get_monthly_financial_report(from_date, to_date):
 	# total_returns) is netted out — see cash_refunded_returns comment above.
 	repair_sales_revenue = total_retail_sales + total_b2b_sales + repair_revenue - cash_refunded_returns
 	unpaid_credit_sales = total_credit_sales
-	total_income = repair_sales_revenue + total_customer_collections + je_receipt_total + total_other_receipts - unpaid_credit_sales
+	total_income = (
+		repair_sales_revenue + total_customer_collections + je_receipt_total + total_other_receipts
+		- unpaid_credit_sales - total_written_off
+	)
 
 	kpi_income = gl_external_cash_in
 	kpi_outflow = gl_external_cash_out
@@ -548,11 +659,18 @@ def get_monthly_financial_report(from_date, to_date):
 		income_mode_map[rm["mode_of_payment"]] = income_mode_map.get(rm["mode_of_payment"], 0.0) + float(rm["total"] or 0)
 	for c in pe_customer_collections:
 		income_mode_map[c["mode_of_payment"]] = income_mode_map.get(c["mode_of_payment"], 0.0) + c["amount"]
+	for s in same_period_settlements:
+		income_mode_map[s["mode_of_payment"]] = income_mode_map.get(s["mode_of_payment"], 0.0) + s["amount"]
 	for j in je_receipt_by_mode:
 		income_mode_map[j["mode_of_payment"]] = income_mode_map.get(j["mode_of_payment"], 0.0) + j["total"]
 	for p in pe_other_receipts:
 		mode = p.get("mode_of_payment") or "Other"
 		income_mode_map[mode] = income_mode_map.get(mode, 0.0) + float(p.get("amount") or 0)
+	# Net out cash-refunded returns per mode — GL-based, since sales_payment_breakdown /
+	# repair_payment_breakdown above deliberately exclude return invoices (see comment
+	# where sales_inv_names/ri_names are built).
+	for mode, refund in cash_refunded_by_mode.items():
+		income_mode_map[mode] = income_mode_map.get(mode, 0.0) - refund
 	income_mode_breakdown = sorted(
 		[{"mode_of_payment": k, "total": v} for k, v in income_mode_map.items()],
 		key=lambda x: x["total"], reverse=True,
@@ -575,6 +693,7 @@ def get_monthly_financial_report(from_date, to_date):
 		"je_receipt_total": je_receipt_total,
 		"total_other_receipts": total_other_receipts,
 		"unpaid_credit_sales": unpaid_credit_sales,
+		"total_written_off": total_written_off,
 		"income_mode_breakdown": income_mode_breakdown,
 		"credit_sales_invoices": credit_sales_invoices,
 		"total_credit_sales": total_credit_sales,

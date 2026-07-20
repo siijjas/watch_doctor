@@ -179,15 +179,20 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     // Unpaid (outstanding) portion of today's sales invoices — credit sales not yet
     // collected. These are shown under "Credit Invoices" and must NOT count as income.
     const unpaidCreditSales = fin.total_credit_sales ?? 0;
+    // Non-cash Journal Entry write-offs applying to today's invoices — already reflected
+    // in unpaidCreditSales above (a written-off invoice is no longer "still owing"), but
+    // no cash actually moved, so it must ALSO be excluded from collected income here, or
+    // it would silently count as income despite having no mode_of_payment anywhere.
+    const totalWrittenOff  = fin.total_written_off ?? 0;
     // Total Income is COLLECTED income: gross sales + collections + receipts, minus the
-    // still-outstanding credit-sale portion.
+    // still-outstanding credit-sale portion and non-cash write-offs.
     // NOTE: repairRevenue MUST be added here. Although a repair invoice is a Sales
     // Invoice, the backend query for pos.total_retail_sales / total_b2b_sales explicitly
     // excludes invoices linked to a Repair Order (see get_daily_report's all_sales_invoices
     // query, filtered by `ro.name IS NULL`), so repairRevenue is never inside salesRevenue.
     // Omitting it here undercounts Total Income relative to the GL-based Cash In KPI,
     // which does include repair invoice cash movements.
-    const totalIncome     = salesRevenue + repairRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales;
+    const totalIncome     = salesRevenue + repairRevenue + totalCollections + jeReceiptTotal + totalOtherReceipts - unpaidCreditSales - totalWrittenOff;
 
     const pePurchases         = fin.pe_purchases         ?? [];
     const paidPurchaseInvoices = fin.paid_purchase_invoices ?? [];
@@ -250,6 +255,9 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     customerCollections.forEach(c => {
         incomeModeMap.set(c.mode_of_payment, (incomeModeMap.get(c.mode_of_payment) ?? 0) + c.amount);
     });
+    (fin.same_period_settlements ?? []).forEach(s => {
+        incomeModeMap.set(s.mode_of_payment, (incomeModeMap.get(s.mode_of_payment) ?? 0) + s.amount);
+    });
     // External JE receipts only (proportional fraction — corrections excluded)
     jeReceiptByMode.forEach(j => {
         incomeModeMap.set(j.mode_of_payment, (incomeModeMap.get(j.mode_of_payment) ?? 0) + j.total);
@@ -258,6 +266,13 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
     (fin.pe_other_receipts ?? []).forEach(p => {
         const mode = p.mode_of_payment || 'Other';
         incomeModeMap.set(mode, (incomeModeMap.get(mode) ?? 0) + p.amount);
+    });
+    // Net out cash-refunded returns per mode — GL-based, since pos.payment_breakdown /
+    // fin.repair_payment_breakdown above deliberately exclude return invoices (a return's
+    // Sales Invoice Payment row is not reliably negative, so its refund is derived from
+    // the GL server-side instead of trusted from that table's sign).
+    Object.entries(fin.cash_refunded_by_mode ?? {}).forEach(([mode, refund]) => {
+        incomeModeMap.set(mode, (incomeModeMap.get(mode) ?? 0) - refund);
     });
     const incomeModeBreakdown = Array.from(incomeModeMap.entries())
         .map(([mode, total]) => ({ mode, total }))
@@ -325,6 +340,9 @@ const FinancialSummaryReport: React.FC<FinancialSummaryReportProps> = ({ repair,
                             )}
                             {unpaidCreditSales > 0 && (
                                 <Row label="Less: Unpaid Credit Sales" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(unpaidCreditSales)}</span>} />
+                            )}
+                            {totalWrittenOff > 0 && (
+                                <Row label="Less: Written Off (non-cash)" value={<span className="font-medium text-rose-600 dark:text-rose-400">&minus;{formatCurrency(totalWrittenOff)}</span>} />
                             )}
                             <div className="border-t border-gray-100 dark:border-gray-700 pt-1">
                                 <Row label="Net Collected Income" value={formatCurrency(totalIncome)} />

@@ -2,7 +2,8 @@ import frappe
 import requests
 import re
 import random
-import json
+
+from watch_doctor.list_field_utils import normalize_string_list as _normalize_string_list
 
 MAX_RETRIES = 3
 BASE_DELAY_SECONDS = 10  # 10s, 20s, 40s
@@ -33,26 +34,6 @@ PLACEHOLDER_SAMPLES = {
     "{{8}}": "BHD 68.000",
 	"{{9}}": "Circuit damage, Movement wear",
 }
-
-
-def _normalize_string_list(value):
-	if not value:
-		return []
-	if isinstance(value, list):
-		return [str(entry).strip() for entry in value if str(entry).strip()]
-	if isinstance(value, str):
-		trimmed = value.strip()
-		if not trimmed:
-			return []
-		if trimmed.startswith("[") and trimmed.endswith("]"):
-			try:
-				parsed = json.loads(trimmed)
-				if isinstance(parsed, list):
-					return [str(entry).strip() for entry in parsed if str(entry).strip()]
-			except Exception:
-				pass
-		return [trimmed]
-	return [str(value).strip()]
 
 
 def _replace_template_tokens(template: str, values: dict[str, str]) -> str:

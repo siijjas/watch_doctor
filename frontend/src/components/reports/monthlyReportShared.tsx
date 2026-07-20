@@ -256,6 +256,10 @@ export interface MonthlyFinancialReportData {
     je_receipt_total: number;
     total_other_receipts: number;
     unpaid_credit_sales: number;
+    // Non-cash Journal Entry write-offs applying to this period's invoices — reduces what's
+    // still owed (already reflected in total_credit_sales / unpaid_credit_sales) but is not
+    // collected cash, so it's also netted out of total_income server-side.
+    total_written_off?: number;
     income_mode_breakdown: IncomeModeRow[];
     credit_sales_invoices: CreditInvoice[];
     total_credit_sales: number;

@@ -1,6 +1,8 @@
 # Copyright (c) 2025, Watch Doctor and contributors
 # For license information, please see license.txt
 
+import json
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -13,6 +15,11 @@ from watch_doctor.invoice_settings import (
 )
 from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
 from watch_doctor.inventory_helpers import validate_parts_stock_availability
+from watch_doctor.list_field_utils import (
+	combine_movement_information,
+	normalize_string_list,
+	split_legacy_movement_information,
+)
 
 
 WATCH_STATUS_PENDING = "Pending"
@@ -86,34 +93,12 @@ def normalize_diagnosis_status(status):
 	return WATCH_TO_DIAGNOSIS_STATUS.get(status, status)
 
 
-def _normalize_string_list(value):
-	if not value:
-		return []
-	if isinstance(value, list):
-		return [str(entry).strip() for entry in value if str(entry).strip()]
-	if isinstance(value, str):
-		value = value.strip()
-		if not value:
-			return []
-		if value.startswith("[") and value.endswith("]"):
-			try:
-				import json
-
-				parsed = json.loads(value)
-				if isinstance(parsed, list):
-					return [str(entry).strip() for entry in parsed if str(entry).strip()]
-			except Exception:
-				pass
-		return [value]
-	return [str(value).strip()]
-
-
 def has_repair_item_diagnosis_content(item):
 	return any([
-		_normalize_string_list(getattr(item, "diagnosis_summary", None)),
-		_normalize_string_list(getattr(item, "movement_type", None)),
-		_normalize_string_list(getattr(item, "movement_caliber", None)),
-		_normalize_string_list(getattr(item, "recommended_work", None)),
+		normalize_string_list(getattr(item, "diagnosis_summary", None)),
+		normalize_string_list(getattr(item, "movement_type", None)),
+		normalize_string_list(getattr(item, "movement_caliber", None)),
+		normalize_string_list(getattr(item, "recommended_work", None)),
 	])
 
 
@@ -121,7 +106,7 @@ def resolve_repair_item_status(current_status=None, diagnosis_status=None, techn
 	status = normalize_repair_item_status(current_status)
 	diagnosis_status = normalize_diagnosis_status(diagnosis_status)
 	task_statuses = [str(task_status).strip() for task_status in (task_statuses or []) if str(task_status).strip()]
-	has_recommended_work = bool(_normalize_string_list(recommended_work))
+	has_recommended_work = bool(normalize_string_list(recommended_work))
 	has_technician = bool(str(technician or "").strip())
 
 	if status == WATCH_STATUS_DELIVERED:
@@ -173,6 +158,249 @@ def resolve_repair_item_diagnosis_status(item_status, current_diagnosis_status=N
 		return "Diagnosed" if has_diagnosis_content else "Pending Diagnosis"
 
 	return "Diagnosed" if has_diagnosis_content else "Pending Diagnosis"
+
+
+# ---------------------------------------------------------------------------
+# Save-pipeline helpers (API_PY_AUDIT.md item 6, phase 2).
+#
+# Moved here from watch_doctor/api/orders.py so DWRepairOrder._run_save_pipeline
+# can call them directly; orders.py imports them back for its own (still
+# unchanged, pending phase 3/4) use.
+# ---------------------------------------------------------------------------
+
+DIAGNOSIS_MANUAL_STATUSES = {"Not Repairable", "Awaiting Approval", "Quoted", "Declined"}
+VALID_DIAGNOSIS_STATUSES = {"Pending Diagnosis", "Diagnosed", "Not Repairable", "Awaiting Approval", "Quoted", "Declined"}
+
+
+def has_diagnosis_content(diagnosis_summary=None, movement_type=None, movement_caliber=None, recommended_work=None):
+	return any([
+		normalize_string_list(diagnosis_summary),
+		normalize_string_list(movement_type),
+		normalize_string_list(movement_caliber),
+		normalize_string_list(recommended_work),
+	])
+
+
+def resolve_diagnosis_status(current_status, diagnosis_summary=None, movement_type=None, movement_caliber=None, recommended_work=None):
+	if not has_diagnosis_content(diagnosis_summary, movement_type, movement_caliber, recommended_work):
+		return "Pending Diagnosis"
+
+	status = str(current_status or "").strip()
+	if status in DIAGNOSIS_MANUAL_STATUSES:
+		return status
+
+	return "Diagnosed"
+
+
+def resolve_task_template_name(task_value, create_missing=False, description=None):
+	task_value = str(task_value or "").strip()
+	if not task_value:
+		return None
+
+	if frappe.db.exists("DW Task Template", task_value):
+		return task_value
+
+	match = frappe.db.sql(
+		"""
+		select name
+		from `tabDW Task Template`
+		where lower(task_name) = lower(%s)
+		limit 1
+		""",
+		(task_value,),
+		as_dict=True,
+	)
+	if match:
+		return match[0].name
+
+	if create_missing:
+		try:
+			task_doc = frappe.get_doc({
+				"doctype": "DW Task Template",
+				"task_name": task_value,
+				"description": (description or "").strip() or None,
+			})
+			task_doc.insert(ignore_permissions=True)
+			return task_doc.name
+		except Exception:
+			# Handle duplicate creation races by re-resolving after insert failure.
+			retry_match = frappe.db.sql(
+				"""
+				select name
+				from `tabDW Task Template`
+				where lower(task_name) = lower(%s)
+				limit 1
+				""",
+				(task_value,),
+				as_dict=True,
+			)
+			if retry_match:
+				return retry_match[0].name
+
+	return None
+
+
+def get_auto_task_services_for_item(item):
+	recommended_work = normalize_string_list(item.get("recommended_work"))
+	resolved_services = []
+	seen = set()
+	recommended_descriptions = {}
+
+	if recommended_work:
+		normalized_recommended = [value.lower() for value in recommended_work]
+		description_rows = frappe.db.sql(
+			"""
+			select work_name, description
+			from `tabDW Recommended Work Template`
+			where lower(work_name) in ({placeholders})
+			""".format(placeholders=", ".join(["%s"] * len(recommended_work))),
+			tuple(normalized_recommended),
+			as_dict=True,
+		)
+		recommended_descriptions = {
+			str((row.get("work_name") or "")).strip().lower(): row.get("description")
+			for row in description_rows
+		}
+
+	if recommended_work:
+		candidates = recommended_work
+	else:
+		candidates = []
+		for issue in item.get("issues") or []:
+			issue_name = issue.get("issue") if hasattr(issue, "get") else None
+			if not issue_name:
+				continue
+			suggested_task = frappe.db.get_value("DW Issue Template", issue_name, "suggested_task")
+			if suggested_task:
+				candidates.append(suggested_task)
+
+	for candidate in candidates:
+		candidate_value = str(candidate or "").strip()
+		if not candidate_value:
+			continue
+		service_name = resolve_task_template_name(
+			candidate_value,
+			create_missing=bool(recommended_work),
+			description=recommended_descriptions.get(candidate_value.lower()),
+		)
+		if not service_name or service_name in seen:
+			continue
+		seen.add(service_name)
+		resolved_services.append(service_name)
+
+	return resolved_services
+
+
+def sync_item_tasks_with_auto_sources(order_doc, item):
+	service_names = get_auto_task_services_for_item(item)
+	technician = str(item.get("technician") or "").strip()
+	item_key = str(item.idx)
+
+	existing_tasks_by_service = {}
+	manual_tasks_for_item = []
+	for task in (order_doc.all_tasks or []):
+		if str(task.repair_item_key) != item_key:
+			continue
+		if int(task.is_manual or 0):
+			manual_tasks_for_item.append(task)
+			continue
+		service_name = str(task.service or "").strip()
+		if service_name and service_name not in existing_tasks_by_service:
+			existing_tasks_by_service[service_name] = task
+
+	remaining_tasks = [task for task in (order_doc.all_tasks or []) if str(task.repair_item_key) != item_key]
+	order_doc.set("all_tasks", [])
+	for task in remaining_tasks:
+		order_doc.append("all_tasks", {
+			"repair_item_key": task.repair_item_key,
+			"service": task.service,
+			"technician": task.technician,
+			"notes": task.notes,
+			"status": task.status,
+			"rate": task.rate,
+			"auto_rate": task.auto_rate,
+			"price_manually_set": task.price_manually_set,
+			"is_manual": int(task.is_manual or 0),
+		})
+
+	# Re-add manual tasks first (they are always preserved unchanged)
+	for task in manual_tasks_for_item:
+		order_doc.append("all_tasks", {
+			"repair_item_key": item_key,
+			"service": task.service,
+			"technician": task.technician,
+			"notes": task.notes,
+			"status": task.status,
+			"rate": task.rate,
+			"auto_rate": task.auto_rate,
+			"price_manually_set": task.price_manually_set,
+			"is_manual": 1,
+		})
+
+	for service_name in service_names:
+		existing_task = existing_tasks_by_service.get(service_name)
+		order_doc.append("all_tasks", {
+			"repair_item_key": item_key,
+			"service": service_name,
+			"technician": technician or (existing_task.technician if existing_task else ""),
+			"notes": existing_task.notes if existing_task else "",
+			"status": (existing_task.status if existing_task else "Pending") or "Pending",
+			"rate": existing_task.rate if existing_task else None,
+			"auto_rate": existing_task.auto_rate if existing_task else None,
+			"price_manually_set": existing_task.price_manually_set if existing_task else 0,
+			"is_manual": 0,
+		})
+
+	return service_names
+
+
+def ensure_other_issue_template():
+	"""Return a valid DW Issue Template name for the generic Other issue."""
+	if frappe.db.exists("DW Issue Template", "Other"):
+		return "Other"
+	existing_other = frappe.db.sql(
+		"""
+		select name
+		from `tabDW Issue Template`
+		where lower(issue_name) = 'other'
+		limit 1
+		""",
+		as_dict=True,
+	)
+	if existing_other:
+		return existing_other[0].name
+	other_doc = frappe.get_doc({
+		"doctype": "DW Issue Template",
+		"issue_name": "Other",
+		"description": "Generic issue placeholder for custom complaints",
+		"is_active": 1,
+	})
+	other_doc.insert(ignore_permissions=True)
+	return other_doc.name
+
+
+def resolve_issue_template_name(raw_issue):
+	"""Resolve an issue label or name into a valid DW Issue Template name."""
+	if not raw_issue:
+		return None
+	issue_value = str(raw_issue).strip()
+	if not issue_value:
+		return None
+	if frappe.db.exists("DW Issue Template", issue_value):
+		return issue_value
+	by_issue_name = frappe.db.sql(
+		"""
+		select name
+		from `tabDW Issue Template`
+		where lower(issue_name) = lower(%s)
+		limit 1
+		""",
+		(issue_value,),
+		as_dict=True,
+	)
+	if by_issue_name:
+		return by_issue_name[0].name
+	return None
 
 
 class DWRepairOrder(Document):
@@ -241,13 +469,13 @@ class DWRepairOrder(Document):
 		
 		# Store current status before auto-updates
 		status_before_auto_update = self.status
-		
-		# Auto-update item and diagnosis statuses from the merged workflow.
-		self.update_item_statuses_from_workflow()
-		
-		# Auto-update order status based on item statuses
-		self.update_order_status_from_items()
-		
+
+		# Single consolidated business-logic pass: item field normalization,
+		# SPA nested-payload flattening (no-op for Desk edits), task
+		# auto-sync, item/diagnosis status resolution, order status rollup.
+		# See API_PY_AUDIT.md item 6.
+		self._run_save_pipeline()
+
 		# Determine if we should validate:
 		# - Skip if new document
 		# - Skip if status was changed by auto-update (status_before != status_after)
@@ -418,6 +646,156 @@ class DWRepairOrder(Document):
 				current_diagnosis_status=getattr(item, "diagnosis_status", None),
 				has_diagnosis_content=has_repair_item_diagnosis_content(item),
 			)
+
+	def _run_save_pipeline(self):
+		"""Single business-logic pipeline for saving a repair order (API_PY_AUDIT.md item 6).
+
+		Consolidates what used to be duplicated across watch_doctor.api.orders'
+		save_repair_order (SPA path, 3 redundant resolution passes) and this
+		controller's lighter validate() logic (Desk path, missing task
+		auto-sync entirely). Called from validate() so every save — Desk or
+		API — runs the same rules. Also directly callable standalone, matching
+		the precedent in patches/migrate_merged_watch_statuses.py for
+		bulk/patch code that shouldn't trigger a full save().
+		"""
+		self._normalize_item_diagnosis_fields()
+		self._flatten_pending_nested_child_rows()
+		self._bump_task_status_for_attached_parts()
+		for item in self.items or []:
+			sync_item_tasks_with_auto_sources(self, item)
+		self.update_item_statuses_from_workflow()
+		self.update_order_status_from_items()
+
+	def _normalize_item_diagnosis_fields(self):
+		"""JSON-encode list-valued item fields and resolve diagnosis_status.
+
+		diagnosis_summary / movement_type / movement_caliber / recommended_work
+		/ pre_existing_condition are stored as JSON arrays inside Small Text
+		columns; callers may hand either a Python list or an already
+		JSON-encoded string (normalize_string_list accepts both), and this
+		must hold regardless of whether the save came from the SPA or a Desk
+		user typing directly into the raw field.
+		"""
+		for item in self.items or []:
+			item.pre_existing_condition = json.dumps(normalize_string_list(item.pre_existing_condition))
+			diagnosis_summary = normalize_string_list(item.diagnosis_summary)
+			item.diagnosis_summary = json.dumps(diagnosis_summary)
+
+			legacy_movement_information = normalize_string_list(item.movement_information)
+			movement_type = normalize_string_list(item.movement_type)
+			movement_caliber = normalize_string_list(item.movement_caliber)
+			recommended_work = normalize_string_list(item.recommended_work)
+			if not movement_type and not movement_caliber and legacy_movement_information:
+				split_movement = split_legacy_movement_information(legacy_movement_information)
+				movement_type = split_movement["movement_type"]
+				movement_caliber = split_movement["movement_caliber"]
+
+			incoming_diagnosis_status = str(item.diagnosis_status or "").strip()
+			if incoming_diagnosis_status and incoming_diagnosis_status not in VALID_DIAGNOSIS_STATUSES:
+				frappe.throw(_("Invalid diagnosis status"))
+			item.diagnosis_status = resolve_diagnosis_status(
+				incoming_diagnosis_status,
+				diagnosis_summary=diagnosis_summary,
+				movement_type=movement_type,
+				movement_caliber=movement_caliber,
+				recommended_work=recommended_work,
+			)
+			item.movement_type = json.dumps(movement_type)
+			item.movement_caliber = json.dumps(movement_caliber)
+			item.movement_information = json.dumps(combine_movement_information(movement_type, movement_caliber))
+			item.recommended_work = json.dumps(recommended_work)
+
+	def _flatten_pending_nested_child_rows(self):
+		"""Translate the SPA's nested items[].tasks/parts_used/issues shape
+		into the flat all_tasks/all_parts/all_issues tables, and resolve
+		"Other"/free-text issues to a valid DW Issue Template.
+
+		The API layer stashes the SPA's nested arrays on
+		item.flags.pending_tasks / pending_parts_used / pending_issues before
+		calling doc.save() (see watch_doctor.api.orders.save_repair_order).
+		Desk edits never set these flags — all_tasks/all_parts/items[].issues
+		are flat siblings on this doctype already, so a Desk user edits them
+		directly via their own grids and there is nothing to translate; this
+		step is a no-op for that path.
+		"""
+		items = self.items or []
+		has_pending = any(
+			item.flags.get("pending_tasks") is not None
+			or item.flags.get("pending_parts_used") is not None
+			or item.flags.get("pending_issues") is not None
+			for item in items
+		)
+		if not has_pending:
+			return
+
+		# Full replace: the SPA always resubmits the complete current state of
+		# every item's tasks/parts/issues, so the incoming nested payload is
+		# authoritative — matches the pre-refactor behavior where doc_dict's
+		# all_tasks/all_parts/all_issues were rebuilt from scratch every save.
+		flat_tasks, flat_parts, flat_issues = [], [], []
+		for item in items:
+			item_key = str(item.idx)
+
+			for task in (item.flags.get("pending_tasks") or []):
+				task = dict(task)
+				task["repair_item_key"] = item_key
+				flat_tasks.append(task)
+
+			for part in (item.flags.get("pending_parts_used") or []):
+				part = dict(part)
+				part["repair_item_key"] = item_key
+				flat_parts.append(part)
+
+			resolved_item_issues = []
+			for issue in (item.flags.get("pending_issues") or []):
+				issue = dict(issue)
+				raw_issue = issue.get("issue")
+				is_other = bool(issue.get("is_other"))
+				if is_other or (str(raw_issue or "").strip().lower() == "other"):
+					# Child doctype requires a valid Link value even for custom "Other" entries.
+					issue["issue"] = ensure_other_issue_template()
+					issue["is_other"] = 1
+				else:
+					resolved_name = resolve_issue_template_name(raw_issue)
+					if resolved_name:
+						issue["issue"] = resolved_name
+				resolved_item_issues.append(dict(issue))
+				order_level_issue = dict(issue)
+				order_level_issue["repair_item_key"] = item_key
+				flat_issues.append(order_level_issue)
+
+			# DW Repair Item also has its own `issues` table field (a table
+			# nested two levels below the root), which get_auto_task_services_for_item
+			# reads via item.get("issues") to resolve DW Issue Template.suggested_task
+			# -- so it must be populated in-memory here for that lookup to work
+			# within THIS save cycle. It is NOT actually persisted to the DB by a
+			# plain doc.save() though: Document.get_all_children() only walks one
+			# level of table fields from the root, so this grandchild table was
+			# never written even by the pre-refactor save_repair_order (verified
+			# directly against the unmodified code -- item.issues comes back empty
+			# and issue_description stays None after reload). Pre-existing gap,
+			# out of scope for item 6; see API_PY_AUDIT.md.
+			item.set("issues", resolved_item_issues)
+
+		self.set("all_tasks", flat_tasks)
+		self.set("all_parts", flat_parts)
+		self.set("all_issues", flat_issues)
+
+	def _bump_task_status_for_attached_parts(self):
+		"""Auto-advance a task from Pending to In Progress once a part is
+		attached to it. Matches by the already-persisted task docname that
+		part.task references — a brand-new task created in this same save
+		only has a temporary local name and never matches an existing part's
+		task reference, so this only fires for previously-saved tasks."""
+		parts_by_task = {}
+		for part in self.all_parts or []:
+			task_name = part.task
+			if task_name:
+				parts_by_task.setdefault(task_name, []).append(part)
+
+		for task in self.all_tasks or []:
+			if task.name and task.name in parts_by_task and task.status == "Pending":
+				task.status = "In Progress"
 
 
 # Quotation Generation Methods

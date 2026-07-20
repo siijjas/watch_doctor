@@ -199,9 +199,18 @@ export interface FinancialReportData {
     // Customer collections (PE Receive against credit SI)
     pe_customer_collections?: CustomerCollectionRow[];
     total_customer_collections?: number;
+    // Same-period settlements of this period's own invoices — excluded from
+    // total_customer_collections (already in the sales figure) but needed for the
+    // by-payment-mode income breakdown, since it's otherwise the only record of that
+    // payment's mode (non-POS invoices have no Sales Invoice Payment row).
+    same_period_settlements?: { mode_of_payment: string; amount: number }[];
     // Credit invoices
     credit_sales_invoices?: CreditInvoice[];
     total_credit_sales?: number;
+    // Non-cash Journal Entry write-offs applying to this period's invoices — reduces what's
+    // still owed (already reflected in total_credit_sales) but is not collected cash, so it
+    // must also be netted out of Total Income, or a write-off would silently count as income.
+    total_written_off?: number;
     credit_purchase_invoices?: CreditInvoice[];
     total_credit_purchases?: number;
     paid_purchase_invoices?: Array<{ name: string; supplier: string; supplier_name: string; grand_total: number; paid_amount?: number; cash_paid?: number; cash_bank_account: string }>;
@@ -238,6 +247,7 @@ export interface FinancialReportData {
     // Customer cash refunds — netted out of gl_external_cash_in/out (not new income, not
     // a business expense) but surfaced here for visibility, same pattern as internal_transfers.
     cash_refunded_returns?: number;
+    cash_refunded_by_mode?: Record<string, number>;
     non_cash_returns?: number;
     customer_refunds?: CustomerRefundRow[];
 }

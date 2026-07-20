@@ -1,1917 +1,19 @@
+"""POS endpoints split from watch_doctor/api.py (API_PY_AUDIT.md item 5).
+
+POS invoicing, drafts, POS customers, daily report.
+"""
+
+import json
+
 import frappe
 from frappe import _  # noqa: F401
-import json
-from frappe.utils import now_datetime
-
-from watch_doctor.invoice_settings import (
-	clear_invoice_settings_cache,
-	get_invoice_workflow_options,
-	get_invoice_workflow_settings,
-	get_sales_invoice_print_context,
-	validate_invoice_workflow_settings,
-)
-
-from watch_doctor.general_configuration import get_general_configuration, set_general_configuration
 
 from watch_doctor.pos_enhancements import (
-	apply_pos_profile,
-	build_pos_print_url,
-	get_pos_profile_settings,
+    apply_pos_profile,
+    build_pos_print_url,
+    get_pos_profile_settings,
 )
-
-from watch_doctor.permissions import (
-    require_roles,
-    can_access_repair_order,
-    get_dw_roles,
-    get_current_technician,
-    get_current_technician_identifiers,
-    ROLE_EXECUTIVE,
-    ROLE_DATA_ENTRY,
-    ROLE_TECHNICIAN,
-    PRIVILEGED_ROLES,
-)
-from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import (
-	WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
-	WATCH_STATUS_COMPLETED,
-	WATCH_STATUS_DIAGNOSED,
-	WATCH_STATUS_IN_REPAIR,
-	WATCH_STATUS_QUOTED,
-	WATCH_STATUS_UNDER_DIAGNOSIS,
-	normalize_repair_item_status,
-	resolve_repair_item_diagnosis_status,
-	resolve_repair_item_status,
-)
-
-
-# ==================== User Info ====================
-
-@frappe.whitelist()
-def get_user_info():
-    """Return the current user's DW roles and linked technician record."""
-    user = frappe.session.user
-    dw_roles = get_dw_roles(user)
-
-    technician = None
-    if "technician" in dw_roles:
-        tech_values = get_current_technician_identifiers(user)
-        if tech_values:
-            technician = frappe.db.get_value(
-                "DW Technician",
-                {"name": ["in", tech_values]},
-				["name", "technician_name", "email"],
-                as_dict=True,
-            )
-
-    return {
-        "user": user,
-        "roles": dw_roles,
-        "technician": technician,
-    }
-
-
-# ==================== App Configuration ====================
-
-@frappe.whitelist()
-def get_app_config():
-	"""Return app-level configuration: logo URL, currency symbol, decimal places."""
-	from watch_doctor.pms import get_pms_runtime_configuration
-	invoice_settings = get_invoice_workflow_settings()
-	general_config = get_general_configuration()
-	config = {
-		"logo_url": "",
-		"currency_code": "",
-		"currency_symbol": "",
-		"decimal_places": 0,
-		"general_configuration": general_config,
-		"repair_service_print_format": invoice_settings.get("repair_service_print_format") or "Standard",
-		"pos_standard_print_format": invoice_settings.get("pos_standard_print_format") or "DW POS Retail Receipt",
-		"pos_pms_print_format": invoice_settings.get("pos_pms_print_format") or "DW PMS Tax Invoice",
-	}
-
-	# Logo stored via frappe defaults (no schema change needed)
-	try:
-		logo = frappe.db.get_default("dw_logo_url", "watch_doctor")
-		config["logo_url"] = logo or ""
-	except Exception:
-		pass
-
-	# Default currency: prefer default Company currency, fall back to System Settings
-	try:
-		currency_code = None
-		# Try default company first
-		default_company = frappe.db.get_single_value("Global Defaults", "default_company")
-		if default_company:
-			currency_code = frappe.db.get_value("Company", default_company, "default_currency")
-		# Fallback to System Settings
-		if not currency_code:
-			currency_code = frappe.db.get_single_value("System Settings", "currency")
-		currency_code = currency_code or ""
-		config["currency_code"] = currency_code
-	except Exception:
-		pass
-
-	# Fetch symbol and decimal places from Currency doctype
-	try:
-		currency_row = frappe.db.get_value(
-			"Currency", config["currency_code"],
-			["symbol", "fraction_units"], as_dict=True
-		)
-		if currency_row:
-			config["currency_symbol"] = currency_row.symbol or config["currency_code"]
-			fraction_units = int(currency_row.fraction_units or 100)
-			import math
-			config["decimal_places"] = round(math.log10(fraction_units)) if fraction_units > 1 else 0
-	except Exception:
-		pass
-
-	try:
-		pms_runtime = get_pms_runtime_configuration()
-		if not config["pos_pms_print_format"]:
-			config["pos_pms_print_format"] = pms_runtime.get("pms_print_format") or "DW PMS Tax Invoice"
-	except Exception:
-		pass
-
-	return config
-
-
-def _log_settings_change(section: str, changes: dict):
-	"""Record who changed which settings values for audit trail."""
-	frappe.log_error(
-		message=f"Settings changed by {frappe.session.user}: {changes}",
-		title=f"DW Settings Change — {section}",
-	)
-
-
-@frappe.whitelist()
-def get_invoice_workflow_configuration():
-	"""Return centralized invoice workflow settings and selectable options."""
-	require_roles(ROLE_EXECUTIVE)
-	return {
-		"config": get_invoice_workflow_settings(),
-		"options": get_invoice_workflow_options(),
-	}
-
-
-@frappe.whitelist()
-def save_invoice_workflow_configuration(
-	repair_service_naming_series: str = "",
-	repair_service_print_format: str = "",
-	pos_standard_naming_series: str = "",
-	pos_standard_print_format: str = "",
-	pos_pms_naming_series: str = "",
-	pos_pms_print_format: str = "",
-	ro_label_print_format: str = "",
-):
-	"""Persist centralized naming series and print formats for invoice workflows."""
-	require_roles(ROLE_EXECUTIVE)
-	from watch_doctor.setup_invoice_settings import execute as ensure_invoice_settings_setup
-
-	if not frappe.db.exists("DocType", "DW Invoice Settings"):
-		ensure_invoice_settings_setup()
-
-	config = {
-		"repair_service_naming_series": repair_service_naming_series or "",
-		"repair_service_print_format": repair_service_print_format or "",
-		"pos_standard_naming_series": pos_standard_naming_series or "",
-		"pos_standard_print_format": pos_standard_print_format or "",
-		"pos_pms_naming_series": pos_pms_naming_series or "",
-		"pos_pms_print_format": pos_pms_print_format or "",
-		"ro_label_print_format": ro_label_print_format or "",
-	}
-	validate_invoice_workflow_settings(config)
-
-	for fieldname, value in config.items():
-		frappe.db.set_single_value("DW Invoice Settings", fieldname, value)
-
-	if frappe.db.exists("DocType", "DW PMS Settings"):
-		frappe.db.set_single_value("DW PMS Settings", "pms_print_format", config.get("pos_pms_print_format") or "")
-
-	frappe.db.commit()
-	clear_invoice_settings_cache()
-	frappe.clear_cache()
-	_log_settings_change("Invoice Workflow", config)
-	return {"success": True, "config": get_invoice_workflow_settings()}
-
-
-@frappe.whitelist()
-def get_sales_invoice_print_context_api(invoice_name: str):
-	"""Return workflow-aware print format metadata for a Sales Invoice."""
-	return get_sales_invoice_print_context(invoice_name)
-
-
-@frappe.whitelist()
-def get_ro_label_print_format():
-	"""Return the configured repair order label print format."""
-	from watch_doctor.invoice_settings import get_ro_label_print_format
-	return {"print_format": get_ro_label_print_format()}
-
-
-@frappe.whitelist()
-def save_logo_url(logo_url):
-	"""Persist the app logo URL using frappe defaults."""
-	require_roles(ROLE_EXECUTIVE)
-	try:
-		frappe.db.set_default("dw_logo_url", logo_url, "watch_doctor")
-		frappe.db.commit()
-		return {"success": True}
-	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "save_logo_url error")
-		return {"success": False, "error": str(e)}
-
-
-def rename_and_sync_print_format(old_name, new_name, file_path):
-	"""Rename a Print Format if needed and overwrite its HTML from an exported JSON fixture."""
-	with open(file_path, "r", encoding="utf-8") as handle:
-		payload = json.load(handle)
-
-	if old_name != new_name and frappe.db.exists("Print Format", old_name) and not frappe.db.exists("Print Format", new_name):
-		frappe.rename_doc("Print Format", old_name, new_name, force=True, ignore_permissions=True)
-
-	doc = frappe.get_doc("Print Format", new_name)
-	incoming_html = (payload.get("html") or "").strip()
-	if doc.html and doc.html.strip() != incoming_html:
-		frappe.log_error(
-			f"Print Format '{new_name}' had local customizations that were overwritten by the app fixture.",
-			"DW Print Format Overwrite Warning",
-		)
-	doc.html = incoming_html
-	doc.save(ignore_permissions=True)
-	frappe.db.commit()
-	frappe.clear_cache()
-
-	return {
-		"name": doc.name,
-		"modified": doc.modified,
-	}
-
-
-@frappe.whitelist()
-def get_general_configuration_api():
-	"""Return editable general company information for the Settings UI."""
-	require_roles(ROLE_EXECUTIVE)
-	from watch_doctor.setup_general_configuration import execute as ensure_general_configuration_setup
-
-	if not frappe.db.exists("DocType", "DW General Configuration"):
-		ensure_general_configuration_setup()
-
-	return {"config": get_general_configuration()}
-
-
-@frappe.whitelist()
-def save_general_configuration(
-	company_name: str = "",
-	company_phone: str = "",
-	company_email: str = "",
-	company_website: str = "",
-	company_address: str = "",
-	cr_number: str = "",
-	vat_registration_number: str = "",
-	repair_receipt_subtitle: str = "",
-	whatsapp_default_country_code: str = "",
-):
-	"""Persist editable general company information used in print formats."""
-	require_roles(ROLE_EXECUTIVE)
-	from watch_doctor.setup_general_configuration import execute as ensure_general_configuration_setup
-
-	if not frappe.db.exists("DocType", "DW General Configuration"):
-		ensure_general_configuration_setup()
-
-	config = {
-		"company_name": company_name or "",
-		"company_phone": company_phone or "",
-		"company_email": company_email or "",
-		"company_website": company_website or "",
-		"company_address": company_address or "",
-		"cr_number": cr_number or "",
-		"vat_registration_number": vat_registration_number or "",
-		"repair_receipt_subtitle": repair_receipt_subtitle or "",
-		"whatsapp_default_country_code": whatsapp_default_country_code or "",
-	}
-
-	result = set_general_configuration(config)
-	_log_settings_change("General Configuration", config)
-	return {"success": True, "config": result}
-
-
-@frappe.whitelist()
-def get_pms_configuration():
-	"""Return editable PMS/VAT configuration and option lists for the Settings UI."""
-	require_roles(ROLE_EXECUTIVE)
-	from watch_doctor.pms import get_pms_runtime_configuration
-
-	company = _get_default_company()
-	config = get_pms_runtime_configuration()
-	invoice_settings = get_invoice_workflow_settings()
-	config["pms_print_format"] = invoice_settings.get("pos_pms_print_format") or config.get("pms_print_format") or ""
-
-	item_groups = frappe.get_all(
-		"Item Group",
-		filters={"is_group": 0},
-		pluck="name",
-		order_by="name asc",
-		limit_page_length=500,
-	)
-	tax_accounts = frappe.get_all(
-		"Account",
-		filters={"company": company, "account_type": "Tax", "is_group": 0},
-		pluck="name",
-		order_by="name asc",
-		limit_page_length=500,
-	)
-	sales_taxes_templates = frappe.get_all(
-		"Sales Taxes and Charges Template",
-		filters={"disabled": 0},
-		pluck="name",
-		order_by="name asc",
-		limit_page_length=500,
-	)
-	item_tax_templates = frappe.get_all(
-		"Item Tax Template",
-		pluck="name",
-		order_by="name asc",
-		limit_page_length=500,
-	)
-	print_formats = frappe.get_all(
-		"Print Format",
-		filters={"doc_type": "Sales Invoice", "disabled": 0},
-		pluck="name",
-		order_by="name asc",
-		limit_page_length=200,
-	)
-
-	return {
-		"config": config,
-		"options": {
-			"item_groups": item_groups,
-			"tax_accounts": tax_accounts,
-			"sales_taxes_templates": sales_taxes_templates,
-			"item_tax_templates": item_tax_templates,
-			"print_formats": print_formats,
-		},
-	}
-
-
-@frappe.whitelist()
-def save_pms_configuration(
-	pms_enabled: int = 0,
-	pms_item_group: str = "",
-	pms_vat_account: str = "",
-	pms_disclaimer: str = "",
-	standard_sales_taxes_template: str = "",
-	standard_item_tax_template: str = "",
-	pms_print_format: str = "",
-	pms_vat_divisor: float = 0,
-):
-	"""Persist editable PMS/VAT configuration from the Settings UI."""
-	require_roles(ROLE_EXECUTIVE)
-	from watch_doctor.pms import clear_pms_runtime_configuration_cache
-	from watch_doctor.setup_pms import execute as ensure_pms_setup
-	from watch_doctor.setup_invoice_settings import execute as ensure_invoice_settings_setup
-
-	if not frappe.db.exists("DocType", "DW PMS Settings"):
-		ensure_pms_setup()
-	if not frappe.db.exists("DocType", "DW Invoice Settings"):
-		ensure_invoice_settings_setup()
-
-	validators = [
-		("Item Group", pms_item_group),
-		("Account", pms_vat_account),
-		("Sales Taxes and Charges Template", standard_sales_taxes_template),
-		("Item Tax Template", standard_item_tax_template),
-		("Print Format", pms_print_format),
-	]
-	for doctype, value in validators:
-		if value and not frappe.db.exists(doctype, value):
-			frappe.throw(f"{doctype} {value} does not exist")
-
-	if pms_enabled and float(pms_vat_divisor or 0) <= 0:
-		frappe.throw("PMS VAT Divisor must be greater than zero")
-	if pms_enabled and float(pms_vat_divisor or 0) < 5:
-		frappe.throw(
-			"PMS VAT Divisor seems unusually low (less than 5). "
-			"For Bahrain's standard 10% VAT, the divisor is typically 11. Verify your entry."
-		)
-
-	if pms_enabled:
-		missing_fields = []
-		for value, label in [
-			(pms_item_group, "PMS Item Group"),
-			(pms_vat_account, "PMS VAT Account"),
-			(pms_disclaimer, "PMS Disclaimer"),
-			(standard_sales_taxes_template, "Standard Sales Taxes Template"),
-			(standard_item_tax_template, "Standard Item Tax Template"),
-			(pms_print_format, "PMS Print Format"),
-		]:
-			if not value:
-				missing_fields.append(label)
-		if missing_fields:
-			frappe.throw(
-				"Profit Margin Scheme cannot be enabled until all PMS/VAT settings are configured. "
-				f"Missing fields: {', '.join(missing_fields)}."
-			)
-
-	frappe.db.set_single_value("DW PMS Settings", "pms_enabled", 1 if int(pms_enabled) else 0)
-	frappe.db.set_single_value("DW PMS Settings", "pms_item_group", pms_item_group or "")
-	frappe.db.set_single_value("DW PMS Settings", "pms_vat_account", pms_vat_account or "")
-	frappe.db.set_single_value("DW PMS Settings", "standard_sales_taxes_template", standard_sales_taxes_template or "")
-	frappe.db.set_single_value("DW PMS Settings", "standard_item_tax_template", standard_item_tax_template or "")
-	frappe.db.set_single_value("DW PMS Settings", "pms_print_format", pms_print_format or "")
-	frappe.db.set_single_value("DW PMS Settings", "pms_vat_divisor", float(pms_vat_divisor or 0))
-	frappe.db.set_single_value("DW Invoice Settings", "pos_pms_print_format", pms_print_format or "")
-	frappe.db.set_single_value(
-		"DW PMS Settings",
-		"pms_disclaimer",
-		pms_disclaimer or "",
-	)
-
-	frappe.db.commit()
-	clear_pms_runtime_configuration_cache()
-	clear_invoice_settings_cache()
-	frappe.clear_cache()
-	_log_settings_change("PMS Configuration", {
-		"pms_enabled": pms_enabled,
-		"pms_item_group": pms_item_group,
-		"pms_vat_account": pms_vat_account,
-		"pms_vat_divisor": pms_vat_divisor,
-		"pms_print_format": pms_print_format,
-	})
-	return {"success": True, "config": get_pms_configuration()["config"]}
-
-
-MOVEMENT_TYPE_VALUES = {
-	"quartz movement",
-	"automatic movement",
-	"manual-wind movement",
-	"chronograph movement",
-	"gmt movement",
-	"day-date movement",
-	"moonphase movement",
-	"co-axial movement",
-	"solar movement",
-	"kinetic movement",
-	"eco-drive movement",
-	"mecha-quartz movement",
-	"vintage movement",
-	"swiss movement",
-	"japanese movement",
-}
-
-
-def normalize_string_list(value):
-	if isinstance(value, list):
-		result = []
-		for entry in value:
-			text = str(entry or "").strip()
-			if text and text not in result:
-				result.append(text)
-		return result
-	if isinstance(value, str):
-		trimmed = value.strip()
-		if not trimmed:
-			return []
-		try:
-			parsed = json.loads(trimmed)
-			if isinstance(parsed, list):
-				return normalize_string_list(parsed)
-		except Exception:
-			pass
-		return [trimmed]
-	return []
-
-
-def is_likely_caliber_code(value):
-	trimmed = str(value or "").strip()
-	if not trimmed:
-		return False
-	return bool(any(char.isdigit() for char in trimmed) and frappe.safe_decode(trimmed) and __import__("re").match(r"^[A-Za-z0-9.-]+(?: [A-Za-z0-9.-]+)?$", trimmed))
-
-
-def split_legacy_movement_information(values):
-	movement_type = []
-	movement_caliber = []
-
-	for entry in normalize_string_list(values):
-		lowered = entry.lower()
-		if lowered in MOVEMENT_TYPE_VALUES:
-			movement_type.append(entry)
-		elif is_likely_caliber_code(entry):
-			movement_caliber.append(entry)
-
-	return {
-		"movement_type": normalize_string_list(movement_type),
-		"movement_caliber": normalize_string_list(movement_caliber),
-	}
-
-
-def combine_movement_information(movement_type, movement_caliber):
-	return normalize_string_list([
-		*normalize_string_list(movement_type),
-		*normalize_string_list(movement_caliber),
-	])
-
-
-DIAGNOSIS_MANUAL_STATUSES = {"Not Repairable", "Awaiting Approval", "Quoted", "Declined"}
-VALID_DIAGNOSIS_STATUSES = {"Pending Diagnosis", "Diagnosed", "Not Repairable", "Awaiting Approval", "Quoted", "Declined"}
-
-
-def has_diagnosis_content(diagnosis_summary=None, movement_type=None, movement_caliber=None, recommended_work=None):
-	return any([
-		normalize_string_list(diagnosis_summary),
-		normalize_string_list(movement_type),
-		normalize_string_list(movement_caliber),
-		normalize_string_list(recommended_work),
-	])
-
-
-def resolve_diagnosis_status(current_status, diagnosis_summary=None, movement_type=None, movement_caliber=None, recommended_work=None):
-	if not has_diagnosis_content(diagnosis_summary, movement_type, movement_caliber, recommended_work):
-		return "Pending Diagnosis"
-
-	status = str(current_status or "").strip()
-	if status in DIAGNOSIS_MANUAL_STATUSES:
-		return status
-
-	return "Diagnosed"
-
-
-def resolve_task_template_name(task_value, create_missing=False, description=None):
-	task_value = str(task_value or "").strip()
-	if not task_value:
-		return None
-
-	if frappe.db.exists("DW Task Template", task_value):
-		return task_value
-
-	match = frappe.db.sql(
-		"""
-		select name
-		from `tabDW Task Template`
-		where lower(task_name) = lower(%s)
-		limit 1
-		""",
-		(task_value,),
-		as_dict=True,
-	)
-	if match:
-		return match[0].name
-
-	if create_missing:
-		try:
-			task_doc = frappe.get_doc({
-				"doctype": "DW Task Template",
-				"task_name": task_value,
-				"description": (description or "").strip() or None,
-			})
-			task_doc.insert(ignore_permissions=True)
-			return task_doc.name
-		except Exception:
-			# Handle duplicate creation races by re-resolving after insert failure.
-			retry_match = frappe.db.sql(
-				"""
-				select name
-				from `tabDW Task Template`
-				where lower(task_name) = lower(%s)
-				limit 1
-				""",
-				(task_value,),
-				as_dict=True,
-			)
-			if retry_match:
-				return retry_match[0].name
-
-	return None
-
-
-def get_auto_task_services_for_item(item):
-	recommended_work = normalize_string_list(item.get("recommended_work"))
-	resolved_services = []
-	seen = set()
-	recommended_descriptions = {}
-
-	if recommended_work:
-		normalized_recommended = [value.lower() for value in recommended_work]
-		description_rows = frappe.db.sql(
-			"""
-			select work_name, description
-			from `tabDW Recommended Work Template`
-			where lower(work_name) in ({placeholders})
-			""".format(placeholders=", ".join(["%s"] * len(recommended_work))),
-			tuple(normalized_recommended),
-			as_dict=True,
-		)
-		recommended_descriptions = {
-			str((row.get("work_name") or "")).strip().lower(): row.get("description")
-			for row in description_rows
-		}
-
-	if recommended_work:
-		candidates = recommended_work
-	else:
-		candidates = []
-		for issue in item.get("issues") or []:
-			issue_name = issue.get("issue") if hasattr(issue, "get") else None
-			if not issue_name:
-				continue
-			suggested_task = frappe.db.get_value("DW Issue Template", issue_name, "suggested_task")
-			if suggested_task:
-				candidates.append(suggested_task)
-
-	for candidate in candidates:
-		candidate_value = str(candidate or "").strip()
-		if not candidate_value:
-			continue
-		service_name = resolve_task_template_name(
-			candidate_value,
-			create_missing=bool(recommended_work),
-			description=recommended_descriptions.get(candidate_value.lower()),
-		)
-		if not service_name or service_name in seen:
-			continue
-		seen.add(service_name)
-		resolved_services.append(service_name)
-
-	return resolved_services
-
-
-def sync_item_tasks_with_auto_sources(order_doc, item):
-	service_names = get_auto_task_services_for_item(item)
-	technician = str(item.get("technician") or "").strip()
-	item_key = str(item.idx)
-
-	existing_tasks_by_service = {}
-	manual_tasks_for_item = []
-	for task in (order_doc.all_tasks or []):
-		if str(task.repair_item_key) != item_key:
-			continue
-		if int(task.is_manual or 0):
-			manual_tasks_for_item.append(task)
-			continue
-		service_name = str(task.service or "").strip()
-		if service_name and service_name not in existing_tasks_by_service:
-			existing_tasks_by_service[service_name] = task
-
-	remaining_tasks = [task for task in (order_doc.all_tasks or []) if str(task.repair_item_key) != item_key]
-	order_doc.set("all_tasks", [])
-	for task in remaining_tasks:
-		order_doc.append("all_tasks", {
-			"repair_item_key": task.repair_item_key,
-			"service": task.service,
-			"technician": task.technician,
-			"notes": task.notes,
-			"status": task.status,
-			"rate": task.rate,
-			"auto_rate": task.auto_rate,
-			"price_manually_set": task.price_manually_set,
-			"is_manual": int(task.is_manual or 0),
-		})
-
-	# Re-add manual tasks first (they are always preserved unchanged)
-	for task in manual_tasks_for_item:
-		order_doc.append("all_tasks", {
-			"repair_item_key": item_key,
-			"service": task.service,
-			"technician": task.technician,
-			"notes": task.notes,
-			"status": task.status,
-			"rate": task.rate,
-			"auto_rate": task.auto_rate,
-			"price_manually_set": task.price_manually_set,
-			"is_manual": 1,
-		})
-
-	for service_name in service_names:
-		existing_task = existing_tasks_by_service.get(service_name)
-		order_doc.append("all_tasks", {
-			"repair_item_key": item_key,
-			"service": service_name,
-			"technician": technician or (existing_task.technician if existing_task else ""),
-			"notes": existing_task.notes if existing_task else "",
-			"status": (existing_task.status if existing_task else "Pending") or "Pending",
-			"rate": existing_task.rate if existing_task else None,
-			"auto_rate": existing_task.auto_rate if existing_task else None,
-			"price_manually_set": existing_task.price_manually_set if existing_task else 0,
-			"is_manual": 0,
-		})
-
-	return service_names
-
-
-@frappe.whitelist()
-def save_repair_order(doc_json):
-	"""Custom save method for repair orders that handles system fields properly."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	doc_dict = json.loads(doc_json) if isinstance(doc_json, str) else doc_json
-
-	# Technicians may only update orders they are assigned to
-	if doc_dict.get('name'):
-		if not can_access_repair_order(doc_dict['name']):
-			frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
-
-		# Optimistic locking: reject the save if another session already saved a newer version
-		client_modified = str(doc_dict.get('modified') or '').strip()
-		if client_modified:
-			db_modified = str(
-				frappe.db.get_value('DW Repair Order', doc_dict['name'], 'modified') or ''
-			).strip()
-			if db_modified and client_modified != db_modified:
-				frappe.throw(
-					_("This order was modified by another user while you were editing. "
-					  "Please reload the page and re-apply your changes."),
-					title=_("Save Conflict"),
-				)
-	
-	# Remove system fields recursively.
-	# `modified` is kept on the ROOT doc for optimistic-locking; strip it only from child rows.
-	def clean_dict(d, is_root=False):
-		if isinstance(d, dict):
-			keys_to_remove = ['creation', 'modified_by', 'owner', 'simple_description',
-			                  'docstatus', '__islocal', '__unsaved', '__onload']
-			if not is_root:
-				keys_to_remove.append('modified')
-			for key in keys_to_remove:
-				d.pop(key, None)
-			for key, value in d.items():
-				if isinstance(value, dict):
-					clean_dict(value, is_root=False)
-				elif isinstance(value, list):
-					for item in value:
-						if isinstance(item, dict):
-							clean_dict(item, is_root=False)
-		return d
-
-	doc_dict = clean_dict(doc_dict, is_root=True)
-	
-	# Debug: log what we received
-	frappe.logger().info(f"=== save_repair_order called ===")
-	frappe.logger().info(f"Order: {doc_dict.get('name', 'NEW')}")
-	for idx, item in enumerate(doc_dict.get('items', [])):
-		frappe.logger().info(f"Item {idx}: technician={item.get('technician')}, status={item.get('status')}")
-	
-	# Auto-update item statuses based on technician assignment BEFORE merging with doc
-	# This ensures the status change is included in the update
-	for item in doc_dict.get('items', []):
-		item['pre_existing_condition'] = json.dumps(normalize_string_list(item.get('pre_existing_condition')))
-		diagnosis_summary = normalize_string_list(item.get('diagnosis_summary'))
-		item['diagnosis_summary'] = json.dumps(diagnosis_summary)
-		legacy_movement_information = normalize_string_list(item.get('movement_information'))
-		movement_type = normalize_string_list(item.get('movement_type'))
-		movement_caliber = normalize_string_list(item.get('movement_caliber'))
-		recommended_work = normalize_string_list(item.get('recommended_work'))
-		if not movement_type and not movement_caliber and legacy_movement_information:
-			split_movement = split_legacy_movement_information(legacy_movement_information)
-			movement_type = split_movement['movement_type']
-			movement_caliber = split_movement['movement_caliber']
-		incoming_status = str(item.get('diagnosis_status') or '').strip()
-		if incoming_status and incoming_status not in VALID_DIAGNOSIS_STATUSES:
-			frappe.throw(_("Invalid diagnosis status"))
-		item['diagnosis_status'] = resolve_diagnosis_status(
-			incoming_status,
-			diagnosis_summary=diagnosis_summary,
-			movement_type=movement_type,
-			movement_caliber=movement_caliber,
-			recommended_work=recommended_work,
-		)
-		item['movement_type'] = json.dumps(movement_type)
-		item['movement_caliber'] = json.dumps(movement_caliber)
-		item['movement_information'] = json.dumps(combine_movement_information(movement_type, movement_caliber))
-		item['recommended_work'] = json.dumps(recommended_work)
-		item['status'] = resolve_repair_item_status(
-			current_status=item.get('status'),
-			diagnosis_status=item['diagnosis_status'],
-			technician=item.get('technician'),
-			recommended_work=recommended_work,
-			task_statuses=[task.get('status') for task in (item.get('tasks') or [])],
-		)
-		item['diagnosis_status'] = resolve_repair_item_diagnosis_status(
-			item['status'],
-			current_diagnosis_status=item['diagnosis_status'],
-			has_diagnosis_content=has_diagnosis_content(
-				diagnosis_summary,
-				movement_type,
-				movement_caliber,
-				recommended_work,
-			),
-		)
-
-	# Flatten nested structures (tasks, parts, issues) from items into the main doc tables
-	# This is necessary because frontend uses nested structure but backend uses flat tables linked by repair_item_key
-	all_tasks = []
-	all_parts = []
-	all_issues = []
-
-	def ensure_other_issue_template():
-		"""Return a valid DW Issue Template name for the generic Other issue."""
-		if frappe.db.exists("DW Issue Template", "Other"):
-			return "Other"
-		existing_other = frappe.db.sql(
-			"""
-			select name
-			from `tabDW Issue Template`
-			where lower(issue_name) = 'other'
-			limit 1
-			""",
-			as_dict=True,
-		)
-		if existing_other:
-			return existing_other[0].name
-		other_doc = frappe.get_doc({
-			"doctype": "DW Issue Template",
-			"issue_name": "Other",
-			"description": "Generic issue placeholder for custom complaints",
-			"is_active": 1,
-		})
-		other_doc.insert(ignore_permissions=True)
-		return other_doc.name
-
-	def resolve_issue_template_name(raw_issue):
-		"""Resolve an issue label or name into a valid DW Issue Template name."""
-		if not raw_issue:
-			return None
-		issue_value = str(raw_issue).strip()
-		if not issue_value:
-			return None
-		if frappe.db.exists("DW Issue Template", issue_value):
-			return issue_value
-		by_issue_name = frappe.db.sql(
-			"""
-			select name
-			from `tabDW Issue Template`
-			where lower(issue_name) = lower(%s)
-			limit 1
-			""",
-			(issue_value,),
-			as_dict=True,
-		)
-		if by_issue_name:
-			return by_issue_name[0].name
-		return None
-	
-	for i, item in enumerate(doc_dict.get('items', [])):
-		item_key = str(i + 1)
-		
-		# Process Tasks
-		if item.get('tasks'):
-			for task in item['tasks']:
-				task['repair_item_key'] = item_key
-				all_tasks.append(task)
-		
-		# Process Parts
-		if item.get('parts_used'):
-			for part in item['parts_used']:
-				part['repair_item_key'] = item_key
-				all_parts.append(part)
-				
-		# Process Issues
-		if item.get('issues'):
-			for issue in item['issues']:
-				raw_issue = issue.get('issue')
-				is_other = bool(issue.get('is_other'))
-				if is_other or (str(raw_issue or '').strip().lower() == 'other'):
-					# Child doctype requires a valid Link value even for custom "Other" entries.
-					issue['issue'] = ensure_other_issue_template()
-					issue['is_other'] = 1
-				else:
-					resolved_name = resolve_issue_template_name(raw_issue)
-					if resolved_name:
-						issue['issue'] = resolved_name
-				issue['repair_item_key'] = item_key
-				all_issues.append(issue)
-				
-	doc_dict['all_tasks'] = all_tasks
-	doc_dict['all_parts'] = all_parts
-	doc_dict['all_issues'] = all_issues
-	
-	# Auto-update task statuses when parts are added
-	# Group parts by task
-	parts_by_task = {}
-	for part in doc_dict.get('all_parts', []):
-		task_name = part.get('task')
-		if task_name:
-			if task_name not in parts_by_task:
-				parts_by_task[task_name] = []
-			parts_by_task[task_name].append(part)
-	
-	# Update task status from Pending to In Progress if it has parts
-	for task in doc_dict.get('all_tasks', []):
-		task_name = task.get('name')
-		if task_name and task_name in parts_by_task and task.get('status') == 'Pending':
-			frappe.logger().info(f"Updating task {task_name} status from Pending to In Progress (has parts)")
-			task['status'] = 'In Progress'
-
-	# Re-resolve item workflow status after task auto-updates.
-	tasks_by_item = {}
-	for task in doc_dict.get('all_tasks', []):
-		item_key = str(task.get('repair_item_key') or '')
-		if not item_key:
-			continue
-		tasks_by_item.setdefault(item_key, []).append(task)
-
-	for index, item in enumerate(doc_dict.get('items', []), start=1):
-		item_key = str(index)
-		item_tasks = tasks_by_item.get(item_key, [])
-		recommended_work = normalize_string_list(item.get('recommended_work'))
-		diagnosis_summary = normalize_string_list(item.get('diagnosis_summary'))
-		movement_type = normalize_string_list(item.get('movement_type'))
-		movement_caliber = normalize_string_list(item.get('movement_caliber'))
-		item['status'] = resolve_repair_item_status(
-			current_status=item.get('status'),
-			diagnosis_status=item.get('diagnosis_status'),
-			technician=item.get('technician'),
-			recommended_work=recommended_work,
-			task_statuses=[task.get('status') for task in item_tasks],
-		)
-		item['diagnosis_status'] = resolve_repair_item_diagnosis_status(
-			item['status'],
-			current_diagnosis_status=item.get('diagnosis_status'),
-			has_diagnosis_content=has_diagnosis_content(
-				diagnosis_summary,
-				movement_type,
-				movement_caliber,
-				recommended_work,
-			),
-		)
-	
-	# Auto-update order status based on item statuses
-	item_statuses = [normalize_repair_item_status(item.get('status')) for item in doc_dict.get('items', [])]
-	if item_statuses:
-		if all(status in {WATCH_STATUS_COMPLETED, 'Delivered'} for status in item_statuses):
-			doc_dict['status'] = 'Repaired'
-		elif any(status == WATCH_STATUS_APPROVAL_FOR_ESTIMATE for status in item_statuses):
-			doc_dict['status'] = WATCH_STATUS_APPROVAL_FOR_ESTIMATE
-		elif any(status in {
-			WATCH_STATUS_UNDER_DIAGNOSIS,
-			WATCH_STATUS_DIAGNOSED,
-			WATCH_STATUS_QUOTED,
-			WATCH_STATUS_IN_REPAIR,
-			WATCH_STATUS_COMPLETED,
-		} for status in item_statuses):
-			doc_dict['status'] = 'In Progress'
-		else:
-			doc_dict['status'] = 'Pending'
-	
-	# Guard: order must have at least one watch
-	if not doc_dict.get('items'):
-		frappe.throw(_("A repair order must contain at least one watch."))
-
-	# Promised date must not be before the received date
-	received = doc_dict.get('received_date') or ''
-	promised = doc_dict.get('promised_delivery_date') or ''
-	if received and promised and promised < received:
-		frappe.throw(_("Promised delivery date cannot be before the received date."))
-
-	# Get or create document
-	if doc_dict.get('name'):
-		# Update existing
-		doc = frappe.get_doc('DW Repair Order', doc_dict['name'])
-		doc.update(doc_dict)
-	else:
-		# Create new
-		doc = frappe.get_doc(doc_dict)
-
-	# Keep repair tasks auto-managed from recommended work / issue suggestions,
-	# including fallback task-template creation for new recommended work names.
-	for item in doc.items or []:
-		sync_item_tasks_with_auto_sources(doc, item)
-
-	# Recompute item and order statuses after auto-sync.
-	for item in doc.items or []:
-		recommended_work = normalize_string_list(item.get('recommended_work'))
-		diagnosis_summary = normalize_string_list(item.get('diagnosis_summary'))
-		movement_type = normalize_string_list(item.get('movement_type'))
-		movement_caliber = normalize_string_list(item.get('movement_caliber'))
-		item_task_statuses = [
-			task.status
-			for task in (doc.all_tasks or [])
-			if str(task.repair_item_key) == str(item.idx)
-		]
-		item.status = resolve_repair_item_status(
-			current_status=item.status,
-			diagnosis_status=item.diagnosis_status,
-			technician=item.technician,
-			recommended_work=recommended_work,
-			task_statuses=item_task_statuses,
-		)
-		item.diagnosis_status = resolve_repair_item_diagnosis_status(
-			item.status,
-			current_diagnosis_status=item.diagnosis_status,
-			has_diagnosis_content=has_diagnosis_content(
-				diagnosis_summary,
-				movement_type,
-				movement_caliber,
-				recommended_work,
-			),
-		)
-
-	item_statuses = [normalize_repair_item_status(item.status) for item in (doc.items or [])]
-	if item_statuses:
-		if all(status in {WATCH_STATUS_COMPLETED, 'Delivered'} for status in item_statuses):
-			doc.status = 'Repaired'
-		elif any(status == WATCH_STATUS_APPROVAL_FOR_ESTIMATE for status in item_statuses):
-			doc.status = WATCH_STATUS_APPROVAL_FOR_ESTIMATE
-		elif any(status in {
-			WATCH_STATUS_UNDER_DIAGNOSIS,
-			WATCH_STATUS_DIAGNOSED,
-			WATCH_STATUS_QUOTED,
-			WATCH_STATUS_IN_REPAIR,
-			WATCH_STATUS_COMPLETED,
-		} for status in item_statuses):
-			doc.status = 'In Progress'
-		else:
-			doc.status = 'Pending'
-	
-	doc.save()
-	frappe.db.commit()
-
-	# Reload to get all child tables populated
-	doc.reload()
-
-	frappe.logger().info(f"After save: order status={doc.status}")
-	for item in doc.items:
-		frappe.logger().info(f"After save: item {item.idx} status={item.status}, technician={item.technician}")
-
-	return doc.as_dict()
-
-
-@frappe.whitelist()
-def update_repair_item_diagnosis(item_name, diagnosis_json):
-	"""Update diagnosis fields for a single repair item with item-level technician checks."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	diagnosis = json.loads(diagnosis_json) if isinstance(diagnosis_json, str) else (diagnosis_json or {})
-
-	item_row = frappe.db.get_value(
-		"DW Repair Item",
-		item_name,
-		["name", "parent", "technician"],
-		as_dict=True,
-	)
-	if not item_row:
-		frappe.throw(_("Repair item not found"), frappe.DoesNotExistError)
-
-	if not can_access_repair_order(item_row.parent):
-		frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
-
-	roles = set(frappe.get_roles())
-	is_privileged = bool(roles & PRIVILEGED_ROLES)
-	if not is_privileged and ROLE_TECHNICIAN in roles:
-		tech_values = set(get_current_technician_identifiers())
-		if not tech_values or (item_row.technician or "") not in tech_values:
-			frappe.throw(_("You can only update diagnosis for watches assigned to you"), frappe.PermissionError)
-
-	allowed_fields = {
-		"diagnosis_status",
-		"diagnosis_summary",
-		"movement_type",
-		"movement_caliber",
-		"movement_information",
-		"recommended_work",
-	}
-	for key in diagnosis.keys():
-		if key not in allowed_fields:
-			frappe.throw(_("Field {0} is not allowed in diagnosis update").format(key), frappe.PermissionError)
-
-	incoming_status = str(diagnosis.get("diagnosis_status") or "").strip()
-	if incoming_status and incoming_status not in VALID_DIAGNOSIS_STATUSES:
-		frappe.throw(_("Invalid diagnosis status"))
-
-	order_doc = frappe.get_doc("DW Repair Order", item_row.parent)
-	target_item = next((item for item in order_doc.items if item.name == item_name), None)
-	if not target_item:
-		frappe.throw(_("Repair item not found in parent order"), frappe.DoesNotExistError)
-
-	diagnosis_summary = normalize_string_list(diagnosis.get("diagnosis_summary"))
-	target_item.diagnosis_summary = json.dumps(diagnosis_summary)
-	legacy_movement_information = normalize_string_list(diagnosis.get("movement_information"))
-	movement_type = normalize_string_list(diagnosis.get("movement_type"))
-	movement_caliber = normalize_string_list(diagnosis.get("movement_caliber"))
-	if not movement_type and not movement_caliber and legacy_movement_information:
-		split_movement = split_legacy_movement_information(legacy_movement_information)
-		movement_type = split_movement["movement_type"]
-		movement_caliber = split_movement["movement_caliber"]
-	target_item.movement_type = json.dumps(movement_type)
-	target_item.movement_caliber = json.dumps(movement_caliber)
-	target_item.movement_information = json.dumps(combine_movement_information(movement_type, movement_caliber))
-	recommended_work = normalize_string_list(diagnosis.get("recommended_work"))
-	target_item.recommended_work = json.dumps(recommended_work)
-	sync_item_tasks_with_auto_sources(order_doc, target_item)
-	resolved_diagnosis_status = resolve_diagnosis_status(
-		incoming_status,
-		diagnosis_summary=diagnosis_summary,
-		movement_type=movement_type,
-		movement_caliber=movement_caliber,
-		recommended_work=recommended_work,
-	)
-
-	has_content = has_diagnosis_content(
-		target_item.diagnosis_summary,
-		target_item.movement_type,
-		target_item.movement_caliber,
-		target_item.recommended_work,
-	)
-	item_task_statuses = [
-		task.status
-		for task in (order_doc.all_tasks or [])
-		if str(task.repair_item_key) == str(target_item.idx)
-	]
-	target_item.status = resolve_repair_item_status(
-		current_status=target_item.status,
-		diagnosis_status=resolved_diagnosis_status,
-		technician=target_item.technician,
-		recommended_work=recommended_work,
-		task_statuses=item_task_statuses,
-	)
-	target_item.diagnosis_status = resolve_repair_item_diagnosis_status(
-		target_item.status,
-		current_diagnosis_status=resolved_diagnosis_status,
-		has_diagnosis_content=has_content,
-	)
-
-	if has_content:
-		target_item.diagnosis_date = now_datetime()
-		if ROLE_TECHNICIAN in roles and not is_privileged:
-			current_technician = get_current_technician()
-			if current_technician:
-				target_item.diagnosed_by = current_technician
-	elif is_privileged:
-		target_item.diagnosed_by = None
-		target_item.diagnosis_date = None
-
-	order_doc.save()
-	frappe.db.commit()
-
-	return {
-		"item_name": target_item.name,
-		"diagnosis_status": target_item.diagnosis_status,
-		"diagnosis_summary": normalize_string_list(target_item.diagnosis_summary),
-		"movement_type": normalize_string_list(target_item.movement_type),
-		"movement_caliber": normalize_string_list(target_item.movement_caliber),
-		"movement_information": normalize_string_list(target_item.movement_information),
-		"recommended_work": normalize_string_list(target_item.recommended_work),
-		"diagnosed_by": target_item.diagnosed_by,
-		"diagnosis_date": target_item.diagnosis_date,
-	}
-
-
-
-
-@frappe.whitelist()
-def list_repair_orders(
-	start: int = 0,
-	limit_page_length: int = 100,
-	search: str = "",
-	status: str = "All",
-	include_total: int = 0,
-):
-	"""Return lightweight repair order list with customer display."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-
-	# Keep page size bounded to protect API performance.
-	try:
-		start = max(0, int(start or 0))
-	except (TypeError, ValueError):
-		start = 0
-	try:
-		limit_page_length = int(limit_page_length or 100)
-	except (TypeError, ValueError):
-		limit_page_length = 100
-	limit_page_length = max(1, min(limit_page_length, 500))
-	search = (search or "").strip()
-	status = (status or "All").strip()
-	include_total = int(include_total or 0)
-
-	# Technicians: only orders assigned to them
-	roles = set(frappe.get_roles())
-	extra_filters = {}
-	if not (roles & PRIVILEGED_ROLES) and ROLE_TECHNICIAN in roles:
-		tech_values = get_current_technician_identifiers()
-		if tech_values:
-			assigned_orders = frappe.get_all(
-				"DW Repair Item",
-				filters={"technician": ["in", tech_values]},
-				fields=["parent"],
-				distinct=True,
-			)
-			order_names = [r.parent for r in assigned_orders]
-			if not order_names:
-				return []
-			extra_filters["name"] = ["in", order_names]
-		else:
-			return []
-
-	where_clauses = ["1=1"]
-	query_values = {
-		"start": start,
-		"limit": limit_page_length,
-	}
-
-	if "name" in extra_filters and extra_filters["name"][0] == "in":
-		where_clauses.append("o.name IN %(order_names)s")
-		query_values["order_names"] = tuple(extra_filters["name"][1])
-
-	if status and status != "All":
-		where_clauses.append("o.status = %(status)s")
-		query_values["status"] = status
-
-	if search:
-		where_clauses.append("""
-			(
-				o.name LIKE %(needle)s
-				OR IFNULL(o.reference_number, '') LIKE %(needle)s
-				OR IFNULL(o.customer, '') LIKE %(needle)s
-				OR IFNULL(c.customer_name, '') LIKE %(needle)s
-				OR IFNULL(c.mobile_no, '') LIKE %(needle)s
-			)
-		""")
-		query_values["needle"] = f"%{search}%"
-
-	orders = frappe.db.sql(
-		f"""
-			SELECT
-				o.name,
-				o.customer,
-				o.reference_number,
-				o.status,
-				o.priority,
-				o.received_date,
-				c.customer_name,
-				c.mobile_no AS customer_mobile
-			FROM `tabDW Repair Order` o
-			LEFT JOIN `tabCustomer` c ON c.name = o.customer
-			WHERE {' AND '.join(where_clauses)}
-			ORDER BY o.modified DESC
-			LIMIT %(limit)s OFFSET %(start)s
-		""",
-		query_values,
-		as_dict=True,
-	)
-
-	total_count = None
-	if include_total:
-		# Build a separate values dict for COUNT — strip LIMIT/OFFSET keys which
-		# have no placeholders in the COUNT SQL (passing unused keys causes pymysql
-		# "not all arguments converted" error).
-		count_values = {k: v for k, v in query_values.items() if k not in ("start", "limit")}
-		count_sql = f"""
-			SELECT COUNT(*) as count
-			FROM `tabDW Repair Order` o
-			LEFT JOIN `tabCustomer` c ON c.name = o.customer
-			WHERE {' AND '.join(where_clauses)}
-		"""
-		# Only pass values when there are actual filter params; passing an empty
-		# dict to pymysql still triggers substitution and errors on plain SQL.
-		if count_values:
-			count_rows = frappe.db.sql(count_sql, count_values, as_dict=True)
-		else:
-			count_rows = frappe.db.sql(count_sql, as_dict=True)
-		total_count = count_rows[0].get("count", 0) if count_rows else 0
-
-	order_names = [o.name for o in orders]
-	item_count_map = {}
-	if order_names:
-		item_counts = frappe.db.sql(
-			"""
-				SELECT parent, COUNT(name) AS item_count
-				FROM `tabDW Repair Item`
-				WHERE parent IN %(order_names)s
-				GROUP BY parent
-			""",
-			{"order_names": tuple(order_names)},
-			as_dict=True,
-		)
-		item_count_map = {row.parent: int(row.item_count or 0) for row in item_counts}
-
-	for o in orders:
-		o["customer_name"] = o.get("customer_name") or o.get("customer")
-		o["customer_mobile"] = o.get("customer_mobile") or ""
-		o["item_count"] = item_count_map.get(o.name, 0)
-
-	if include_total:
-		return {
-			"orders": orders,
-			"total_count": int(total_count or 0),
-		}
-
-	return orders
-
-
-@frappe.whitelist()
-def search_customers(txt: str = ""):
-	"""Search customers by name."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	filters = []
-	or_filters = []
-	if txt:
-		needle = f"%{txt}%"
-		or_filters = [
-			["customer_name", "like", needle],
-			["mobile_no", "like", needle],
-			["name", "like", needle]
-		]
-
-	customers = frappe.get_all(
-		"Customer",
-		fields=["name", "customer_name", "mobile_no"],
-		filters=filters,
-		or_filters=or_filters,
-		limit_page_length=50,
-	)
-
-	# Add phone display from linked contacts if available
-	for c in customers:
-		# Try to get primary contact phone
-		contact = frappe.db.get_value(
-			"Dynamic Link",
-			{
-				"link_doctype": "Customer",
-				"link_name": c["name"],
-				"parenttype": "Contact"
-			},
-			"parent"
-		)
-		if contact:
-			phone = frappe.db.get_value("Contact", contact, "phone")
-			c["phone_display"] = phone or c.get("mobile_no") or ""
-		else:
-			c["phone_display"] = c.get("mobile_no") or ""
-
-	return customers
-
-
-@frappe.whitelist()
-def get_watch_brands(txt: str = ""):
-	"""Search watch brands by name."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	filters = []
-	if txt:
-		needle = f"%{txt}%"
-		filters = [["brand_name", "like", needle]]
-	
-	brands = frappe.get_all(
-		"DW Watch Brand",
-		fields=["name", "brand_name", "description"],
-		filters=filters,
-		limit_page_length=500,
-		order_by="brand_name asc"
-	)
-	
-	return brands
-
-
-@frappe.whitelist()
-def create_watch_brand(brand_name: str, description: str = ""):
-	"""Create a new watch brand."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	if not brand_name:
-		frappe.throw(_("Brand name is required"))
-	
-	if frappe.db.exists("DW Watch Brand", {"brand_name": brand_name}):
-		frappe.throw(_("Brand already exists"))
-		
-	doc = frappe.get_doc({
-		"doctype": "DW Watch Brand",
-		"brand_name": brand_name,
-		"description": description
-	})
-	doc.insert()
-	return doc.as_dict()
-
-
-@frappe.whitelist()
-def create_watch_model(brand: str, model_name: str, description: str = ""):
-	"""Create a new watch model."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	if not brand or not model_name:
-		frappe.throw(_("Brand and Model name are required"))
-		
-	if frappe.db.exists("DW Watch Model", {"brand": brand, "model_name": model_name}):
-		frappe.throw(_("Model already exists for this brand"))
-		
-	doc = frappe.get_doc({
-		"doctype": "DW Watch Model",
-		"brand": brand,
-		"model_name": model_name,
-		"description": description
-	})
-	doc.insert()
-	return doc.as_dict()
-
-
-@frappe.whitelist()
-def get_watch_models(brand: str = "", txt: str = ""):
-	"""Get watch models for a specific brand, optionally filtered by search text."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	filters = []
-	
-	# Always filter by brand if provided
-	if brand:
-		filters.append(["brand", "=", brand])
-	
-	# Add text search filter if provided
-	if txt:
-		needle = f"%{txt}%"
-		filters.append(["model_name", "like", needle])
-	
-	models = frappe.get_all(
-		"DW Watch Model",
-		fields=["name", "brand", "model_name", "description"],
-		filters=filters,
-		limit_page_length=100,
-		order_by="model_name asc"
-	)
-	
-	return models
-
-
-
-@frappe.whitelist()
-def get_issue_templates():
-	"""Get all active issue templates with suggested tasks."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	templates = frappe.get_all(
-		"DW Issue Template",
-		fields=["name", "issue_name", "description", "suggested_task"],
-		filters={"is_active": 1},
-		limit_page_length=100,
-		order_by="issue_name asc"
-	)
-	
-	return templates
-
-
-@frappe.whitelist()
-def get_watch_condition_templates():
-	"""Get all active pre-existing watch condition templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	templates = frappe.get_all(
-		"DW Watch Condition Template",
-		fields=["name", "condition_name", "description"],
-		filters={"is_active": 1},
-		limit_page_length=200,
-		order_by="condition_name asc"
-	)
-	return templates
-
-
-@frappe.whitelist()
-def get_diagnosis_summary_templates():
-	"""Get all active diagnosis summary templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	return frappe.get_all(
-		"DW Diagnosis Summary Template",
-		fields=["name", "summary_name", "description"],
-		filters={"is_active": 1},
-		limit_page_length=200,
-		order_by="summary_name asc",
-	)
-
-
-@frappe.whitelist()
-def get_recommended_work_templates():
-	"""Get all active recommended work templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	return frappe.get_all(
-		"DW Recommended Work Template",
-		fields=["name", "work_name", "description"],
-		filters={"is_active": 1},
-		limit_page_length=200,
-		order_by="work_name asc",
-	)
-
-
-@frappe.whitelist()
-def get_movement_info_templates():
-	"""Get all active movement information templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	return frappe.get_all(
-		"DW Movement Information Template",
-		fields=["name", "movement_info", "description"],
-		filters={"is_active": 1},
-		limit_page_length=200,
-		order_by="movement_info asc",
-	)
-
-
-@frappe.whitelist()
-def get_movement_type_templates():
-	"""Get all active movement type templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	return frappe.get_all(
-		"DW Movement Type Template",
-		fields=["name", "movement_type", "description"],
-		filters={"is_active": 1},
-		limit_page_length=200,
-		order_by="movement_type asc",
-	)
-
-
-@frappe.whitelist()
-def get_movement_caliber_templates():
-	"""Get all active movement caliber templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	return frappe.get_all(
-		"DW Movement Caliber Template",
-		fields=["name", "caliber_code", "description"],
-		filters={"is_active": 1},
-		limit_page_length=400,
-		order_by="caliber_code asc",
-	)
-
-
-@frappe.whitelist()
-def get_country_codes():
-	"""Get all active country codes."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	codes = frappe.get_all(
-		"DW Country Code",
-		fields=["name", "country_name", "code"],
-		filters={"is_active": 1},
-		limit_page_length=200,
-		order_by="country_name asc"
-	)
-	return codes
-
-
-
-@frappe.whitelist()
-def search_items(txt: str = "", item_group: str = ""):
-	"""Search items by code, name, or description for parts selection.
-	
-	Supports flexible word-order matching. For example, 'battery 357' will find '357 RENATA BATTERY'.
-	"""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	filters = {
-		"disabled": 0  # Only show enabled items
-	}
-	
-	if item_group:
-		filters["item_group"] = item_group
-	
-	if txt:
-		# Split search text into words for flexible matching
-		words = txt.strip().split()
-		limit = 50
-		
-		if words:
-			# Build SQL query to match ALL words in any order
-			# Each word must appear in item_code OR item_name OR description
-			conditions = []
-			params = []
-			
-			for word in words:
-				word_pattern = f"%{word}%"
-				conditions.append("""
-					(item_code LIKE %s OR item_name LIKE %s OR description LIKE %s)
-				""")
-				params.extend([word_pattern, word_pattern, word_pattern])
-			
-			# Combine all word conditions with AND
-			where_clause = " AND ".join(conditions)
-			
-			# Add disabled filter
-			where_clause += " AND disabled = 0"
-			
-			if item_group:
-				where_clause += " AND item_group = %s"
-				params.append(item_group)
-			
-			sql = f"""
-				SELECT name, item_code, item_name, description, standard_rate, stock_uom
-				FROM `tabItem`
-				WHERE {where_clause}
-				ORDER BY item_name ASC
-				LIMIT {limit}
-			"""
-			
-			items = frappe.db.sql(sql, params, as_dict=True)
-		else:
-			items = []
-	else:
-		# When no search query, return first 100 items as suggestions
-		limit = 100
-		items = frappe.get_all(
-			"Item",
-			fields=["name", "item_code", "item_name", "description", "standard_rate", "stock_uom"],
-			filters=filters,
-			limit_page_length=limit,
-			order_by="item_name asc"
-		)
-	
-	# Add actual stock balance for each item
-	for item in items:
-		# Get actual stock qty from Bin table
-		stock_qty = frappe.db.sql("""
-			SELECT SUM(actual_qty)
-			FROM `tabBin`
-			WHERE item_code = %s
-		""", item['item_code'])
-		item['stock_qty'] = stock_qty[0][0] if stock_qty and stock_qty[0][0] else 0
-	
-	return items
-
-
-
-@frappe.whitelist()
-def get_item_stock(item_code: str, warehouse: str = ""):
-	"""Return available stock qty for a single item across all warehouses (or a specific one)."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	item_code = (item_code or "").strip()
-	if not item_code:
-		frappe.throw(_("item_code is required"))
-	warehouse = (warehouse or "").strip()
-	if warehouse:
-		qty = frappe.db.sql(
-			"SELECT SUM(actual_qty) FROM `tabBin` WHERE item_code = %s AND warehouse = %s",
-			(item_code, warehouse),
-		)
-	else:
-		qty = frappe.db.sql(
-			"SELECT SUM(actual_qty) FROM `tabBin` WHERE item_code = %s",
-			(item_code,),
-		)
-	available = float((qty[0][0] or 0) if qty else 0)
-	return {"item_code": item_code, "available_qty": available}
-
-
-@frappe.whitelist()
-def get_task_templates():
-	"""Get all active task templates."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	templates = frappe.get_all(
-		"DW Task Template",
-		fields=["name", "task_name", "description", "default_rate"],
-		filters={"is_active": 1},
-		limit_page_length=100,
-		order_by="task_name asc"
-	)
-	return templates
-
-
-@frappe.whitelist()
-def get_employees():
-	"""Get all technicians with their current open-item workload count."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
-	employees = frappe.get_all(
-		"DW Technician",
-		fields=["name", "technician_name as employee_name"],
-		limit_page_length=100,
-		order_by="technician_name asc",
-	)
-	open_counts = frappe.db.sql(
-		"""
-		SELECT technician, COUNT(*) AS open_count
-		FROM `tabDW Repair Item`
-		WHERE status NOT IN ('Completed', 'Delivered', 'Not Repairable', 'Declined')
-		  AND technician IS NOT NULL AND technician != ''
-		GROUP BY technician
-		""",
-		as_dict=True,
-	)
-	count_map = {r.technician: r.open_count for r in open_counts}
-	for emp in employees:
-		emp["open_items"] = count_map.get(emp["name"], 0)
-	return employees
-
-
-@frappe.whitelist()
-def get_payment_modes():
-	"""Get configured payment modes for repair workflow."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	payment_modes = frappe.db.sql("""
-		SELECT 
-			pmc.payment_mode as name,
-			pmc.payment_mode as mode_of_payment,
-			mop.type
-		FROM `tabDW Payment Mode Config` pmc
-		INNER JOIN `tabMode of Payment` mop ON pmc.payment_mode = mop.name
-		WHERE pmc.is_active = 1 AND mop.enabled = 1
-		ORDER BY pmc.display_order ASC, pmc.payment_mode ASC
-	""", as_dict=True)
-	return payment_modes
-
-
-@frappe.whitelist()
-def get_pos_runtime_config(company: str = "", pos_profile: str = ""):
-	"""Return runtime POS defaults and selector options for the custom POS UI."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	resolved_company = company or _get_default_company()
-	return get_pos_profile_settings(resolved_company, pos_profile or None)
-
-
-# ============ DASHBOARD APIs ============
-
-@frappe.whitelist()
-def get_dashboard_stats(days: int = 7):
-	"""Get summary statistics for dashboard KPI cards."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	from datetime import datetime, timedelta
-	
-	today = datetime.now().date()
-	start_date = today - timedelta(days=int(days))
-	month_start = today.replace(day=1)
-	
-	# Count orders by status
-	status_counts = frappe.db.sql("""
-		SELECT status, COUNT(*) as count
-		FROM `tabDW Repair Order`
-		GROUP BY status
-	""", as_dict=True)
-	
-	status_map = {row['status']: row['count'] for row in status_counts}
-	
-	# Total orders
-	total_orders = sum(status_map.values())
-	
-	# Orders in period
-	orders_in_period = frappe.db.count("DW Repair Order", {
-		"received_date": [">=", start_date]
-	})
-	
-	# Completed in period (status = Repaired or Delivered)
-	completed_in_period = frappe.db.count("DW Repair Order", {
-		"status": ["in", ["Repaired", "Delivered"]],
-		"modified": [">=", start_date]
-	})
-	
-	# Revenue this month (from linked Sales Invoices)
-	revenue_this_month = frappe.db.sql("""
-		SELECT COALESCE(SUM(si.grand_total), 0) as total
-		FROM `tabDW Repair Order` ro
-		INNER JOIN `tabSales Invoice` si ON ro.sales_invoice = si.name
-		WHERE si.docstatus = 1
-		AND si.posting_date >= %s
-	""", (month_start,))[0][0] or 0
-	
-	# Average repair days (for completed orders)
-	avg_repair_days = frappe.db.sql("""
-		SELECT AVG(DATEDIFF(COALESCE(delivery_date, CURDATE()), received_date)) as avg_days
-		FROM `tabDW Repair Order`
-		WHERE status IN ('Repaired', 'Delivered')
-		AND received_date IS NOT NULL
-	""")[0][0] or 0
-	
-	return {
-		"total_orders": total_orders,
-		"pending": status_map.get("Pending", 0),
-		"in_progress": status_map.get("In Progress", 0),
-		"awaiting_parts": status_map.get("Awaiting Parts", 0),
-		"repaired": status_map.get("Repaired", 0),
-		"delivered": status_map.get("Delivered", 0),
-		"orders_in_period": orders_in_period,
-		"completed_in_period": completed_in_period,
-		"revenue_this_month": float(revenue_this_month),
-		"avg_repair_days": round(float(avg_repair_days), 1),
-		"period_days": int(days)
-	}
-
-
-@frappe.whitelist()
-def get_orders_trend(days: int = 7):
-	"""Get daily order counts for the last N days."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	from datetime import datetime, timedelta
-	
-	today = datetime.now().date()
-	start_date = today - timedelta(days=int(days) - 1)
-	
-	# Get received orders per day
-	received = frappe.db.sql("""
-		SELECT received_date as date, COUNT(*) as count
-		FROM `tabDW Repair Order`
-		WHERE received_date >= %s
-		GROUP BY received_date
-		ORDER BY received_date
-	""", (start_date,), as_dict=True)
-	
-	# Get completed orders per day (based on delivery_date or modified when status changed)
-	completed = frappe.db.sql("""
-		SELECT DATE(COALESCE(delivery_date, modified)) as date, COUNT(*) as count
-		FROM `tabDW Repair Order`
-		WHERE status IN ('Repaired', 'Delivered')
-		AND DATE(COALESCE(delivery_date, modified)) >= %s
-		GROUP BY DATE(COALESCE(delivery_date, modified))
-		ORDER BY date
-	""", (start_date,), as_dict=True)
-	
-	# Build date-indexed maps
-	received_map = {str(row['date']): row['count'] for row in received}
-	completed_map = {str(row['date']): row['count'] for row in completed}
-	
-	# Generate full date range
-	result = []
-	for i in range(int(days)):
-		date = start_date + timedelta(days=i)
-		date_str = str(date)
-		result.append({
-			"date": date_str,
-			"label": date.strftime("%a"),  # Day name abbreviation
-			"received": received_map.get(date_str, 0),
-			"completed": completed_map.get(date_str, 0)
-		})
-	
-	return result
-
-
-@frappe.whitelist()
-def get_outstanding_invoices(days_overdue: int = 0):
-	"""Return submitted Sales Invoices with outstanding (unpaid) amounts.
-
-	Args:
-		days_overdue: Only include invoices at least this many days old (0 = all outstanding).
-	"""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	rows = frappe.db.sql(
-		"""
-		SELECT
-			si.name,
-			si.customer,
-			c.customer_name,
-			c.mobile_no,
-			si.grand_total,
-			si.outstanding_amount,
-			si.posting_date,
-			DATEDIFF(CURDATE(), si.posting_date) AS days_outstanding,
-			ro.name AS repair_order
-		FROM `tabSales Invoice` si
-		LEFT JOIN `tabCustomer` c ON c.name = si.customer
-		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
-		WHERE si.docstatus = 1
-		  AND si.outstanding_amount > 0
-		  AND DATEDIFF(CURDATE(), si.posting_date) >= %s
-		ORDER BY si.posting_date ASC
-		""",
-		(int(days_overdue),),
-		as_dict=True,
-	)
-	return rows
-
-
-@frappe.whitelist()
-def get_technician_stats():
-	"""Get performance stats per technician."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	# Get task counts grouped by technician and status
-	stats = frappe.db.sql("""
-		SELECT 
-			t.technician,
-			tech.technician_name,
-			COUNT(*) as total_tasks,
-			SUM(CASE WHEN t.status = 'Completed' THEN 1 ELSE 0 END) as completed,
-			SUM(CASE WHEN t.status = 'In Progress' THEN 1 ELSE 0 END) as in_progress,
-			SUM(CASE WHEN t.status = 'Pending' THEN 1 ELSE 0 END) as pending
-		FROM `tabDW Repair Task` t
-		LEFT JOIN `tabDW Technician` tech ON t.technician = tech.name
-		WHERE t.technician IS NOT NULL AND t.technician != ''
-		GROUP BY t.technician, tech.technician_name
-		ORDER BY completed DESC
-	""", as_dict=True)
-	
-	return stats
-
-
-@frappe.whitelist()
-def get_top_issues(limit: int = 10):
-	"""Get most common repair issues."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	issues = frappe.db.sql("""
-		SELECT 
-			COALESCE(it.issue_name, ri.issue) as issue_name,
-			COUNT(*) as count
-		FROM `tabDW Repair Item Issue` ri
-		LEFT JOIN `tabDW Issue Template` it ON ri.issue = it.name
-		GROUP BY ri.issue, it.issue_name
-		ORDER BY count DESC
-		LIMIT %s
-	""", (int(limit),), as_dict=True)
-	
-	# Calculate percentages
-	total = sum(i['count'] for i in issues)
-	for issue in issues:
-		issue['percentage'] = round((issue['count'] / total * 100) if total > 0 else 0, 1)
-	
-	return issues
-
-
-@frappe.whitelist()
-def get_aged_pending_orders(limit: int = 5):
-	"""Get oldest pending repair orders."""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	orders = frappe.db.sql("""
-		SELECT 
-			name, customer, received_date, status,
-			DATEDIFF(CURDATE(), received_date) as days_pending
-		FROM `tabDW Repair Order`
-		WHERE status = 'Pending'
-		ORDER BY received_date ASC
-		LIMIT %s
-	""", (int(limit),), as_dict=True)
-	
-	# Add customer name for display
-	for o in orders:
-		o["customer_name"] = frappe.db.get_value("Customer", o["customer"], "customer_name") or o["customer"]
-		
-	return orders
-
-
-# ==================== POS APIs ====================
+from watch_doctor.permissions import require_roles, get_dw_roles, ROLE_EXECUTIVE, ROLE_DATA_ENTRY
 
 
 def _get_default_company():
@@ -2075,6 +177,14 @@ def _validate_pos_pms_item_mix(items) -> bool:
 	item_codes = [item.get("item_code") for item in (items or []) if item.get("item_code")]
 	pms_item_codes, _non_pms_item_codes = validate_pms_item_mix(item_codes)
 	return bool(pms_item_codes)
+
+
+@frappe.whitelist()
+def get_pos_runtime_config(company: str = "", pos_profile: str = ""):
+	"""Return runtime POS defaults and selector options for the custom POS UI."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	resolved_company = company or _get_default_company()
+	return get_pos_profile_settings(resolved_company, pos_profile or None)
 
 
 @frappe.whitelist()
@@ -2302,7 +412,6 @@ def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_n
 				break
 
 	customer_doc.insert(ignore_permissions=True)
-	frappe.db.commit()
 
 	return {
 		"name": customer_doc.name,
@@ -2385,8 +494,6 @@ def create_pos_invoice(
 	invoice.save(ignore_permissions=True)
 	invoice.submit()
 	
-	frappe.db.commit()
-	
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
@@ -2456,10 +563,9 @@ def save_pos_draft(customer: str = "", items_json: str = "[]", options_json=None
 		invoice.taxes_and_charges = standard_sales_taxes_template
 	else:
 		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before saving POS drafts.")
-	
+
 	invoice.insert(ignore_permissions=True)
-	frappe.db.commit()
-	
+
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
@@ -2536,8 +642,7 @@ def delete_pos_draft(invoice_name: str):
 		frappe.throw("Can only delete draft invoices")
 	
 	frappe.delete_doc("Sales Invoice", invoice_name)
-	frappe.db.commit()
-	
+
 	return {"success": True}
 
 
@@ -2587,8 +692,7 @@ def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_per
 	_set_invoice_payments(invoice, payments, precision)
 	invoice.save(ignore_permissions=True)
 	invoice.submit()
-	frappe.db.commit()
-	
+
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
@@ -2644,7 +748,7 @@ def get_daily_report(report_date=None):
 
 	# Repair revenue: submitted Sales Invoices posted on report_date linked to a repair order
 	repair_revenue_rows = frappe.db.sql("""
-		SELECT si.name, si.grand_total, si.customer
+		SELECT si.name, si.grand_total, si.customer, si.is_return
 		FROM `tabSales Invoice` si
 		INNER JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
 		WHERE si.docstatus = 1 AND si.posting_date = %s
@@ -2652,10 +756,12 @@ def get_daily_report(report_date=None):
 	repair_revenue = sum(r["grand_total"] for r in repair_revenue_rows)
 	repair_invoice_count = len(repair_revenue_rows)
 
-	# Repair invoice payment mode breakdown
+	# Repair invoice payment mode breakdown. Excludes returns (see sales_inv_names
+	# comment below) — none exist in repair invoices today, but this keeps the same
+	# invariant if one ever does.
 	repair_payment_breakdown = []
-	if repair_revenue_rows:
-		ri_names = [r["name"] for r in repair_revenue_rows]
+	ri_names = [r["name"] for r in repair_revenue_rows if not r["is_return"]]
+	if ri_names:
 		ri_placeholders = ", ".join(["%s"] * len(ri_names))
 		repair_payment_breakdown = frappe.db.sql(
 			f"SELECT mode_of_payment, SUM(amount) as total "
@@ -3013,6 +1119,14 @@ def get_daily_report(report_date=None):
 
 	# ---- CUSTOMER COLLECTIONS (PE Receive against credit Sales Invoices) ----
 	pe_customer_collections = []
+	# Settlements of invoices posted on the report date itself: the paid portion of
+	# today's invoices is already captured by the sales figure (grand_total − outstanding),
+	# so counting the same-day payment here as a "collection" would double-count it. But
+	# that payment's mode is otherwise invisible — a non-POS invoice has no `Sales Invoice
+	# Payment` row, and a POS invoice topped up later the same day only has its initial
+	# partial payment there — so the mode-of-payment breakdown still needs to see it even
+	# though total_customer_collections must not.
+	same_period_settlements = []
 	for p in pe_receive:
 		if p.get("party_type") == "Customer":
 			# Check if this PE references a Sales Invoice
@@ -3023,12 +1137,11 @@ def get_daily_report(report_date=None):
 			""", (p["name"],), as_dict=True)
 			if refs:
 				for ref in refs:
-					# Skip settlements of invoices posted on the report date itself: the paid
-					# portion of today's invoices is already captured by the sales figure
-					# (grand_total − outstanding), so counting the same-day payment here as a
-					# "collection" would double-count it. Only prior-day receivable collections
-					# are genuine new income.
 					if ref["posting_date"] and frappe.utils.getdate(ref["posting_date"]) >= frappe.utils.getdate(report_date):
+						same_period_settlements.append({
+							"mode_of_payment": p.get("mode_of_payment") or "",
+							"amount": float(ref["allocated_amount"] or 0),
+						})
 						continue
 					pe_customer_collections.append({
 						"pe_name": p["name"],
@@ -3057,16 +1170,110 @@ def get_daily_report(report_date=None):
 	total_other_receipts = sum(float(p.get("amount") or 0) for p in pe_other_receipts)
 
 	# ---- CREDIT INVOICES FOR THE DAY ----
-	# Credit Sales Invoices: submitted today, outstanding > 0 (not fully paid)
-	credit_sales_invoices = frappe.db.sql("""
-		SELECT si.name, si.customer, si.grand_total, si.outstanding_amount,
+	# Credit Sales Invoices: submitted today, still outstanding AS OF today's report date.
+	# `outstanding_amount` is a live, mutable field: a payment, write-off, or credit note
+	# posted on a LATER day retroactively shrinks it. Trusting it here would silently
+	# understate today's still-owed figure (inflating today's Total Income) AND
+	# double-count the same cash — once here (the invoice now looks paid) and again on
+	# whatever later day actually collects it. Reconstruct the balance as of `report_date`
+	# instead, from the documents that actually settle an invoice's receivable balance:
+	#   - Sales Invoice Payment (immediate POS payment, always same-day as the invoice)
+	#   - Payment Entry Reference (works for both single- and multi-invoice reconciliations
+	#     — GL Entry.against_voucher is NOT reliable here: a Payment Entry that settles
+	#     several invoices in one go posts ONE lump Debtors GL line with no per-invoice
+	#     link, and some single-invoice PEs also carry an extra unlinked leftover line)
+	#   - Journal Entry Account (write-offs / corrections — GL Entry.against_voucher is
+	#     NEVER populated for Journal-Entry-sourced postings, only the source document row)
+	#   - Return invoices explicitly reconciled against this invoice, read from the GL: a
+	#     return's own Debtors line posted with against_voucher = this invoice (not
+	#     itself) — a return merely referencing this invoice via return_against without
+	#     such a GL linkage settled independently and must NOT be netted out here.
+	# This combination was validated against every historical invoice in this system: it
+	# reproduces the live `outstanding_amount` field exactly, present-day, for all but two
+	# invoices (off by 0.02-0.04 BHD of float rounding).
+	credit_candidate_invoices = frappe.db.sql("""
+		SELECT si.name, si.customer, si.grand_total,
 			COALESCE(si.customer_name, '') AS customer_name
 		FROM `tabSales Invoice` si
 		WHERE si.docstatus = 1 AND si.posting_date = %s
-			AND si.outstanding_amount > 0
-		ORDER BY si.outstanding_amount DESC
 	""", (report_date,), as_dict=True)
-	total_credit_sales = sum(float(inv["outstanding_amount"] or 0) for inv in credit_sales_invoices)
+
+	credit_sales_invoices = []
+	total_credit_sales = 0.0
+	# Sum of Journal-Entry write-offs applying to invoices posted THIS report date (see
+	# je_map below) — a write-off reduces the reconstructed balance above just like a
+	# real payment, but no cash actually moved and it has no mode_of_payment, so it never
+	# appears in any income-mode-breakdown component. Netted out of total_income
+	# client-side (mirrors how cash_refunded_returns is netted out for real cash refunds),
+	# or Total Income would silently count non-cash write-offs as collected revenue.
+	total_written_off = 0.0
+	if credit_candidate_invoices:
+		cci_names = [inv["name"] for inv in credit_candidate_invoices]
+		cci_ph = ", ".join(["%s"] * len(cci_names))
+
+		sip_rows = frappe.db.sql(
+			f"""SELECT parent, SUM(amount) AS t FROM `tabSales Invoice Payment`
+			WHERE parent IN ({cci_ph}) GROUP BY parent""",
+			tuple(cci_names), as_dict=True,
+		)
+		sip_map = {r["parent"]: float(r["t"] or 0) for r in sip_rows}
+
+		pe_rows = frappe.db.sql(
+			f"""SELECT per.reference_name AS invoice, SUM(per.allocated_amount) AS t
+			FROM `tabPayment Entry Reference` per
+			INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
+			WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name IN ({cci_ph})
+				AND pe.docstatus = 1 AND pe.posting_date <= %s
+			GROUP BY per.reference_name""",
+			tuple(cci_names + [report_date]), as_dict=True,
+		)
+		pe_map = {r["invoice"]: float(r["t"] or 0) for r in pe_rows}
+
+		je_rows = frappe.db.sql(
+			f"""SELECT jea.reference_name AS invoice,
+				SUM(jea.credit_in_account_currency - jea.debit_in_account_currency) AS t
+			FROM `tabJournal Entry Account` jea
+			INNER JOIN `tabJournal Entry` je ON je.name = jea.parent
+			WHERE jea.reference_type = 'Sales Invoice' AND jea.reference_name IN ({cci_ph})
+				AND je.docstatus = 1 AND je.posting_date <= %s
+			GROUP BY jea.reference_name""",
+			tuple(cci_names + [report_date]), as_dict=True,
+		)
+		je_map = {r["invoice"]: float(r["t"] or 0) for r in je_rows}
+		total_written_off = sum(je_map.values())
+
+		return_rows = frappe.db.sql(
+			f"""SELECT gle.against_voucher AS invoice, SUM(gle.credit - gle.debit) AS t
+			FROM `tabGL Entry` gle
+			WHERE gle.voucher_type = 'Sales Invoice'
+				AND gle.against_voucher_type = 'Sales Invoice'
+				AND gle.against_voucher IN ({cci_ph})
+				AND gle.voucher_no != gle.against_voucher
+				AND gle.docstatus = 1 AND gle.is_cancelled = 0
+				AND gle.posting_date <= %s
+			GROUP BY gle.against_voucher""",
+			tuple(cci_names + [report_date]), as_dict=True,
+		)
+		return_map = {r["invoice"]: float(r["t"] or 0) for r in return_rows}
+
+		for inv in credit_candidate_invoices:
+			balance = (
+				float(inv["grand_total"])
+				- sip_map.get(inv["name"], 0.0)
+				- pe_map.get(inv["name"], 0.0)
+				- je_map.get(inv["name"], 0.0)
+				- return_map.get(inv["name"], 0.0)
+			)
+			if balance > 0.0009:
+				credit_sales_invoices.append({
+					"name": inv["name"],
+					"customer": inv["customer"],
+					"grand_total": inv["grand_total"],
+					"outstanding_amount": balance,
+					"customer_name": inv["customer_name"],
+				})
+		credit_sales_invoices.sort(key=lambda x: x["outstanding_amount"], reverse=True)
+		total_credit_sales = sum(inv["outstanding_amount"] for inv in credit_sales_invoices)
 
 	# Credit Purchase Invoices: submitted today, outstanding > 0
 	credit_purchase_invoices = frappe.db.sql("""
@@ -3334,7 +1541,11 @@ def get_daily_report(report_date=None):
 		gl_mode_summary = _refund_adjusted_mode_summary
 
 	transaction_count = len([inv for inv in all_sales_invoices if inv["is_return"] == 0])
-	sales_inv_names = [inv["name"] for inv in all_sales_invoices]
+	# Returns are excluded here: their refund is derived from the GL above
+	# (cash_refunded_by_mode) instead, since a return's `Sales Invoice Payment` row is
+	# not reliably negative (seen in production data with a positive-amount refund row)
+	# — trusting that sign here would silently flip a refund into income.
+	sales_inv_names = [inv["name"] for inv in all_sales_invoices if inv["is_return"] == 0]
 
 	# Payment method breakdown for all general sales
 	payment_breakdown = []
@@ -3616,12 +1827,21 @@ def get_daily_report(report_date=None):
 			# Customer collections against credit invoices
 			"pe_customer_collections": pe_customer_collections,
 			"total_customer_collections": total_customer_collections,
+			# Same-day settlements of today's own invoices — excluded from
+			# total_customer_collections (already in the sales figure) but needed for the
+			# by-payment-mode income breakdown, since it's otherwise the only record of
+			# that payment's mode.
+			"same_period_settlements": same_period_settlements,
 			# Non-Customer PE Receives (owner deposits, supplier refunds, etc.)
 			"pe_other_receipts":    pe_other_receipts,
 			"total_other_receipts": total_other_receipts,
 			# Credit invoices
 			"credit_sales_invoices": credit_sales_invoices,
 			"total_credit_sales": total_credit_sales,
+			# Non-cash Journal Entry write-offs applying to today's invoices — reduces what's
+			# still owed (already reflected in total_credit_sales above) but is NOT collected
+			# cash, so it must also be netted out of Total Income (see comment above).
+			"total_written_off": total_written_off,
 			"credit_purchase_invoices": credit_purchase_invoices,
 			"total_credit_purchases": total_credit_purchases,
 			"paid_purchase_invoices": paid_purchase_invoices,
@@ -3648,6 +1868,7 @@ def get_daily_report(report_date=None):
 			# treatment as internal transfers: not new income, not a business expense) but
 			# surfaced here for visibility, same pattern as the Internal Transfers table.
 			"cash_refunded_returns": cash_refunded_returns,
+			"cash_refunded_by_mode": cash_refunded_by_mode,
 			"non_cash_returns":      non_cash_returns,
 			"customer_refunds":      customer_refunds,
 			# GL aggregated by payment mode — used for S5 per-mode table (covers all voucher types)
