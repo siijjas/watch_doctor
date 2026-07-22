@@ -9,8 +9,6 @@ watch_doctor/whatsapp/service.py (API_PY_AUDIT.md item 6, phase 1).
 
 import json
 
-import frappe
-
 
 MOVEMENT_TYPE_VALUES = {
 	"quartz movement",
@@ -53,22 +51,20 @@ def normalize_string_list(value):
 	return []
 
 
-def is_likely_caliber_code(value):
-	trimmed = str(value or "").strip()
-	if not trimmed:
-		return False
-	return bool(any(char.isdigit() for char in trimmed) and frappe.safe_decode(trimmed) and __import__("re").match(r"^[A-Za-z0-9.-]+(?: [A-Za-z0-9.-]+)?$", trimmed))
-
-
 def split_legacy_movement_information(values):
+	"""Split legacy free-text movement_information into movement_type/caliber.
+
+	Every entry must land in one of the two buckets — anything that isn't a
+	recognized movement type name falls through to movement_caliber rather
+	than being discarded, so no legacy text is ever silently dropped.
+	"""
 	movement_type = []
 	movement_caliber = []
 
 	for entry in normalize_string_list(values):
-		lowered = entry.lower()
-		if lowered in MOVEMENT_TYPE_VALUES:
+		if entry.lower() in MOVEMENT_TYPE_VALUES:
 			movement_type.append(entry)
-		elif is_likely_caliber_code(entry):
+		else:
 			movement_caliber.append(entry)
 
 	return {
