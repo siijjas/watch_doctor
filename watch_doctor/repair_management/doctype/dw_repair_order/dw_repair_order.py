@@ -351,6 +351,36 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 			"is_manual": 0,
 		})
 
+	# An auto task whose service fell out of the freshly recomputed
+	# suggestion list is only dropped if nothing has happened to it yet.
+	# Once it has any recorded progress (status advanced, technician/notes
+	# set, or its price was manually overridden) it represents real work
+	# and must survive even though the current issues/recommended_work no
+	# longer suggest it -- this can now run on a routine Desk save, not
+	# just the diagnosis flow that originally justified pruning stale
+	# suggestions.
+	for service_name, task in existing_tasks_by_service.items():
+		if service_name in service_names:
+			continue
+		has_progress = (
+			str(task.status or "Pending") != "Pending"
+			or bool(str(task.technician or "").strip())
+			or bool(str(task.notes or "").strip())
+			or int(task.price_manually_set or 0)
+		)
+		if has_progress:
+			order_doc.append("all_tasks", {
+				"repair_item_key": item_key,
+				"service": task.service,
+				"technician": task.technician,
+				"notes": task.notes,
+				"status": task.status,
+				"rate": task.rate,
+				"auto_rate": task.auto_rate,
+				"price_manually_set": task.price_manually_set,
+				"is_manual": 0,
+			})
+
 	return service_names
 
 
