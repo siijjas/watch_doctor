@@ -252,12 +252,15 @@ export interface IssueTemplate {
     issue_name: string;
     description?: string;
     suggested_task?: string;
+    display_order?: number;
 }
 
 export interface WatchConditionTemplate {
     name: string;
     condition_name: string;
     description?: string;
+    display_order?: number;
+    category?: string;
 }
 
 export interface DiagnosisSummaryTemplate {

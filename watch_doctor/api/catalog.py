@@ -148,10 +148,10 @@ def get_issue_templates():
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	templates = frappe.get_all(
 		"DW Issue Template",
-		fields=["name", "issue_name", "description", "suggested_task"],
+		fields=["name", "issue_name", "description", "suggested_task", "display_order"],
 		filters={"is_active": 1},
 		limit_page_length=100,
-		order_by="issue_name asc"
+		order_by="display_order asc, issue_name asc"
 	)
 	
 	return templates
@@ -163,10 +163,10 @@ def get_watch_condition_templates():
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	templates = frappe.get_all(
 		"DW Watch Condition Template",
-		fields=["name", "condition_name", "description"],
+		fields=["name", "condition_name", "description", "display_order", "category"],
 		filters={"is_active": 1},
 		limit_page_length=200,
-		order_by="condition_name asc"
+		order_by="display_order asc, condition_name asc"
 	)
 	return templates
 

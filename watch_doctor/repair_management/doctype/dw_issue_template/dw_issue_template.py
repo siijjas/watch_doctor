@@ -13,3 +13,10 @@ class DWIssueTemplate(Document):
 		# Ensure issue name is trimmed
 		if self.issue_name:
 			self.issue_name = self.issue_name.strip()
+
+		if not self.display_order:
+			max_order = frappe.db.sql(
+				"select max(display_order) from `tabDW Issue Template` where name != %s",
+				(self.name or ""),
+			)[0][0]
+			self.display_order = (max_order or 0) + 1

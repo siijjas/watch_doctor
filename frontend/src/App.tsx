@@ -6,6 +6,7 @@ import { mockRepairOrders } from './services/mockData';
 import RepairOrderList from './components/RepairOrderList';
 import RepairOrderDetail from './components/RepairOrderDetail';
 import { RepairOrderForm } from './components/RepairOrderForm';
+import { RepairOrderIntakeWizard } from './components/RepairOrderIntakeWizard';
 import Dashboard from './components/Dashboard';
 import POS from './components/POS';
 import DailyReport from './components/DailyReport';
@@ -307,12 +308,20 @@ const AppContent: React.FC = () => {
       </div>
 
       {isFormOpen && (
-        <RepairOrderForm
-          isOpen={isFormOpen}
-          onClose={handleCloseForm}
-          onSave={handleSaveOrder}
-          order={orderToEdit}
-        />
+        orderToEdit ? (
+          <RepairOrderForm
+            isOpen={isFormOpen}
+            onClose={handleCloseForm}
+            onSave={handleSaveOrder}
+            order={orderToEdit}
+          />
+        ) : (
+          <RepairOrderIntakeWizard
+            isOpen={isFormOpen}
+            onClose={handleCloseForm}
+            onSave={handleSaveOrder}
+          />
+        )
       )}
     </div>
   );

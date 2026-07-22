@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { RepairOrder, RepairItem, RepairTask, RepairPartUsed, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, RecommendedWorkTemplate, MovementTypeTemplate, MovementCaliberTemplate, RepairItemIssue } from '../types';
-import { OrderStatus, Priority, WatchStatus, TaskStatus, resolveDiagnosisStatus } from '../types';
+import { OrderStatus, Priority, TaskStatus, WatchStatus, resolveDiagnosisStatus } from '../types';
 import * as apiService from '../services/apiService';
 import { isErpNext } from '../services/apiService';
 import { mockCustomers, mockEmployees, mockSpareParts, mockTaskTemplates } from '../services/mockData';
@@ -16,42 +16,7 @@ import { PlusIcon } from './icons/PlusIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { Autocomplete } from './ui/Autocomplete';
 import { useAppConfig } from '../context/AppConfigContext';
-
-const DEFAULT_WATCH_CONDITION_TEMPLATES: WatchConditionTemplate[] = [
-    { name: 'Scratches on crystal', condition_name: 'Scratches on crystal', description: 'Visible crystal scratching noted at intake.' },
-    { name: 'Cracked crystal', condition_name: 'Cracked crystal', description: 'Crystal already cracked before service.' },
-    { name: 'Case scratches', condition_name: 'Case scratches', description: 'Visible scratching on case surfaces.' },
-    { name: 'Case dents', condition_name: 'Case dents', description: 'Case has dents or impact marks.' },
-    { name: 'Bezel scratched', condition_name: 'Bezel scratched', description: 'Bezel or bezel insert shows cosmetic wear.' },
-    { name: 'Bezel loose', condition_name: 'Bezel loose', description: 'Bezel feels loose or has excess play.' },
-    { name: 'Crown worn', condition_name: 'Crown worn', description: 'Crown shows visible wear or cosmetic damage.' },
-    { name: 'Crown loose', condition_name: 'Crown loose', description: 'Crown is loose or does not feel secure.' },
-    { name: 'Pusher damaged', condition_name: 'Pusher damaged', description: 'Pushers show visible damage or wear.' },
-    { name: 'Dial stained', condition_name: 'Dial stained', description: 'Dial has visible staining, spotting, or discoloration.' },
-    { name: 'Hands corroded', condition_name: 'Hands corroded', description: 'Hands show corrosion, oxidation, or finish damage.' },
-    { name: 'Bracelet scratched', condition_name: 'Bracelet scratched', description: 'Bracelet has visible scratches or surface wear.' },
-    { name: 'Bracelet stretched', condition_name: 'Bracelet stretched', description: 'Bracelet shows stretch or excessive slack.' },
-    { name: 'Bracelet link missing', condition_name: 'Bracelet link missing', description: 'One or more bracelet links are missing.' },
-    { name: 'Clasp loose', condition_name: 'Clasp loose', description: 'Clasp does not close firmly or has excess movement.' },
-    { name: 'Strap worn', condition_name: 'Strap worn', description: 'Strap shows visible wear from prior use.' },
-    { name: 'Strap cracked', condition_name: 'Strap cracked', description: 'Strap is cracked, split, or dried out.' },
-    { name: 'Strap torn', condition_name: 'Strap torn', description: 'Strap is torn or structurally damaged.' },
-    { name: 'Strap stitching damaged', condition_name: 'Strap stitching damaged', description: 'Strap stitching is loose, frayed, or broken.' },
-    { name: 'Spring bar loose', condition_name: 'Spring bar loose', description: 'Spring bar is loose or not seated securely.' },
-    { name: 'Spring bar missing', condition_name: 'Spring bar missing', description: 'One or more spring bars are missing.' },
-    { name: 'Moisture under crystal', condition_name: 'Moisture under crystal', description: 'Condensation or moisture is visible beneath the crystal.' },
-    { name: 'Water damage signs', condition_name: 'Water damage signs', description: 'Visible indicators suggest prior water ingress.' },
-    { name: 'Rust visible', condition_name: 'Rust visible', description: 'Rust is visible externally at intake.' },
-    { name: 'Corrosion visible', condition_name: 'Corrosion visible', description: 'Visible corrosion is present on external parts.' },
-    { name: 'Screw missing', condition_name: 'Screw missing', description: 'One or more visible screws are missing.' },
-    { name: 'Screw mismatched', condition_name: 'Screw mismatched', description: 'A visible screw appears non-matching or previously replaced.' },
-    { name: 'Previous repair marks', condition_name: 'Previous repair marks', description: 'Marks indicate prior opening or repair attempts.' },
-    { name: 'Non-original parts visible', condition_name: 'Non-original parts visible', description: 'Visible external parts appear aftermarket or non-original.' },
-    { name: 'Heavy cosmetic wear', condition_name: 'Heavy cosmetic wear', description: 'Watch shows heavy pre-existing cosmetic wear.' },
-    { name: 'Impact damage visible', condition_name: 'Impact damage visible', description: 'Impact damage is visible on the watch exterior.' },
-    { name: 'Other cosmetic condition', condition_name: 'Other cosmetic condition', description: 'Use when another cosmetic condition needs to be documented.' },
-    { name: 'Other physical condition', condition_name: 'Other physical condition', description: 'Use when another physical condition needs to be documented.' },
-];
+import { DEFAULT_WATCH_CONDITION_TEMPLATES, newRepairItem } from '../services/repairIntakeDefaults';
 
 const DEFAULT_DIAGNOSIS_SUMMARY_TEMPLATES: DiagnosisSummaryTemplate[] = [
     { name: 'Circuit Damage', summary_name: 'Circuit Damage', description: 'Circuit damage found.' },
@@ -136,29 +101,6 @@ const toIsoDate = (displayDate?: string): string | null => {
 
     return null;
 };
-
-const newRepairItem = (): Omit<RepairItem, 'name'> => ({
-    watch_brand: '',
-    watch_model: '',
-    serial_number: '',
-    issues: [],
-    issue_description: '',
-    pre_existing_condition: [],
-    diagnosis_status: 'Pending Diagnosis',
-    diagnosis_summary: [],
-    movement_type: [],
-    movement_caliber: [],
-    movement_information: [],
-    recommended_work: [],
-    diagnosed_by: '',
-    diagnosis_date: '',
-    technician: '',
-    status: WatchStatus.Pending,
-    intake_checklist: { scratches: false, water_resistance: false, missing_parts: false, other_observations: '' },
-    tasks: [],
-    parts_used: [],
-});
-
 
 export const RepairOrderForm: React.FC<RepairOrderFormProps> = ({ isOpen, onClose, onSave, order }) => {
     const { formatCurrency } = useAppConfig();

@@ -79,6 +79,7 @@ interface IssueTemplate {
     description: string;
     suggested_task: string;
     is_active: number;
+    display_order: number;
 }
 
 interface WatchConditionTemplate {
@@ -86,7 +87,16 @@ interface WatchConditionTemplate {
     condition_name: string;
     description: string;
     is_active: number;
+    display_order: number;
+    category: string;
 }
+
+const WATCH_CONDITION_CATEGORIES = [
+    'Case & Exterior',
+    'Crystal & Water Resistance',
+    'Bracelet & Strap',
+    'History & Other',
+];
 
 interface DiagnosisSummaryTemplate {
     name?: string;
@@ -1290,21 +1300,50 @@ const IssueTemplatesSection: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editRow, setEditRow] = useState<IssueTemplate | null>(null);
-    const [form, setForm] = useState<IssueTemplate>({ issue_name: '', description: '', suggested_task: '', is_active: 1 });
+    const [form, setForm] = useState<IssueTemplate>({ issue_name: '', description: '', suggested_task: '', is_active: 1, display_order: 1 });
     const [isSaving, setIsSaving] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<IssueTemplate | null>(null);
     const [taskOptions, setTaskOptions] = useState<{ name: string; task_name: string }[]>([]);
+
+    const normalizeAndSort = (rows: any[]): IssueTemplate[] => {
+        const normalized = (rows || []).map((row: any, idx: number) => {
+            const order = parseInt(row.display_order, 10);
+            return { ...row, display_order: order > 0 ? order : idx + 1 };
+        });
+        return normalized.sort((a, b) => {
+            if (a.display_order !== b.display_order) return a.display_order - b.display_order;
+            return (a.issue_name || '').localeCompare(b.issue_name || '');
+        });
+    };
+
+    const getNextDisplayOrder = (rows: IssueTemplate[]): number => {
+        const maxOrder = rows.reduce((m, r) => {
+            const value = parseInt(r.display_order as any, 10) || 0;
+            return value > m ? value : m;
+        }, 0);
+        return maxOrder + 1;
+    };
 
     const load = useCallback(async () => {
         setIsLoading(true);
         try {
             const [issues, tasks] = await Promise.all([
-                getList('DW Issue Template', ['name', 'issue_name', 'description', 'suggested_task', 'is_active'], [], 200),
+                getList('DW Issue Template', ['name', 'issue_name', 'description', 'suggested_task', 'is_active', 'display_order'], [], 200),
                 getList('DW Task Template', ['name', 'task_name'], [], 200),
             ]);
-            setData(issues);
+            setData(normalizeAndSort(issues));
             setTaskOptions(tasks);
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            // Fallback for environments where display_order isn't migrated yet.
+            try {
+                const [issues, tasks] = await Promise.all([
+                    getList('DW Issue Template', ['name', 'issue_name', 'description', 'suggested_task', 'is_active'], [], 200),
+                    getList('DW Task Template', ['name', 'task_name'], [], 200),
+                ]);
+                setData(normalizeAndSort(issues));
+                setTaskOptions(tasks);
+            } catch (fallbackError) { console.error(fallbackError); setData([]); }
+        }
         setIsLoading(false);
     }, []);
 
@@ -1312,15 +1351,17 @@ const IssueTemplatesSection: React.FC = () => {
 
     const openAdd = () => {
         setEditRow(null);
-        setForm({ issue_name: '', description: '', suggested_task: '', is_active: 1 });
+        setForm({ issue_name: '', description: '', suggested_task: '', is_active: 1, display_order: getNextDisplayOrder(data) });
         setIsModalOpen(true);
     };
 
     const openEdit = async (row: IssueTemplate) => {
         try {
             const full = await getDoc('DW Issue Template', row.name!);
+            const fullOrder = parseInt(full.display_order, 10);
+            const rowOrder = parseInt(row.display_order as any, 10);
             setEditRow(full);
-            setForm({ issue_name: full.issue_name, description: full.description || '', suggested_task: full.suggested_task || '', is_active: full.is_active, name: full.name });
+            setForm({ issue_name: full.issue_name, description: full.description || '', suggested_task: full.suggested_task || '', is_active: full.is_active, display_order: fullOrder > 0 ? fullOrder : (rowOrder > 0 ? rowOrder : 1), name: full.name });
         } catch { setEditRow(row); setForm({ ...row }); }
         setIsModalOpen(true);
     };
@@ -1329,7 +1370,8 @@ const IssueTemplatesSection: React.FC = () => {
         e.preventDefault();
         setIsSaving(true);
         try {
-            await saveDoc({ doctype: 'DW Issue Template', ...form, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            const normalizedOrder = Math.max(1, parseInt(form.display_order as any, 10) || getNextDisplayOrder(data));
+            await saveDoc({ doctype: 'DW Issue Template', ...form, display_order: normalizedOrder, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
             setIsModalOpen(false);
             await load();
         } catch (e) { console.error(e); alert('Error saving: ' + e); }
@@ -1351,6 +1393,7 @@ const IssueTemplatesSection: React.FC = () => {
     };
 
     const columns: Column<IssueTemplate>[] = [
+        { key: 'display_order', label: 'Order' },
         { key: 'issue_name', label: 'Issue Name' },
         { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
         { key: 'suggested_task', label: 'Suggested Task', render: r => <span className="text-gray-600">{getTaskLabel(r.suggested_task)}</span> },
@@ -1361,7 +1404,7 @@ const IssueTemplatesSection: React.FC = () => {
         <div>
             <SectionHeader
                 title="Issue Templates"
-                description="Common watch issues that can be selected when creating a repair order."
+                description="Common watch issues (complaints) that can be selected when creating a repair order. Lower order numbers appear first — give frequent complaints a low number to keep them at the top."
                 onAdd={openAdd}
                 addLabel="Add Issue"
             />
@@ -1400,6 +1443,14 @@ const IssueTemplatesSection: React.FC = () => {
                         </select>
                         <p className="text-xs text-gray-400 mt-1">Automatically suggest this task when the issue is selected.</p>
                     </div>
+                    <Input
+                        label="Display Order"
+                        type="number"
+                        min={1}
+                        value={form.display_order}
+                        onChange={e => setForm(f => ({ ...f, display_order: Math.max(1, +e.target.value || 1) }))}
+                    />
+                    <p className="text-xs text-gray-400 -mt-3">Lower numbers appear first in the intake list. Give frequent complaints a low number.</p>
                     <label className="flex items-center gap-3 cursor-pointer select-none">
                         <input
                             type="checkbox"
@@ -1434,16 +1485,48 @@ const WatchConditionTemplatesSection: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editRow, setEditRow] = useState<WatchConditionTemplate | null>(null);
-    const [form, setForm] = useState<WatchConditionTemplate>({ condition_name: '', description: '', is_active: 1 });
+    const [form, setForm] = useState<WatchConditionTemplate>({ condition_name: '', description: '', is_active: 1, display_order: 1, category: WATCH_CONDITION_CATEGORIES[0] });
     const [isSaving, setIsSaving] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<WatchConditionTemplate | null>(null);
+
+    const normalizeAndSort = (rows: any[]): WatchConditionTemplate[] => {
+        const normalized = (rows || []).map((row: any, idx: number) => {
+            const order = parseInt(row.display_order, 10);
+            return { ...row, display_order: order > 0 ? order : idx + 1, category: row.category || WATCH_CONDITION_CATEGORIES[WATCH_CONDITION_CATEGORIES.length - 1] };
+        });
+        return normalized.sort((a, b) => {
+            const categoryDiff = WATCH_CONDITION_CATEGORIES.indexOf(a.category) - WATCH_CONDITION_CATEGORIES.indexOf(b.category);
+            if (categoryDiff !== 0) return categoryDiff;
+            if (a.display_order !== b.display_order) return a.display_order - b.display_order;
+            return (a.condition_name || '').localeCompare(b.condition_name || '');
+        });
+    };
+
+    const getNextDisplayOrder = (rows: WatchConditionTemplate[]): number => {
+        const maxOrder = rows.reduce((m, r) => {
+            const value = parseInt(r.display_order as any, 10) || 0;
+            return value > m ? value : m;
+        }, 0);
+        return maxOrder + 1;
+    };
 
     const load = useCallback(async () => {
         setIsLoading(true);
         try {
-            const templates = await getList('DW Watch Condition Template', ['name', 'condition_name', 'description', 'is_active'], [], 250);
-            setData(templates);
-        } catch (e) { console.error(e); }
+            const templates = await getList('DW Watch Condition Template', ['name', 'condition_name', 'description', 'is_active', 'display_order', 'category'], [], 250);
+            setData(normalizeAndSort(templates));
+        } catch (e) {
+            // Fallback for environments where category/display_order isn't migrated yet.
+            try {
+                const templates = await getList('DW Watch Condition Template', ['name', 'condition_name', 'description', 'is_active', 'display_order'], [], 250);
+                setData(normalizeAndSort(templates));
+            } catch {
+                try {
+                    const templates = await getList('DW Watch Condition Template', ['name', 'condition_name', 'description', 'is_active'], [], 250);
+                    setData(normalizeAndSort(templates));
+                } catch (fallbackError) { console.error(fallbackError); setData([]); }
+            }
+        }
         setIsLoading(false);
     }, []);
 
@@ -1451,15 +1534,17 @@ const WatchConditionTemplatesSection: React.FC = () => {
 
     const openAdd = () => {
         setEditRow(null);
-        setForm({ condition_name: '', description: '', is_active: 1 });
+        setForm({ condition_name: '', description: '', is_active: 1, display_order: getNextDisplayOrder(data), category: WATCH_CONDITION_CATEGORIES[0] });
         setIsModalOpen(true);
     };
 
     const openEdit = async (row: WatchConditionTemplate) => {
         try {
             const full = await getDoc('DW Watch Condition Template', row.name!);
+            const fullOrder = parseInt(full.display_order, 10);
+            const rowOrder = parseInt(row.display_order as any, 10);
             setEditRow(full);
-            setForm({ condition_name: full.condition_name, description: full.description || '', is_active: full.is_active, name: full.name });
+            setForm({ condition_name: full.condition_name, description: full.description || '', is_active: full.is_active, display_order: fullOrder > 0 ? fullOrder : (rowOrder > 0 ? rowOrder : 1), category: full.category || row.category || WATCH_CONDITION_CATEGORIES[0], name: full.name });
         } catch { setEditRow(row); setForm({ ...row }); }
         setIsModalOpen(true);
     };
@@ -1468,7 +1553,8 @@ const WatchConditionTemplatesSection: React.FC = () => {
         e.preventDefault();
         setIsSaving(true);
         try {
-            await saveDoc({ doctype: 'DW Watch Condition Template', ...form, ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
+            const normalizedOrder = Math.max(1, parseInt(form.display_order as any, 10) || getNextDisplayOrder(data));
+            await saveDoc({ doctype: 'DW Watch Condition Template', ...form, display_order: normalizedOrder, category: form.category || WATCH_CONDITION_CATEGORIES[0], ...(editRow ? { modified: (editRow as any).modified, creation: (editRow as any).creation, owner: (editRow as any).owner } : {}) });
             setIsModalOpen(false);
             await load();
         } catch (e) { console.error(e); alert('Error saving: ' + e); }
@@ -1485,6 +1571,8 @@ const WatchConditionTemplatesSection: React.FC = () => {
     };
 
     const columns: Column<WatchConditionTemplate>[] = [
+        { key: 'category', label: 'Category', render: r => <span className="text-xs text-gray-500">{r.category}</span> },
+        { key: 'display_order', label: 'Order' },
         { key: 'condition_name', label: 'Condition Name' },
         { key: 'description', label: 'Description', render: r => <span className="text-gray-500 truncate max-w-xs block">{r.description || '—'}</span> },
         { key: 'is_active', label: 'Status', render: r => <ActiveBadge active={!!r.is_active} /> },
@@ -1494,7 +1582,7 @@ const WatchConditionTemplatesSection: React.FC = () => {
         <div>
             <SectionHeader
                 title="Watch Condition Templates"
-                description="Pre-existing watch condition presets shown in the intake checklist for repair orders."
+                description="Pre-existing watch condition presets shown in the intake checklist for repair orders. Lower order numbers appear first — give frequent conditions a low number to keep them at the top."
                 onAdd={openAdd}
                 addLabel="Add Condition"
             />
@@ -1519,6 +1607,28 @@ const WatchConditionTemplatesSection: React.FC = () => {
                             placeholder="Optional guidance for staff using this condition..."
                         />
                     </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Category *</label>
+                        <select
+                            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
+                            value={form.category}
+                            onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                            required
+                        >
+                            {WATCH_CONDITION_CATEGORIES.map(cat => (
+                                <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-gray-400 mt-1">Groups this condition in the intake picker.</p>
+                    </div>
+                    <Input
+                        label="Display Order"
+                        type="number"
+                        min={1}
+                        value={form.display_order}
+                        onChange={e => setForm(f => ({ ...f, display_order: Math.max(1, +e.target.value || 1) }))}
+                    />
+                    <p className="text-xs text-gray-400 -mt-3">Lower numbers appear first in the intake list. Give frequent conditions a low number.</p>
                     <label className="flex items-center gap-3 cursor-pointer select-none">
                         <input
                             type="checkbox"
