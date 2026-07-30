@@ -154,14 +154,25 @@ export interface RepairTask {
     service_price?: number;
 }
 
+export interface RepairItemImage {
+    name?: string;
+    image: string; // file_url returned by uploadFile()
+    caption?: string;
+}
+
 export interface RepairItem {
     name?: string;
     watch_brand: string;
     watch_model: string;
     serial_number: string;
+    case_type: string;
+    strap_bracelet: string;
+    watch_type: string;
+    dial: string;
     issues: RepairItemIssue[];
     issue_description: string;
     pre_existing_condition: string[];
+    photos: RepairItemImage[];
     diagnosis_status: DiagnosisStatus;
     diagnosis_summary: string[];
     movement_type: string[];

@@ -736,33 +736,36 @@ class DWRepairOrder(Document):
 			item.recommended_work = json.dumps(recommended_work)
 
 	def _flatten_pending_nested_child_rows(self):
-		"""Translate the SPA's nested items[].tasks/parts_used/issues shape
-		into the flat all_tasks/all_parts/all_issues tables, and resolve
-		"Other"/free-text issues to a valid DW Issue Template.
+		"""Translate the SPA's nested items[].tasks/parts_used/issues/photos
+		shape into the flat all_tasks/all_parts/all_issues/all_photos tables,
+		and resolve "Other"/free-text issues to a valid DW Issue Template.
 
 		The API layer stashes the SPA's nested arrays on
-		item.flags.pending_tasks / pending_parts_used / pending_issues before
-		calling doc.save() (see watch_doctor.api.orders.save_repair_order).
-		Desk edits never set these flags — all_tasks/all_parts/items[].issues
-		are flat siblings on this doctype already, so a Desk user edits them
-		directly via their own grids and there is nothing to translate; this
-		step is a no-op for that path.
+		item.flags.pending_tasks / pending_parts_used / pending_issues /
+		pending_photos before calling doc.save() (see
+		watch_doctor.api.orders.save_repair_order). Desk edits never set
+		these flags — all_tasks/all_parts/all_issues/all_photos are flat
+		siblings on this doctype already, so a Desk user edits them directly
+		via their own grids and there is nothing to translate; this step is
+		a no-op for that path.
 		"""
 		items = self.items or []
 		has_pending = any(
 			item.flags.get("pending_tasks") is not None
 			or item.flags.get("pending_parts_used") is not None
 			or item.flags.get("pending_issues") is not None
+			or item.flags.get("pending_photos") is not None
 			for item in items
 		)
 		if not has_pending:
 			return
 
 		# Full replace: the SPA always resubmits the complete current state of
-		# every item's tasks/parts/issues, so the incoming nested payload is
-		# authoritative — matches the pre-refactor behavior where doc_dict's
-		# all_tasks/all_parts/all_issues were rebuilt from scratch every save.
-		flat_tasks, flat_parts, flat_issues = [], [], []
+		# every item's tasks/parts/issues/photos, so the incoming nested
+		# payload is authoritative — matches the pre-refactor behavior where
+		# doc_dict's all_tasks/all_parts/all_issues were rebuilt from scratch
+		# every save.
+		flat_tasks, flat_parts, flat_issues, flat_photos = [], [], [], []
 		for item in items:
 			item_key = str(item.idx)
 
@@ -775,6 +778,11 @@ class DWRepairOrder(Document):
 				part = dict(part)
 				part["repair_item_key"] = item_key
 				flat_parts.append(part)
+
+			for photo in (item.flags.get("pending_photos") or []):
+				photo = dict(photo)
+				photo["repair_item_key"] = item_key
+				flat_photos.append(photo)
 
 			resolved_item_issues = []
 			for issue in (item.flags.get("pending_issues") or []):
@@ -810,6 +818,7 @@ class DWRepairOrder(Document):
 		self.set("all_tasks", flat_tasks)
 		self.set("all_parts", flat_parts)
 		self.set("all_issues", flat_issues)
+		self.set("all_photos", flat_photos)
 
 	def _bump_task_status_for_attached_parts(self):
 		"""Auto-advance a task from Pending to In Progress once a part is

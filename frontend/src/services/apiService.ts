@@ -1,4 +1,4 @@
-import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, RecommendedWorkTemplate, MovementInfoTemplate, MovementTypeTemplate, MovementCaliberTemplate, DiagnosisStatus, QuotationSummary, InvoiceSummary, UserInfo } from '../types';
+import type { RepairOrder, Customer, Employee, Item, RepairTaskTemplate, WatchBrand, WatchModel, IssueTemplate, WatchConditionTemplate, DiagnosisSummaryTemplate, RecommendedWorkTemplate, MovementInfoTemplate, MovementTypeTemplate, MovementCaliberTemplate, DiagnosisStatus, QuotationSummary, InvoiceSummary, UserInfo, RepairItemImage } from '../types';
 import { resolveDiagnosisStatus } from '../types';
 
 declare const window: any;
@@ -287,6 +287,7 @@ const unflattenRepairOrder = (order: any): RepairOrder => {
         const tasks = (order.all_tasks || []).filter((t: any) => t.repair_item_key === itemKey).map((t: any) => ({ ...t, doctype: 'DW Repair Task' }));
         const parts_used = (order.all_parts || []).filter((p: any) => p.repair_item_key === itemKey).map((p: any) => ({ ...p, doctype: 'DW Repair Part Used' }));
         const issues = (order.all_issues || []).filter((i: any) => i.repair_item_key === itemKey).map((i: any) => ({ ...i, doctype: 'DW Repair Item Issue' }));
+        const photos = (order.all_photos || []).filter((p: any) => p.repair_item_key === itemKey).map((p: any) => ({ name: p.name, image: p.image, caption: p.caption, doctype: 'DW Repair Item Image' }));
 
         const diagnosisSummary = normalizeStringList(item.diagnosis_summary);
         const movementType = normalizeStringList(item.movement_type);
@@ -327,6 +328,7 @@ const unflattenRepairOrder = (order: any): RepairOrder => {
             tasks,
             parts_used,
             issues,
+            photos,
             doctype: 'DW Repair Item'
         };
     });
@@ -410,6 +412,7 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
     const all_tasks: any[] = [];
     const all_parts: any[] = [];
     const all_issues: any[] = [];
+    const all_photos: any[] = [];
 
     // 2. Map items
     const items = (order.items || []).map((item, index) => {
@@ -518,12 +521,26 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
             });
         });
 
+        (item.photos || []).forEach(p => {
+            all_photos.push({
+                name: p.name || undefined,
+                image: p.image,
+                caption: p.caption || '',
+                repair_item_key: itemKey,
+                doctype: 'DW Repair Item Image'
+            });
+        });
+
         return {
             name: item.name || undefined,
             idx: index + 1, // Include idx for proper child table row matching
             watch_brand: item.watch_brand,
             watch_model: item.watch_model,
             serial_number: item.serial_number,
+            case_type: item.case_type,
+            strap_bracelet: item.strap_bracelet,
+            watch_type: item.watch_type,
+            dial: item.dial,
             issue_description: item.issue_description,
             pre_existing_condition: JSON.stringify(normalizeStringList(item.pre_existing_condition)),
             diagnosis_status: resolveDiagnosisStatus(item.diagnosis_status, {
@@ -545,6 +562,12 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
             technician: item.technician,
             status: item.status,
             intake_checklist: item.intake_checklist,
+            photos: (item.photos || []).map(p => ({
+                name: p.name || undefined,
+                image: p.image,
+                caption: p.caption || '',
+                doctype: 'DW Repair Item Image',
+            })),
             // Keep nested structures for backend flattening
             tasks: item.tasks || [],
             parts_used: item.parts_used || [],
@@ -568,7 +591,8 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
         items: items,
         all_tasks: all_tasks,
         all_parts: all_parts,
-        all_issues: all_issues
+        all_issues: all_issues,
+        all_photos: all_photos
     };
 
     // Use custom save API that handles system fields server-side
@@ -786,6 +810,22 @@ export const updateRepairItemDiagnosis = async (itemName: string, diagnosis: Rep
     const res = await apiFetch('/api/method/watch_doctor.api.update_repair_item_diagnosis', {
         method: 'POST',
         body: JSON.stringify({ item_name: itemName, diagnosis_json: JSON.stringify(diagnosis) }),
+    });
+    return res.message;
+};
+
+export interface RepairItemPhotosPayload {
+    photos?: RepairItemImage[];
+    case_type?: string;
+    strap_bracelet?: string;
+    watch_type?: string;
+    dial?: string;
+}
+
+export const updateRepairItemPhotos = async (itemName: string, payload: RepairItemPhotosPayload): Promise<any> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.update_repair_item_photos', {
+        method: 'POST',
+        body: JSON.stringify({ item_name: itemName, payload_json: JSON.stringify(payload) }),
     });
     return res.message;
 };
@@ -1196,6 +1236,60 @@ export const uploadFile = async (file: File): Promise<string> => {
     }
     const data = await response.json();
     return data.message?.file_url || '';
+};
+
+// Rotates image bytes by a multiple of 90 degrees using a canvas and returns
+// a new File with the same name/type. Backs the manual rotate buttons that
+// let staff fix a photo that came out sideways (see rotateUploadedImage).
+const rotateImageBlob = (blob: Blob, degrees: number, fileName: string, mimeType: string): Promise<File> => (
+    new Promise((resolve, reject) => {
+        const objectUrl = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+            const swapDimensions = ((degrees % 180) + 180) % 180 === 90;
+            const canvas = document.createElement('canvas');
+            canvas.width = swapDimensions ? img.naturalHeight : img.naturalWidth;
+            canvas.height = swapDimensions ? img.naturalWidth : img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            URL.revokeObjectURL(objectUrl);
+            if (!ctx) {
+                reject(new Error('Canvas not supported'));
+                return;
+            }
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate((degrees * Math.PI) / 180);
+            ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+            canvas.toBlob((rotatedBlob) => {
+                if (!rotatedBlob) {
+                    reject(new Error('Failed to encode rotated image'));
+                    return;
+                }
+                resolve(new File([rotatedBlob], fileName, { type: mimeType }));
+            }, mimeType, 0.92);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('Failed to load image for rotation'));
+        };
+        img.src = objectUrl;
+    })
+);
+
+export const rotateImageFile = (file: File, degrees: number): Promise<File> => (
+    rotateImageBlob(file, degrees, file.name, file.type || 'image/jpeg')
+);
+
+// Fetches an already-uploaded photo, rotates it, and re-uploads it as a new
+// file. Used by the manual rotate button on existing photos.
+export const rotateUploadedImage = async (imageUrl: string, degrees: number): Promise<string> => {
+    const response = await fetch(imageUrl, { credentials: 'include' });
+    if (!response.ok) {
+        throw new Error(`Failed to fetch image for rotation: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const fileName = imageUrl.split('/').pop() || 'photo.jpg';
+    const rotated = await rotateImageBlob(blob, degrees, fileName, blob.type || 'image/jpeg');
+    return uploadFile(rotated);
 };
 
 // ==================== POS APIs ====================

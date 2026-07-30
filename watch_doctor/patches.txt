@@ -15,3 +15,4 @@ watch_doctor.patches.add_internal_line_field
 watch_doctor.patches.remove_estimate_ready_whatsapp_template
 watch_doctor.patches.backfill_template_display_order
 watch_doctor.patches.backfill_watch_condition_categories
+watch_doctor.patches.add_whatsapp_no_to_customer

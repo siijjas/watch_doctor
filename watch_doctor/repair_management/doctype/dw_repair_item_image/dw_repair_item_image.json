@@ -1,0 +1,44 @@
+{
+    "actions": [],
+    "creation": "2026-07-22 00:00:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "repair_item_key",
+        "image",
+        "caption"
+    ],
+    "fields": [
+        {
+            "fieldname": "repair_item_key",
+            "fieldtype": "Data",
+            "label": "Repair Item Key",
+            "hidden": 1
+        },
+        {
+            "fieldname": "image",
+            "fieldtype": "Attach Image",
+            "label": "Image",
+            "reqd": 1,
+            "in_list_view": 1
+        },
+        {
+            "fieldname": "caption",
+            "fieldtype": "Data",
+            "label": "Caption"
+        }
+    ],
+    "index_web_pages_for_search": 1,
+    "istable": 1,
+    "links": [],
+    "modified": "2026-07-22 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Repair Management",
+    "name": "DW Repair Item Image",
+    "owner": "Administrator",
+    "permissions": [],
+    "sort_field": "modified",
+    "sort_order": "DESC",
+    "states": [],
+    "track_changes": 1
+}

@@ -68,6 +68,7 @@ export const RepairOrderIntakeWizard: React.FC<RepairOrderIntakeWizardProps> = (
     const [expanded, setExpanded] = useState<boolean[]>([true]);
     const [otherDescriptions, setOtherDescriptions] = useState<string[]>(['']);
     const [conditionTab, setConditionTab] = useState<string[]>(['']);
+    const [uploadingPhotoIndex, setUploadingPhotoIndex] = useState<number | null>(null);
 
     const [brands, setBrands] = useState<WatchBrand[]>([]);
     const [modelsByBrand, setModelsByBrand] = useState<Record<string, WatchModel[]>>({});
@@ -211,6 +212,41 @@ export const RepairOrderIntakeWizard: React.FC<RepairOrderIntakeWizardProps> = (
 
     const handleSetConditionTab = (index: number, category: string) => {
         setConditionTab(prev => prev.map((c, i) => i === index ? category : c));
+    };
+
+    const handleCapturePhoto = async (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        setUploadingPhotoIndex(index);
+        try {
+            const url = await apiService.uploadFile(file);
+            setWatch(index, { photos: [...watches[index].photos, { image: url }] });
+        } catch (err: any) {
+            showToast(err.message || 'Failed to upload photo', 'error');
+        } finally {
+            setUploadingPhotoIndex(null);
+        }
+    };
+
+    const handleRemovePhoto = (index: number, photoIdx: number) => {
+        setWatch(index, { photos: watches[index].photos.filter((_, pi) => pi !== photoIdx) });
+    };
+
+    const [rotatingPhoto, setRotatingPhoto] = useState<{ index: number; photoIdx: number } | null>(null);
+
+    const handleRotatePhoto = async (index: number, photoIdx: number, degrees: number) => {
+        const photo = watches[index].photos[photoIdx];
+        if (!photo) return;
+        setRotatingPhoto({ index, photoIdx });
+        try {
+            const rotatedUrl = await apiService.rotateUploadedImage(photo.image, degrees);
+            setWatch(index, { photos: watches[index].photos.map((p, pi) => (pi === photoIdx ? { ...p, image: rotatedUrl } : p)) });
+        } catch (err: any) {
+            showToast(err.message || 'Failed to rotate photo', 'error');
+        } finally {
+            setRotatingPhoto(null);
+        }
     };
 
     const handleSubmit = () => {
@@ -471,6 +507,19 @@ export const RepairOrderIntakeWizard: React.FC<RepairOrderIntakeWizardProps> = (
                                                 <Input label="Serial Number" placeholder="Optional" value={w.serial_number} onChange={e => setWatch(i, { serial_number: e.target.value })} />
                                             </div>
 
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5 mb-5">
+                                                <Input label="Case Type" placeholder="e.g. Stainless Steel" value={w.case_type} onChange={e => setWatch(i, { case_type: e.target.value })} />
+                                                <Input label="Strap / Bracelet" placeholder="e.g. Leather Strap" value={w.strap_bracelet} onChange={e => setWatch(i, { strap_bracelet: e.target.value })} />
+                                                <Select label="Watch Type" value={w.watch_type} onChange={e => setWatch(i, { watch_type: e.target.value })}>
+                                                    <option value="">Select...</option>
+                                                    <option value="Mechanical">Mechanical</option>
+                                                    <option value="Automatic">Automatic</option>
+                                                    <option value="Quartz">Quartz</option>
+                                                    <option value="Other">Other</option>
+                                                </Select>
+                                                <Input label="Dial" placeholder="e.g. Black Dial" value={w.dial} onChange={e => setWatch(i, { dial: e.target.value })} />
+                                            </div>
+
                                             <div className="mb-4.5" style={{ marginBottom: 18 }}>
                                                 <label className="block text-xs font-semibold text-gray-700 mb-2">Complaint — tap all that apply</label>
                                                 <div className="flex flex-wrap gap-2">
@@ -569,6 +618,70 @@ export const RepairOrderIntakeWizard: React.FC<RepairOrderIntakeWizardProps> = (
                                                         ))}
                                                     </div>
                                                 )}
+                                            </div>
+
+                                            <div className="mt-4.5" style={{ marginTop: 18 }}>
+                                                <div className="mb-2.5">
+                                                    <div className="text-sm font-bold text-gray-900">Visible Condition Photos</div>
+                                                    <div className="text-xs mt-0.5" style={{ color: '#8A8378' }}>Capture photos of the watch's condition at intake.</div>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2.5">
+                                                    {w.photos.map((photo, pIdx) => {
+                                                        const isRotating = rotatingPhoto?.index === i && rotatingPhoto?.photoIdx === pIdx;
+                                                        return (
+                                                        <div key={pIdx} className="relative" style={{ width: 84, height: 84 }}>
+                                                            <img src={photo.image} alt="Visible condition" className="w-full h-full object-contain rounded-lg" style={{ border: '1px solid #E0DACE', background: '#F0EEEB' }} />
+                                                            {isRotating && (
+                                                                <div className="absolute inset-0 rounded-lg bg-white/70 flex items-center justify-center text-[10px]" style={{ color: '#8A8378' }}>…</div>
+                                                            )}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemovePhoto(i, pIdx)}
+                                                                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white text-gray-500 text-xs leading-none flex items-center justify-center hover:text-red-500"
+                                                                style={{ border: '1px solid #E0DACE' }}
+                                                            >
+                                                                ×
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                disabled={rotatingPhoto !== null}
+                                                                onClick={() => handleRotatePhoto(i, pIdx, -90)}
+                                                                title="Rotate counter-clockwise"
+                                                                className="absolute -bottom-1.5 -left-1.5 w-5 h-5 rounded-full bg-white text-gray-500 text-xs leading-none flex items-center justify-center hover:text-blue-500"
+                                                                style={{ border: '1px solid #E0DACE' }}
+                                                            >
+                                                                ⟲
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                disabled={rotatingPhoto !== null}
+                                                                onClick={() => handleRotatePhoto(i, pIdx, 90)}
+                                                                title="Rotate clockwise"
+                                                                className="absolute -bottom-1.5 -right-1.5 w-5 h-5 rounded-full bg-white text-gray-500 text-xs leading-none flex items-center justify-center hover:text-blue-500"
+                                                                style={{ border: '1px solid #E0DACE' }}
+                                                            >
+                                                                ⟳
+                                                            </button>
+                                                        </div>
+                                                        );
+                                                    })}
+                                                    <label
+                                                        htmlFor={`photo-capture-${i}`}
+                                                        className="flex items-center justify-center text-center rounded-lg text-xs font-semibold cursor-pointer px-2"
+                                                        style={{ width: 84, height: 84, border: '1px dashed #C9C2B6', color: '#8A8378', background: uploadingPhotoIndex === i ? '#F0EEEB' : 'transparent' }}
+                                                    >
+                                                        {uploadingPhotoIndex === i ? 'Uploading…' : '+ Add Photo'}
+                                                    </label>
+                                                    <input
+                                                        id={`photo-capture-${i}`}
+                                                        type="file"
+                                                        accept="image/*"
+                                                        capture="environment"
+                                                        className="hidden"
+                                                        disabled={uploadingPhotoIndex === i}
+                                                        onChange={e => handleCapturePhoto(i, e)}
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
                                     )}

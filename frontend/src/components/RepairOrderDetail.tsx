@@ -258,9 +258,50 @@ const WatchCard: React.FC<{
     canNotifyEstimateCustomer: boolean;
     isSavingDiagnosis: boolean;
     onSaveDiagnosis: (itemIndex: number, diagnosis: Pick<RepairItem, 'diagnosis_status' | 'diagnosis_summary' | 'movement_type' | 'movement_caliber' | 'movement_information' | 'recommended_work'>) => Promise<void>;
+    isSavingPhotos: boolean;
+    onSavePhotos: (itemIndex: number, payload: apiService.RepairItemPhotosPayload) => Promise<void>;
     defaultExpanded?: boolean;
-  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, defaultExpanded = true }) => {
+  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, isSavingPhotos, onSavePhotos, defaultExpanded = true }) => {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+    const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
+    const handleCapturePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      setIsUploadingPhoto(true);
+      try {
+        const url = await apiService.uploadFile(file);
+        const nextPhotos = [...(item.photos || []), { image: url }];
+        await onSavePhotos(itemIndex, { photos: nextPhotos });
+      } catch (err: any) {
+        alert(`Failed to upload photo: ${err.message || err}`);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
+    };
+
+    const handleRemovePhoto = async (photoIdx: number) => {
+      const nextPhotos = (item.photos || []).filter((_, pi) => pi !== photoIdx);
+      await onSavePhotos(itemIndex, { photos: nextPhotos });
+    };
+
+    const [rotatingPhotoIdx, setRotatingPhotoIdx] = useState<number | null>(null);
+
+    const handleRotatePhoto = async (photoIdx: number, degrees: number) => {
+      const photo = (item.photos || [])[photoIdx];
+      if (!photo) return;
+      setRotatingPhotoIdx(photoIdx);
+      try {
+        const rotatedUrl = await apiService.rotateUploadedImage(photo.image, degrees);
+        const nextPhotos = (item.photos || []).map((p, pi) => (pi === photoIdx ? { ...p, image: rotatedUrl } : p));
+        await onSavePhotos(itemIndex, { photos: nextPhotos });
+      } catch (err: any) {
+        alert(`Failed to rotate photo: ${err.message || err}`);
+      } finally {
+        setRotatingPhotoIdx(null);
+      }
+    };
     const [activeDiagnosisModal, setActiveDiagnosisModal] = useState<null | 'movement_type' | 'movement_caliber' | 'diagnosis_summary' | 'recommended_work'>(null);
     const [diagnosisDraft, setDiagnosisDraft] = useState({
       diagnosis_status: item.diagnosis_status,
@@ -521,6 +562,95 @@ const WatchCard: React.FC<{
                     </div>
                   </div>
                 )}
+
+                {(item.case_type || item.strap_bracelet || item.watch_type || item.dial) && (
+                  <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+                    <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-600">Watch Attributes</h5>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                      {item.case_type && (
+                        <div>
+                          <p className="text-xs text-gray-400">Case Type</p>
+                          <p className="font-medium text-gray-900">{item.case_type}</p>
+                        </div>
+                      )}
+                      {item.strap_bracelet && (
+                        <div>
+                          <p className="text-xs text-gray-400">Strap / Bracelet</p>
+                          <p className="font-medium text-gray-900">{item.strap_bracelet}</p>
+                        </div>
+                      )}
+                      {item.watch_type && (
+                        <div>
+                          <p className="text-xs text-gray-400">Watch Type</p>
+                          <p className="font-medium text-gray-900">{item.watch_type}</p>
+                        </div>
+                      )}
+                      {item.dial && (
+                        <div>
+                          <p className="text-xs text-gray-400">Dial</p>
+                          <p className="font-medium text-gray-900">{item.dial}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+                  <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-600">Visible Condition Photos</h5>
+                  <div className="mt-2 flex flex-wrap gap-2.5">
+                    {(item.photos || []).map((photo, pIdx) => (
+                      <div key={pIdx} className="relative" style={{ width: 76, height: 76 }}>
+                        <img src={photo.image} alt="Visible condition" className="w-full h-full object-contain rounded-lg border border-stone-200 bg-stone-100" />
+                        {rotatingPhotoIdx === pIdx && (
+                          <div className="absolute inset-0 rounded-lg bg-white/70 flex items-center justify-center text-[10px] text-stone-500">…</div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); void handleRemovePhoto(pIdx); }}
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-white text-gray-500 text-xs leading-none flex items-center justify-center border border-stone-200 hover:text-red-500"
+                        >
+                          ×
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rotatingPhotoIdx !== null}
+                          onClick={(e) => { e.stopPropagation(); void handleRotatePhoto(pIdx, -90); }}
+                          title="Rotate counter-clockwise"
+                          className="absolute -bottom-1.5 -left-1.5 w-5 h-5 rounded-full bg-white text-gray-500 text-xs leading-none flex items-center justify-center border border-stone-200 hover:text-blue-500"
+                        >
+                          ⟲
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rotatingPhotoIdx !== null}
+                          onClick={(e) => { e.stopPropagation(); void handleRotatePhoto(pIdx, 90); }}
+                          title="Rotate clockwise"
+                          className="absolute -bottom-1.5 -right-1.5 w-5 h-5 rounded-full bg-white text-gray-500 text-xs leading-none flex items-center justify-center border border-stone-200 hover:text-blue-500"
+                        >
+                          ⟳
+                        </button>
+                      </div>
+                    ))}
+                    <label
+                      onClick={(e) => e.stopPropagation()}
+                      htmlFor={`detail-photo-capture-${item.name || itemIndex}`}
+                      className="flex items-center justify-center text-center rounded-lg text-xs font-semibold cursor-pointer px-2 border border-dashed border-stone-300 text-stone-500"
+                      style={{ width: 76, height: 76, background: isUploadingPhoto || isSavingPhotos ? '#F3EFEA' : 'transparent' }}
+                    >
+                      {isUploadingPhoto || isSavingPhotos ? 'Saving…' : '+ Add Photo'}
+                    </label>
+                    <input
+                      id={`detail-photo-capture-${item.name || itemIndex}`}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      disabled={isUploadingPhoto || isSavingPhotos}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={handleCapturePhoto}
+                    />
+                  </div>
+                </div>
               </div>
 
               <div>
@@ -986,6 +1116,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   const [estimatePreview, setEstimatePreview] = useState<EstimateNotificationPreview | null>(null);
   const [estimateNotifyError, setEstimateNotifyError] = useState('');
   const [diagnosisSavingItemName, setDiagnosisSavingItemName] = useState<string | null>(null);
+  const [photosSavingItemName, setPhotosSavingItemName] = useState<string | null>(null);
 
   // Handlers
   const handleAddPart = async (watchIndex: number, initialTaskIndex: number | null, part: RepairPartUsed, markTaskCompleted: boolean = false) => {
@@ -1252,6 +1383,26 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     }
   };
 
+  const handleSavePhotos = async (watchIndex: number, payload: apiService.RepairItemPhotosPayload) => {
+    const item = order.items[watchIndex];
+    if (!item?.name) {
+      alert('Photos can only be saved after the repair item exists.');
+      return;
+    }
+
+    setPhotosSavingItemName(item.name);
+    try {
+      await apiService.updateRepairItemPhotos(item.name, payload);
+      if (onRefresh) {
+        await onRefresh(order.name);
+      }
+    } catch (error: any) {
+      alert(`Failed to save photos: ${error.message || error}`);
+    } finally {
+      setPhotosSavingItemName(null);
+    }
+  };
+
   const handleCreateQuotation = async (quotationType: 'Estimate' | 'Final', watchIndices?: number[]) => {
     try {
       await apiService.createQuotation(order.name, quotationType, watchIndices);
@@ -1319,6 +1470,11 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
 
   const handlePrintReceipt = () => {
     const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(order.name)}&format=DW%20RO%20Repair%20Order&no_letterhead=1`;
+    window.open(url, '_blank');
+  };
+
+  const handlePrintConditionReport = () => {
+    const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(order.name)}&format=DW%20Product%20Visible%20Condition%20Report&no_letterhead=1`;
     window.open(url, '_blank');
   };
 
@@ -1576,6 +1732,12 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               onClick: handlePrintLabel,
               hidden: !isErpNext,
             },
+            {
+              label: 'Print Condition Report',
+              icon: '📷',
+              onClick: handlePrintConditionReport,
+              hidden: !isErpNext,
+            },
             // Edit action (only for draft, and if onEdit is provided)
             {
               label: 'Edit Order',
@@ -1825,6 +1987,8 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           canNotifyEstimateCustomer={hasRole('executive', 'data_entry') && whatsappEnabled && order.docstatus !== 2}
           isSavingDiagnosis={diagnosisSavingItemName === item.name}
           onSaveDiagnosis={handleSaveDiagnosis}
+          isSavingPhotos={photosSavingItemName === item.name}
+          onSavePhotos={handleSavePhotos}
           issueTemplates={issueTemplates}
           defaultExpanded={idx === 0}
         />

@@ -28,7 +28,8 @@
         "public_token",
         "all_tasks",
         "all_parts",
-        "all_issues"
+        "all_issues",
+        "all_photos"
     ],
     "fields": [
         {
@@ -191,6 +192,13 @@
             "fieldtype": "Table",
             "label": "All Issues",
             "options": "DW Repair Item Issue",
+            "hidden": 1
+        },
+        {
+            "fieldname": "all_photos",
+            "fieldtype": "Table",
+            "label": "All Photos",
+            "options": "DW Repair Item Image",
             "hidden": 1
         }
     ],

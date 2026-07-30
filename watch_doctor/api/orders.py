@@ -71,20 +71,23 @@ def save_repair_order(doc_json):
 
 	doc_dict = clean_dict(doc_dict, is_root=True)
 
-	# The SPA sends items[].tasks/parts_used/issues nested, but the DocType
-	# stores them as flat sibling tables (all_tasks/all_parts/all_issues)
-	# keyed by repair_item_key. Pull the nested arrays out of the payload
-	# before building the doc and stash them on each item's own transient
-	# .flags, for DWRepairOrder._run_save_pipeline to flatten during
-	# validate(). Desk edits never populate these flags -- the flat tables
-	# are edited directly there, so the controller treats their absence as
-	# a no-op.
+	# The SPA sends items[].tasks/parts_used/issues/photos nested, but the
+	# DocType stores them as flat sibling tables
+	# (all_tasks/all_parts/all_issues/all_photos) keyed by repair_item_key --
+	# Frappe's Document.save() only persists one level of child table from
+	# the root, so a table nested under items (a grandchild) is silently
+	# dropped otherwise. Pull the nested arrays out of the payload before
+	# building the doc and stash them on each item's own transient .flags,
+	# for DWRepairOrder._run_save_pipeline to flatten during validate().
+	# Desk edits never populate these flags -- the flat tables are edited
+	# directly there, so the controller treats their absence as a no-op.
 	pending_by_item = []
 	for item in doc_dict.get('items', []):
 		pending_by_item.append({
 			'tasks': item.pop('tasks', None),
 			'parts_used': item.pop('parts_used', None),
 			'issues': item.pop('issues', None),
+			'photos': item.pop('photos', None),
 		})
 
 	# Get or create document
@@ -100,6 +103,7 @@ def save_repair_order(doc_json):
 		item.flags.pending_tasks = pending['tasks']
 		item.flags.pending_parts_used = pending['parts_used']
 		item.flags.pending_issues = pending['issues']
+		item.flags.pending_photos = pending['photos']
 
 	try:
 		doc.save()
@@ -213,6 +217,70 @@ def update_repair_item_diagnosis(item_name, diagnosis_json):
 	}
 
 
+@frappe.whitelist()
+def update_repair_item_photos(item_name, payload_json):
+	"""Update visible-condition intake photos and identification fields for a single repair item.
+
+	No technician-assignment restriction here (unlike update_repair_item_diagnosis) --
+	capturing/editing intake condition photos is a general data-entry task, not diagnosis.
+	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	payload = json.loads(payload_json) if isinstance(payload_json, str) else (payload_json or {})
+
+	item_row = frappe.db.get_value("DW Repair Item", item_name, ["name", "parent"], as_dict=True)
+	if not item_row:
+		frappe.throw(_("Repair item not found"), frappe.DoesNotExistError)
+
+	if not can_access_repair_order(item_row.parent):
+		frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
+
+	allowed_fields = {"photos", "case_type", "strap_bracelet", "watch_type", "dial"}
+	for key in payload.keys():
+		if key not in allowed_fields:
+			frappe.throw(_("Field {0} is not allowed in this update").format(key), frappe.PermissionError)
+
+	order_doc = frappe.get_doc("DW Repair Order", item_row.parent)
+	target_item = next((item for item in order_doc.items if item.name == item_name), None)
+	if not target_item:
+		frappe.throw(_("Repair item not found in parent order"), frappe.DoesNotExistError)
+
+	# Photos live on the ROOT doc's all_photos table (keyed by repair_item_key
+	# == item.idx), not nested under the item -- Document.save() only
+	# persists one level of child table from the root, so a table nested
+	# under items would be silently dropped. Same flattening as
+	# all_tasks/all_parts/all_issues (see save_repair_order).
+	if "photos" in payload:
+		item_key = str(target_item.idx)
+		kept_photos = [row for row in (order_doc.all_photos or []) if row.repair_item_key != item_key]
+		order_doc.all_photos = kept_photos
+		for photo in payload.get("photos") or []:
+			if not isinstance(photo, dict) or not photo.get("image"):
+				continue
+			order_doc.append("all_photos", {
+				"repair_item_key": item_key,
+				"image": photo.get("image"),
+				"caption": photo.get("caption") or "",
+			})
+
+	for fieldname in ("case_type", "strap_bracelet", "watch_type", "dial"):
+		if fieldname in payload:
+			target_item.set(fieldname, payload.get(fieldname) or "")
+
+	order_doc.save()
+
+	item_key = str(target_item.idx)
+	return {
+		"item_name": target_item.name,
+		"photos": [
+			{"image": row.image, "caption": row.caption}
+			for row in (order_doc.all_photos or [])
+			if row.repair_item_key == item_key
+		],
+		"case_type": target_item.case_type,
+		"strap_bracelet": target_item.strap_bracelet,
+		"watch_type": target_item.watch_type,
+		"dial": target_item.dial,
+	}
 
 
 @frappe.whitelist()

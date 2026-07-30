@@ -20,6 +20,7 @@ def execute():
 		"dw_technician",
 		"dw_repair_order",
 		"dw_repair_item",
+		"dw_repair_item_image",
 		"dw_repair_task",
 		"dw_repair_part_used",
 		"dw_task_template",

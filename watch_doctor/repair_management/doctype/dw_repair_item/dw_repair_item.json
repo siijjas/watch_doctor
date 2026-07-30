@@ -6,6 +6,10 @@
         "watch_brand",
         "watch_model",
         "serial_number",
+        "case_type",
+        "strap_bracelet",
+        "watch_type",
+        "dial",
         "issues",
         "issue_description",
         "pre_existing_condition",
@@ -44,6 +48,27 @@
             "fieldname": "serial_number",
             "fieldtype": "Data",
             "label": "Serial Number"
+        },
+        {
+            "fieldname": "case_type",
+            "fieldtype": "Data",
+            "label": "Case Type"
+        },
+        {
+            "fieldname": "strap_bracelet",
+            "fieldtype": "Data",
+            "label": "Strap / Bracelet"
+        },
+        {
+            "fieldname": "watch_type",
+            "fieldtype": "Select",
+            "label": "Watch Type",
+            "options": "\nMechanical\nAutomatic\nQuartz\nOther"
+        },
+        {
+            "fieldname": "dial",
+            "fieldtype": "Data",
+            "label": "Dial"
         },
         {
             "fieldname": "issues",

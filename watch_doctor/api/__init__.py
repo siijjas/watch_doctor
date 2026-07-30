@@ -23,6 +23,7 @@ from watch_doctor.api.settings import (  # noqa: F401
 from watch_doctor.api.orders import (  # noqa: F401
     save_repair_order,
     update_repair_item_diagnosis,
+    update_repair_item_photos,
     list_repair_orders,
 )
 
