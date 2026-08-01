@@ -1478,6 +1478,14 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     window.open(url, '_blank');
   };
 
+  const handlePrintJobCards = () => {
+    const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(order.name)}&format=DW%20RO%20Job%20Card&no_letterhead=1`;
+    const win = window.open(url, '_blank', 'width=400,height=600,menubar=no,toolbar=no,location=no,status=no');
+    if (win) {
+      win.addEventListener('load', () => win.print(), { once: true });
+    }
+  };
+
   const handleCancel = async () => {
     if (!confirm('Cancel this repair order? This action cannot be undone.')) {
       return;
@@ -1736,6 +1744,12 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
               label: 'Print Condition Report',
               icon: '📷',
               onClick: handlePrintConditionReport,
+              hidden: !isErpNext,
+            },
+            {
+              label: 'Print Job Card(s)',
+              icon: '📋',
+              onClick: handlePrintJobCards,
               hidden: !isErpNext,
             },
             // Edit action (only for draft, and if onEdit is provided)
