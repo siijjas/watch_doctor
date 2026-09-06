@@ -1,12 +1,10 @@
 import frappe
 import requests
 import re
-import random
 
 from watch_doctor.list_field_utils import normalize_string_list as _normalize_string_list
 
 MAX_RETRIES = 3
-BASE_DELAY_SECONDS = 10  # 10s, 20s, 40s
 
 # Ordered list of (placeholder_token, human_label).
 # Position in this list determines the {{N}} number shown to admins.
@@ -63,13 +61,6 @@ def _get_part_rate(part) -> float:
 
 def should_retry(status_code: int) -> bool:
 	return status_code in (429, 500, 502, 503, 504)
-
-
-def get_backoff_delay(attempt: int) -> int:
-	"""Exponential backoff with jitter."""
-	delay = BASE_DELAY_SECONDS * (2 ** attempt)
-	jitter = random.uniform(0, delay * 0.2)
-	return delay + jitter
 
 
 def get_default_country_code() -> str:
@@ -311,12 +302,10 @@ def send_whatsapp_message(log_name: str):
 			log.error_detail = f"HTTP {resp.status_code}: {resp.text[:500]}"
 			log.save(ignore_permissions=True)
 			frappe.db.commit()
-			delay = get_backoff_delay(log.retry_count)
 			frappe.enqueue(
 				"watch_doctor.whatsapp.service.send_whatsapp_message",
 				log_name=log_name,
 				queue="short",
-				enqueue_after_timeout=delay,
 			)
 			return
 		else:
@@ -329,12 +318,10 @@ def send_whatsapp_message(log_name: str):
 			log.error_detail = str(e)[:500]
 			log.save(ignore_permissions=True)
 			frappe.db.commit()
-			delay = get_backoff_delay(log.retry_count)
 			frappe.enqueue(
 				"watch_doctor.whatsapp.service.send_whatsapp_message",
 				log_name=log_name,
 				queue="short",
-				enqueue_after_timeout=delay,
 			)
 			return
 		log.status = "Failed"
