@@ -23,6 +23,7 @@ import { CreateQuotationModal } from './CreateQuotationModal';
 import { CreateInvoiceModal } from './CreateInvoiceModal';
 import PaymentModal from './PaymentModal';
 import { AssignTechnicianModal } from './AssignTechnicianModal';
+import { WatchDetailsModal, type WatchDetailsFields } from './WatchDetailsModal';
 import { ActionsDropdown } from './ui/ActionsDropdown';
 import { ViewQuotationModal } from './ViewQuotationModal';
 import { ViewInvoiceModal } from './ViewInvoiceModal';
@@ -243,8 +244,10 @@ const WatchCard: React.FC<{
     watchModels: WatchModel[];
     onAddPart: (itemIndex: number, taskIndex: number) => void;
     onChangeTaskStatus: (itemIndex: number, taskIndex: number) => void;
+    onMarkAllTasksCompleted: (itemIndex: number) => void;
     onUpdatePrices: (itemIndex: number) => void;
     onAssignTechnician: (itemIndex: number) => void;
+    onViewWatchDetails: (itemIndex: number) => void;
     onAddIssue: (itemIndex: number) => void;
     onAddTask: (itemIndex: number) => void;
     onSetWorkflowStatus: (itemIndex: number, status: WatchStatus) => Promise<void>;
@@ -261,7 +264,7 @@ const WatchCard: React.FC<{
     isSavingPhotos: boolean;
     onSavePhotos: (itemIndex: number, payload: apiService.RepairItemPhotosPayload) => Promise<void>;
     defaultExpanded?: boolean;
-  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onUpdatePrices, onAssignTechnician, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, isSavingPhotos, onSavePhotos, defaultExpanded = true }) => {
+  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onMarkAllTasksCompleted, onUpdatePrices, onAssignTechnician, onViewWatchDetails, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, isSavingPhotos, onSavePhotos, defaultExpanded = true }) => {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
@@ -443,6 +446,14 @@ const WatchCard: React.FC<{
                   disabled={!canManageWorkflowStatus}
                 >
                   💰 Update Prices
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); onViewWatchDetails(itemIndex); }}
+                  className="text-xs"
+                >
+                  🔍 Watch Details
                 </Button>
                 {canSubmitForEstimateApproval && (
                   <Button
@@ -656,7 +667,16 @@ const WatchCard: React.FC<{
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="font-semibold text-sm text-gray-500 uppercase tracking-wide">Repair Tasks</h4>
-                  <span className="text-xs text-gray-400">Auto-managed</span>
+                  {(item.tasks || []).length > 0 && (item.tasks || []).some(task => task.status !== 'Completed') && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => { e.stopPropagation(); onMarkAllTasksCompleted(itemIndex); }}
+                      className="text-xs"
+                    >
+                      Mark as Completed
+                    </Button>
+                  )}
                 </div>
                 {(item.tasks || []).length > 0 ? (
                   <div className="space-y-2">
@@ -1086,6 +1106,11 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     watchIndex: number | null;
   }>({ isOpen: false, watchIndex: null });
 
+  const [watchDetailsModal, setWatchDetailsModal] = useState<{
+    isOpen: boolean;
+    watchIndex: number | null;
+  }>({ isOpen: false, watchIndex: null });
+
   const [addTaskModal, setAddTaskModal] = useState<{
     isOpen: boolean;
     watchIndex: number | null;
@@ -1157,6 +1182,23 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   const handleChangeTaskStatus = async (watchIndex: number, taskIndex: number, status: TaskStatus) => {
     const updatedOrder = { ...order };
     updatedOrder.items[watchIndex].tasks[taskIndex].status = status;
+
+    // Save to backend
+    await apiService.saveRepairOrder(updatedOrder);
+
+    // Refresh order data without leaving the page
+    if (onRefresh) {
+      await onRefresh(order.name);
+    }
+  };
+
+  const handleMarkAllTasksCompleted = async (watchIndex: number) => {
+    // Deep clone to avoid mutating props
+    const updatedOrder = JSON.parse(JSON.stringify(order)) as RepairOrder;
+    updatedOrder.items[watchIndex].tasks = (updatedOrder.items[watchIndex].tasks || []).map((task) => ({
+      ...task,
+      status: TaskStatus.Completed,
+    }));
 
     // Save to backend
     await apiService.saveRepairOrder(updatedOrder);
@@ -1353,6 +1395,19 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
   const handleAssignTechnician = async (watchIndex: number, technicianId: string) => {
     const updatedOrder = { ...order };
     updatedOrder.items[watchIndex].technician = technicianId;
+
+    // Save to backend
+    await apiService.saveRepairOrder(updatedOrder);
+
+    // Refresh order data without leaving the page
+    if (onRefresh) {
+      await onRefresh(order.name);
+    }
+  };
+
+  const handleSaveWatchDetails = async (watchIndex: number, fields: WatchDetailsFields) => {
+    const updatedOrder = JSON.parse(JSON.stringify(order)) as RepairOrder;
+    Object.assign(updatedOrder.items[watchIndex], fields);
 
     // Save to backend
     await apiService.saveRepairOrder(updatedOrder);
@@ -1986,8 +2041,10 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           watchModels={watchModels}
           onAddPart={(itemIndex, taskIndex) => setAddPartModal({ isOpen: true, watchIndex: itemIndex, taskIndex })}
           onChangeTaskStatus={(itemIndex, taskIndex) => setChangeTaskStatusModal({ isOpen: true, watchIndex: itemIndex, taskIndex })}
+          onMarkAllTasksCompleted={(itemIndex) => { void handleMarkAllTasksCompleted(itemIndex); }}
           onUpdatePrices={(itemIndex) => setUpdatePriceModal({ isOpen: true, watchIndex: itemIndex })}
           onAssignTechnician={(itemIndex) => setAssignTechnicianModal({ isOpen: true, watchIndex: itemIndex })}
+          onViewWatchDetails={(itemIndex) => setWatchDetailsModal({ isOpen: true, watchIndex: itemIndex })}
           onAddIssue={(itemIndex) => setAddIssueModal({ isOpen: true, watchIndex: itemIndex })}
           onAddTask={(itemIndex) => setAddTaskModal({ isOpen: true, watchIndex: itemIndex })}
           onSetWorkflowStatus={handleSetWorkflowStatus}
@@ -2004,7 +2061,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           isSavingPhotos={photosSavingItemName === item.name}
           onSavePhotos={handleSavePhotos}
           issueTemplates={issueTemplates}
-          defaultExpanded={idx === 0}
+          defaultExpanded={(order.items || []).length <= 1}
         />
       ))}
 
@@ -2088,6 +2145,16 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           currentTechnician={order.items[assignTechnicianModal.watchIndex].technician}
           employees={employees}
           watchItem={order.items[assignTechnicianModal.watchIndex]}
+        />
+      )}
+
+      {/* Watch Details Modal */}
+      {watchDetailsModal.isOpen && watchDetailsModal.watchIndex !== null && (
+        <WatchDetailsModal
+          isOpen={watchDetailsModal.isOpen}
+          onClose={() => setWatchDetailsModal({ isOpen: false, watchIndex: null })}
+          onSave={(fields) => handleSaveWatchDetails(watchDetailsModal.watchIndex!, fields)}
+          watchItem={order.items[watchDetailsModal.watchIndex]}
         />
       )}
 

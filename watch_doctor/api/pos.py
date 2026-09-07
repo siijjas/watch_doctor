@@ -189,80 +189,76 @@ def get_pos_runtime_config(company: str = "", pos_profile: str = ""):
 
 @frappe.whitelist()
 def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
-	"""Get items for POS with stock and pricing info. Only returns enabled items with stock."""
+	"""Get items for POS with stock and pricing info. Only returns enabled items with stock.
+
+	Search is token-based: each whitespace-separated word in `search` must appear
+	somewhere in the item name, item code, or a scanned barcode, in any order
+	(e.g. "632 clock movement" matches "632 Pendulum With Alarm Clock Movement").
+	Results are ranked so exact/prefix code, name, or barcode matches surface first.
+	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	filters = {"is_stock_item": 1, "disabled": 0}
-	
-	# Get items from Bin that have stock
+
+	search = (search or "").strip()
+	tokens = search.split() if search else []
+	conditions = ["i.disabled = 0", "i.is_stock_item = 1"]
+	values = []
+	for token in tokens:
+		conditions.append("(i.item_name LIKE %s OR i.item_code LIKE %s OR ib.barcode LIKE %s)")
+		like_token = f"%{token}%"
+		values.extend([like_token, like_token, like_token])
+	where_clause = " AND ".join(conditions)
+
+	if search:
+		rank_expr = """
+			CASE
+				WHEN LOWER(i.item_code) = LOWER(%s) THEN 0
+				WHEN MAX(CASE WHEN LOWER(ib.barcode) = LOWER(%s) THEN 1 ELSE 0 END) = 1 THEN 0
+				WHEN LOWER(i.item_name) = LOWER(%s) THEN 1
+				WHEN LOWER(i.item_code) LIKE LOWER(%s) THEN 2
+				WHEN LOWER(i.item_name) LIKE LOWER(%s) THEN 2
+				ELSE 3
+			END,
+		"""
+		rank_params = [search, search, search, f"{search}%", f"{search}%"]
+	else:
+		rank_expr = ""
+		rank_params = []
+
 	if int(in_stock_only):
-		items_with_stock = frappe.db.sql("""
-			SELECT DISTINCT b.item_code, SUM(b.actual_qty) as stock_qty
-			FROM `tabBin` b
-			INNER JOIN `tabItem` i ON b.item_code = i.name
-			WHERE i.disabled = 0 AND i.is_stock_item = 1
-			GROUP BY b.item_code
+		items = frappe.db.sql(f"""
+			SELECT i.name, i.item_name, i.item_code, i.item_group, i.standard_rate, i.image,
+				SUM(b.actual_qty) as stock_qty
+			FROM `tabItem` i
+			INNER JOIN `tabBin` b ON b.item_code = i.name
+			LEFT JOIN `tabItem Barcode` ib ON ib.parent = i.name
+			WHERE {where_clause}
+			GROUP BY i.name
 			HAVING SUM(b.actual_qty) > 0
-		""", as_dict=True)
-		
-		item_codes = [i['item_code'] for i in items_with_stock]
-		stock_map = {i['item_code']: i['stock_qty'] for i in items_with_stock}
-		
-		if not item_codes:
-			return []
-		
-		if search:
-			items = frappe.get_all(
-				"Item",
-				filters={"name": ["in", item_codes]},
-				or_filters=[
-					["item_name", "like", f"%{search}%"],
-					["item_code", "like", f"%{search}%"]
-				],
-				fields=["name", "item_name", "item_code", "item_group", "standard_rate", "image"],
-				limit_page_length=int(limit),
-				order_by="item_name asc"
-			)
-		else:
-			items = frappe.get_all(
-				"Item",
-				filters={"name": ["in", item_codes]},
-				fields=["name", "item_name", "item_code", "item_group", "standard_rate", "image"],
-				limit_page_length=int(limit),
-				order_by="item_name asc"
-			)
-		
+			ORDER BY {rank_expr} i.item_name ASC
+			LIMIT %s
+		""", values + rank_params + [int(limit)], as_dict=True)
+	else:
+		items = frappe.db.sql(f"""
+			SELECT i.name, i.item_name, i.item_code, i.item_group, i.standard_rate, i.image
+			FROM `tabItem` i
+			LEFT JOIN `tabItem Barcode` ib ON ib.parent = i.name
+			WHERE {where_clause}
+			GROUP BY i.name
+			ORDER BY {rank_expr} i.item_name ASC
+			LIMIT %s
+		""", values + rank_params + [int(limit)], as_dict=True)
+
+		item_names = [item['name'] for item in items]
+		stock_rows = frappe.db.sql("""
+			SELECT item_code, SUM(actual_qty) as qty
+			FROM `tabBin`
+			WHERE item_code IN %s
+			GROUP BY item_code
+		""", (item_names,), as_dict=True) if item_names else []
+		stock_map = {row['item_code']: row['qty'] for row in stock_rows}
 		for item in items:
 			item['stock_qty'] = stock_map.get(item['name'], 0)
-	else:
-		if search:
-			items = frappe.get_all(
-				"Item",
-				filters=filters,
-				or_filters=[
-					["item_name", "like", f"%{search}%"],
-					["item_code", "like", f"%{search}%"]
-				],
-				fields=["name", "item_name", "item_code", "item_group", "standard_rate", "image"],
-				limit_page_length=int(limit),
-				order_by="item_name asc"
-			)
-		else:
-			items = frappe.get_all(
-				"Item",
-				filters=filters,
-				fields=["name", "item_name", "item_code", "item_group", "standard_rate", "image"],
-				limit_page_length=int(limit),
-				order_by="item_name asc"
-			)
-		
-		for item in items:
-			stock = frappe.db.sql("""
-				SELECT SUM(actual_qty) as qty
-				FROM `tabBin`
-				WHERE item_code = %s
-			""", (item['name'],), as_dict=True)
-			item['stock_qty'] = stock[0]['qty'] if stock and stock[0]['qty'] else 0
-	
+
 	# Enrich with PMS info for items in the configured PMS group
 	from watch_doctor.pms import _get_pms_item_groups
 	pms_groups = _get_pms_item_groups()
@@ -274,27 +270,28 @@ def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 
 @frappe.whitelist()
 def get_pos_customers(search: str = "", limit: int = 20):
-	"""Get customers for POS selection."""
+	"""Get customers for POS selection. Matches by name or mobile number."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	if search:
 		customers = frappe.get_all(
 			"Customer",
 			or_filters=[
 				["customer_name", "like", f"%{search}%"],
-				["name", "like", f"%{search}%"]
+				["name", "like", f"%{search}%"],
+				["mobile_no", "like", f"%{search}%"]
 			],
-			fields=["name", "customer_name"],
+			fields=["name", "customer_name", "mobile_no"],
 			limit_page_length=int(limit),
 			order_by="customer_name asc"
 		)
 	else:
 		customers = frappe.get_all(
 			"Customer",
-			fields=["name", "customer_name"],
+			fields=["name", "customer_name", "mobile_no"],
 			limit_page_length=int(limit),
 			order_by="modified desc"
 		)
-	
+
 	return customers
 
 
@@ -429,38 +426,51 @@ def create_pos_invoice(
 	discount_percent: float = 0,
 	payments_json=None,
 	options_json=None,
+	is_credit_sale: int = 0,
+	due_date: str = "",
 ):
-	"""Create a POS Sales Invoice with immediate single or split payment."""
+	"""Create a POS Sales Invoice with immediate single/split payment, or as a credit sale.
+
+	A credit sale takes no payment at time of sale: the invoice is submitted with
+	is_pos=0 (so core doesn't require a payment row) and the full amount is left
+	outstanding on the customer's account, to be collected later via
+	collect_pos_payment.
+	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
-	payments = _parse_pos_payments(payments_json, payment_mode)
+	is_credit_sale = frappe.utils.cint(is_credit_sale)
+	payments = [] if is_credit_sale else _parse_pos_payments(payments_json, payment_mode)
 	options = _parse_pos_options(options_json)
 	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
-	
+
 	if not items or len(items) == 0:
 		frappe.throw("At least one item is required")
+
+	if is_credit_sale and not (customer or "").strip():
+		frappe.throw("A customer is required for a credit sale")
 
 	has_pms_items = _validate_pos_pms_item_mix(items)
 	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
 	require_pms_runtime_configuration()
 	standard_sales_taxes_template = get_standard_sales_taxes_template()
-	
+
 	company = options.get("company") or _get_default_company()
 	precision = _get_currency_precision(company)
-	
+
 	invoice = frappe.get_doc({
 		"doctype": "Sales Invoice",
 		"customer": customer,
 		"company": company,
 		"posting_date": frappe.utils.today(),
-		"due_date": frappe.utils.today(),
-		"is_pos": 1,
+		"due_date": due_date or (frappe.utils.add_days(frappe.utils.today(), 15) if is_credit_sale else frappe.utils.today()),
+		"is_pos": 0 if is_credit_sale else 1,
+		"dw_is_credit_sale": 1 if is_credit_sale else 0,
 		"update_stock": 1,
 		"additional_discount_percentage": discount_percent,
 		"items": []
 	})
 	invoice.flags.ignore_permissions = True
-	
+
 	for item in items:
 		invoice.append("items", {
 			"item_code": item.get("item_code"),
@@ -488,21 +498,333 @@ def create_pos_invoice(
 		invoice.taxes_and_charges = standard_sales_taxes_template
 	else:
 		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before creating POS invoices.")
-	
+
 	invoice.insert(ignore_permissions=True)
-	_set_invoice_payments(invoice, payments, precision)
+	if not is_credit_sale:
+		_set_invoice_payments(invoice, payments, precision)
 	invoice.save(ignore_permissions=True)
 	invoice.submit()
-	
+
 	return {
 		"invoice_name": invoice.name,
 		"grand_total": invoice.grand_total,
 		"customer": invoice.customer,
 		"has_pms_items": has_pms_items,
 		"pms_total_vat": invoice.get("dw_pms_total_vat") or 0,
+		"is_credit_sale": is_credit_sale,
+		"outstanding_amount": invoice.outstanding_amount,
+		"due_date": str(invoice.due_date),
 		"auto_print": profile_settings.get("auto_print") or 0,
 		"print_format": invoice.get("dw_pos_receipt_format") or "",
 		"print_url": build_pos_print_url(invoice, profile_settings),
+	}
+
+
+@frappe.whitelist()
+def get_pos_outstanding_invoices(search: str = "", limit: int = 20):
+	"""List submitted, unpaid invoices for the POS Collect Payment screen."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	conditions = ["si.docstatus = 1", "si.is_return = 0", "si.outstanding_amount > 0"]
+	values = []
+	if search:
+		conditions.append(
+			"(si.name LIKE %s OR si.customer_name LIKE %s OR si.customer LIKE %s OR c.mobile_no LIKE %s)"
+		)
+		like = f"%{search}%"
+		values.extend([like, like, like, like])
+	where_clause = " AND ".join(conditions)
+
+	return frappe.db.sql(f"""
+		SELECT si.name, si.customer, si.customer_name, c.mobile_no,
+			si.posting_date, si.due_date, si.grand_total, si.outstanding_amount,
+			si.dw_is_credit_sale
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabCustomer` c ON c.name = si.customer
+		WHERE {where_clause}
+		ORDER BY si.due_date ASC, si.posting_date ASC
+		LIMIT %s
+	""", values + [int(limit)], as_dict=True)
+
+
+@frappe.whitelist()
+def collect_pos_payment(invoice_name: str, mode_of_payment: str = "Cash", amount: float = 0):
+	"""Record a payment against an outstanding invoice (e.g. settling a credit sale)."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+
+	invoice = frappe.get_doc("Sales Invoice", invoice_name)
+	if invoice.docstatus != 1:
+		frappe.throw("Only submitted invoices can be collected against")
+
+	outstanding = frappe.utils.flt(invoice.outstanding_amount)
+	if outstanding <= 0:
+		frappe.throw("This invoice has no outstanding balance")
+
+	amount = frappe.utils.flt(amount)
+	if amount <= 0:
+		frappe.throw("Enter a payment amount greater than zero")
+
+	precision = _get_currency_precision(invoice.company)
+	tolerance = (0.5 / (10 ** precision)) if precision > 0 else 0
+	if frappe.utils.flt(amount, precision) > frappe.utils.flt(outstanding, precision) + tolerance:
+		frappe.throw(f"Payment amount cannot exceed the outstanding balance of {outstanding}")
+
+	mode_of_payment = (mode_of_payment or "Cash").strip()
+	allowed_modes = _get_allowed_pos_payment_modes()
+	if allowed_modes and mode_of_payment not in allowed_modes:
+		frappe.throw(f"Payment mode {mode_of_payment} is not enabled for POS")
+
+	payment_entry = get_payment_entry("Sales Invoice", invoice_name, party_amount=amount)
+	payment_entry.mode_of_payment = mode_of_payment
+	payment_entry.paid_to = _get_payment_account_for_mode(mode_of_payment, invoice.company)
+	payment_entry.reference_no = payment_entry.reference_no or invoice_name
+	payment_entry.reference_date = frappe.utils.today()
+	payment_entry.flags.ignore_permissions = True
+	payment_entry.insert(ignore_permissions=True)
+	payment_entry.submit()
+
+	# If this invoice was finalized against a repair order, keep the repair order's
+	# own paid/balance snapshot (set at finalize time, e.g. 0 paid for a credit sale)
+	# in sync with payments collected later against the invoice.
+	repair_order_name = frappe.db.get_value("DW Repair Order", {"sales_invoice": invoice_name}, "name")
+	if repair_order_name:
+		prev_paid = frappe.utils.flt(frappe.db.get_value("DW Repair Order", repair_order_name, "paid_amount") or 0)
+		prev_balance = frappe.utils.flt(frappe.db.get_value("DW Repair Order", repair_order_name, "balance_amount") or 0)
+		frappe.db.set_value(
+			"DW Repair Order",
+			repair_order_name,
+			{
+				"paid_amount": prev_paid + amount,
+				"balance_amount": max(0.0, prev_balance - amount),
+			},
+			update_modified=False,
+		)
+
+	frappe.db.commit()
+
+	invoice.reload()
+	return {
+		"payment_entry": payment_entry.name,
+		"invoice_name": invoice_name,
+		"amount_collected": amount,
+		"outstanding_amount": invoice.outstanding_amount,
+	}
+
+
+@frappe.whitelist()
+def get_pos_return_candidates(search: str = "", limit: int = 20):
+	"""Search submitted, non-return invoices to start a return, by invoice number, customer, or mobile."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	conditions = ["si.docstatus = 1", "si.is_return = 0"]
+	values = []
+	if search:
+		conditions.append(
+			"(si.name LIKE %s OR si.customer_name LIKE %s OR si.customer LIKE %s OR c.mobile_no LIKE %s)"
+		)
+		like = f"%{search}%"
+		values.extend([like, like, like, like])
+	where_clause = " AND ".join(conditions)
+
+	return frappe.db.sql(f"""
+		SELECT si.name, si.customer, si.customer_name, c.mobile_no,
+			si.posting_date, si.grand_total, si.is_pos
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabCustomer` c ON c.name = si.customer
+		WHERE {where_clause}
+		ORDER BY si.posting_date DESC, si.creation DESC
+		LIMIT %s
+	""", values + [int(limit)], as_dict=True)
+
+
+@frappe.whitelist()
+def get_pos_invoice_return_items(invoice_name: str):
+	"""Return each line item on an invoice with how much of it is still returnable."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+	original = frappe.get_doc("Sales Invoice", invoice_name)
+	if original.docstatus != 1:
+		frappe.throw("Only submitted invoices can be returned")
+	if original.is_return:
+		frappe.throw("This invoice is already a return")
+
+	return_doc = make_return_doc("Sales Invoice", invoice_name)
+
+	items = []
+	for row in return_doc.items:
+		returnable_qty = abs(frappe.utils.flt(row.qty))
+		if returnable_qty <= 0:
+			continue
+		items.append({
+			"row_name": row.sales_invoice_item,
+			"item_code": row.item_code,
+			"item_name": row.item_name,
+			"rate": row.rate,
+			"returnable_qty": returnable_qty,
+		})
+
+	if not items:
+		frappe.throw("All items on this invoice have already been fully returned")
+
+	# How much has actually been collected on this invoice so far — this is what
+	# can be handed back as a cash/card refund. It is NOT the same as is_pos: a
+	# credit sale (is_pos=0) can have since been fully or partially settled via
+	# collect_pos_payment, and that money is just as refundable as a checkout payment.
+	precision = _get_currency_precision(original.company)
+	amount_paid = frappe.utils.flt(
+		frappe.utils.flt(original.grand_total, precision) - frappe.utils.flt(original.outstanding_amount, precision),
+		precision,
+	)
+
+	return {
+		"invoice_name": original.name,
+		"customer": original.customer,
+		"customer_name": original.customer_name,
+		"posting_date": str(original.posting_date),
+		"grand_total": original.grand_total,
+		"is_pos": original.is_pos,
+		"amount_paid": max(amount_paid, 0),
+		"items": items,
+	}
+
+
+@frappe.whitelist()
+def create_pos_return(invoice_name: str, items_json: str = "[]", payments_json=None):
+	"""Create and submit a partial or full return against a POS sale.
+
+	Reuses ERPNext's standard return-doc construction (correct tax/qty reversal,
+	stock re-entry, and over-return protection across repeated partial returns),
+	then prunes it down to only the items/quantities the cashier selected and
+	applies whatever refund the cashier chose to hand back — capped at how much
+	was actually collected on the original invoice (checked at checkout, or since
+	via collect_pos_payment if it was a credit sale). Anything not refunded in
+	cash is left as a reduced/negative outstanding balance (a credit note).
+	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	from erpnext.controllers.sales_and_purchase_return import make_return_doc
+	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+
+	requested_items = json.loads(items_json) if isinstance(items_json, str) else items_json
+	requested_items = [r for r in (requested_items or []) if frappe.utils.flt(r.get("qty")) > 0]
+	if not requested_items:
+		frappe.throw("Select at least one item to return")
+	requested_qty_map = {r.get("row_name"): frappe.utils.flt(r.get("qty")) for r in requested_items}
+
+	original = frappe.get_doc("Sales Invoice", invoice_name)
+	if original.docstatus != 1:
+		frappe.throw("Only submitted invoices can be returned")
+	if original.is_return:
+		frappe.throw("Cannot return a return invoice")
+
+	precision = _get_currency_precision(original.company)
+	amount_paid = max(frappe.utils.flt(
+		frappe.utils.flt(original.grand_total, precision) - frappe.utils.flt(original.outstanding_amount, precision),
+		precision,
+	), 0)
+
+	return_doc = make_return_doc("Sales Invoice", invoice_name)
+	return_doc.flags.ignore_permissions = True
+
+	# naming_series has no_copy=1 on Sales Invoice, so make_return_doc never
+	# copies it from the original — left alone it falls back to ERPNext's
+	# generic default series instead of continuing this app's own series
+	# (PMS vs standard retail vs repair), so returns must pick it explicitly.
+	from watch_doctor.invoice_settings import apply_workflow_naming_series, detect_sales_invoice_workflow
+	apply_workflow_naming_series(return_doc, detect_sales_invoice_workflow(original))
+
+	kept_rows = []
+	for row in return_doc.items:
+		requested_qty = requested_qty_map.get(row.sales_invoice_item)
+		if not requested_qty:
+			continue
+		max_returnable = abs(frappe.utils.flt(row.qty))
+		if requested_qty > max_returnable + 1e-6:
+			frappe.throw(
+				f"Cannot return {requested_qty} of {row.item_code}; "
+				f"only {max_returnable} remaining from {invoice_name}"
+			)
+		row.qty = -abs(requested_qty)
+		row.stock_qty = row.qty * frappe.utils.flt(row.conversion_factor or 1)
+		kept_rows.append(row)
+
+	if not kept_rows:
+		frappe.throw("Selected items do not match this invoice")
+
+	return_doc.set("items", kept_rows)
+	return_doc.run_method("calculate_taxes_and_totals")
+
+	refund_total = abs(frappe.utils.flt(return_doc.grand_total, precision))
+	max_refundable = min(refund_total, amount_paid)
+
+	# Refund payments are optional here (unlike checkout) — an empty/omitted list
+	# just means "no cash refund, leave it as a credit note", which is valid.
+	requested_payments = json.loads(payments_json) if isinstance(payments_json, str) else (payments_json or [])
+	allowed_modes = _get_allowed_pos_payment_modes()
+	total_requested = 0
+	refund_rows = []
+	for row in requested_payments or []:
+		mode = str((row or {}).get("mode_of_payment") or (row or {}).get("payment_mode") or "").strip()
+		amount = frappe.utils.flt((row or {}).get("amount") or 0, precision)
+		if amount <= 0:
+			continue
+		if not mode:
+			frappe.throw("Each refund row must include a payment mode")
+		if allowed_modes and mode not in allowed_modes:
+			frappe.throw(f"Payment mode {mode} is not enabled for POS")
+		total_requested += amount
+		refund_rows.append({"mode_of_payment": mode, "amount": amount})
+
+	total_requested = frappe.utils.flt(total_requested, precision)
+	tolerance = (0.5 / (10 ** precision)) if precision > 0 else 0
+	if total_requested > max_refundable + tolerance:
+		frappe.throw(
+			f"Refund amount cannot exceed {max_refundable} — that is all that has been collected on {invoice_name} so far."
+		)
+
+	return_doc.set("payments", [])
+	if return_doc.is_pos and total_requested > 0:
+		# The original sale collected payment through this same POS-payments
+		# mechanism, so refund it the same way — the standard, core-supported
+		# path for a POS credit note (verify_payment_amount_is_negative).
+		for row in refund_rows:
+			return_doc.append("payments", {
+				"mode_of_payment": row["mode_of_payment"],
+				"account": _get_payment_account_for_mode(row["mode_of_payment"], return_doc.company),
+				"amount": -row["amount"],
+			})
+		return_doc.paid_amount = -total_requested
+
+	return_doc.insert(ignore_permissions=True)
+	return_doc.submit()
+
+	refunded_amount = 0
+	if not return_doc.is_pos and total_requested > 0:
+		# A non-POS invoice's payments table isn't wired into its outstanding/GL,
+		# so refunding money paid on a (now-settled) credit sale needs a real
+		# Payment Entry — the same mechanism collect_pos_payment uses in reverse.
+		for row in refund_rows:
+			# party_amount must carry the same sign as the return invoice's
+			# outstanding_amount (negative) — get_payment_entry uses it directly
+			# to compute the reference's allocated_amount.
+			payment_entry = get_payment_entry("Sales Invoice", return_doc.name, party_amount=-row["amount"])
+			payment_entry.mode_of_payment = row["mode_of_payment"]
+			payment_entry.paid_from = _get_payment_account_for_mode(row["mode_of_payment"], return_doc.company)
+			payment_entry.reference_no = payment_entry.reference_no or return_doc.name
+			payment_entry.reference_date = frappe.utils.today()
+			payment_entry.flags.ignore_permissions = True
+			payment_entry.insert(ignore_permissions=True)
+			payment_entry.submit()
+			refunded_amount += row["amount"]
+	elif return_doc.is_pos:
+		refunded_amount = total_requested
+
+	frappe.db.commit()
+
+	return {
+		"return_invoice": return_doc.name,
+		"original_invoice": invoice_name,
+		"grand_total": return_doc.grand_total,
+		"refunded_amount": refunded_amount,
 	}
 
 
@@ -1461,16 +1783,18 @@ def get_daily_report(report_date=None):
 	# This ensures Repair + Sales = Total Revenue
 	all_sales_invoices = frappe.db.sql("""
 		SELECT si.name, si.grand_total, si.outstanding_amount, si.is_pos, si.is_return, si.owner, si.customer,
-			COALESCE(si.customer_name, '') AS customer_name
+			si.dw_is_credit_sale, COALESCE(si.customer_name, '') AS customer_name
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
-		WHERE si.docstatus = 1 
+		WHERE si.docstatus = 1
 			AND si.posting_date = %s
 			AND ro.name IS NULL
 	""", (report_date,), as_dict=True)
 
-	total_retail_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 1 and inv["is_return"] == 0)
-	total_b2b_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 0 and inv["is_return"] == 0)
+	# A POS credit sale has is_pos=0 (so core doesn't demand a payment row) but is
+	# still a retail sale, not a B2B one — so it must count on the retail side here.
+	total_retail_sales = sum(inv["grand_total"] for inv in all_sales_invoices if (inv["is_pos"] == 1 or inv["dw_is_credit_sale"] == 1) and inv["is_return"] == 0)
+	total_b2b_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 0 and inv["dw_is_credit_sale"] != 1 and inv["is_return"] == 0)
 	total_returns = sum(abs(inv["grand_total"]) for inv in all_sales_invoices if inv["is_return"] == 1)
 	net_sales = (total_retail_sales + total_b2b_sales) - total_returns
 

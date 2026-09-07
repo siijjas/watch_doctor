@@ -70,7 +70,8 @@ def _compute_period_summary(from_date, to_date, company):
 		repair_vat += vat
 
 	other_sales_invoices = frappe.db.sql(f"""
-		SELECT si.grand_total, si.total_taxes_and_charges, {pms_vat_expr} AS pms_vat, si.is_pos, si.is_return
+		SELECT si.grand_total, si.total_taxes_and_charges, {pms_vat_expr} AS pms_vat, si.is_pos, si.is_return,
+			si.dw_is_credit_sale
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
 		WHERE si.docstatus = 1
@@ -86,7 +87,9 @@ def _compute_period_summary(from_date, to_date, company):
 		if i["is_return"] == 1:
 			returns += abs(net)
 			returns_vat += abs(vat)
-		elif i["is_pos"] == 1:
+		# A POS credit sale has is_pos=0 (so core doesn't demand a payment row) but
+		# is still a retail sale, not a B2B one.
+		elif i["is_pos"] == 1 or i["dw_is_credit_sale"] == 1:
 			retail_sales += net
 			retail_vat += vat
 		else:

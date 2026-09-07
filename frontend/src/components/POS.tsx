@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as apiService from '../services/apiService';
 import type { POSItem, POSCustomer, CartItem, POSDraft, POSPaymentSplit, POSRuntimeConfig, POSOptions } from '../services/apiService';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
+import { Toggle } from './ui/Toggle';
 import { useToast } from './ui/Toast';
 import { useAppConfig } from '../context/AppConfigContext';
 
@@ -20,6 +21,10 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     const [customers, setCustomers] = useState<POSCustomer[]>([]);
     const [cart, setCart] = useState<CartItem[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [highlightedIndex, setHighlightedIndex] = useState(0);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastSearchedQueryRef = useRef('');
     const [customerSearch, setCustomerSearch] = useState('');
     const [selectedCustomer, setSelectedCustomer] = useState<POSCustomer | null>(null);
     const [hasInitializedCustomer, setHasInitializedCustomer] = useState(false);
@@ -56,10 +61,29 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     const [discountAmountInput, setDiscountAmountInput] = useState(0);
     const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isCreditSale, setIsCreditSale] = useState(false);
+    const [creditDueDate, setCreditDueDate] = useState('');
+    const [isSplitPayment, setIsSplitPayment] = useState(false);
+
+    // Collect payment (settle outstanding/credit invoices)
+    const [showCollectModal, setShowCollectModal] = useState(false);
+    const [collectSearch, setCollectSearch] = useState('');
+    const [outstandingInvoices, setOutstandingInvoices] = useState<apiService.POSOutstandingInvoice[]>([]);
+    const [collectingInvoice, setCollectingInvoice] = useState<apiService.POSOutstandingInvoice | null>(null);
+    const [collectAmount, setCollectAmount] = useState(0);
+    const [collectMode, setCollectMode] = useState('Cash');
+    const [isCollecting, setIsCollecting] = useState(false);
 
     // Return invoice
     const [showReturnModal, setShowReturnModal] = useState(false);
     const [returnInvoiceSearch, setReturnInvoiceSearch] = useState('');
+    const [returnCandidates, setReturnCandidates] = useState<apiService.POSReturnCandidate[]>([]);
+    const [returnDetail, setReturnDetail] = useState<apiService.POSInvoiceReturnDetail | null>(null);
+    const [returnQtyMap, setReturnQtyMap] = useState<Record<string, number>>({});
+    const [returnRefundMode, setReturnRefundMode] = useState('Cash');
+    const [returnRefundAmount, setReturnRefundAmount] = useState(0);
+    const [isLoadingReturnDetail, setIsLoadingReturnDetail] = useState(false);
+    const [isProcessingReturn, setIsProcessingReturn] = useState(false);
 
     // Toast notifications
     const { showToast, ToastComponent } = useToast();
@@ -87,13 +111,16 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         setHasInitializedCustomer(true);
     }, [runtimeConfig, selectedCustomer, hasInitializedCustomer]);
 
-    const loadItems = async (search: string = '') => {
+    const loadItems = async (search: string = ''): Promise<POSItem[]> => {
         setIsLoading(true);
         try {
             const data = await apiService.getPosItems(search);
             setItems(data);
+            lastSearchedQueryRef.current = search;
+            return data;
         } catch (error) {
             console.error('Failed to load items:', error);
+            return [];
         } finally {
             setIsLoading(false);
         }
@@ -186,11 +213,61 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
 
     // Debounced search
     useEffect(() => {
-        const timer = setTimeout(() => {
+        searchDebounceRef.current = setTimeout(() => {
             loadItems(searchQuery);
         }, 300);
-        return () => clearTimeout(timer);
+        return () => {
+            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+        };
     }, [searchQuery]);
+
+    // Reset keyboard highlight whenever the result list changes
+    useEffect(() => {
+        setHighlightedIndex(0);
+    }, [items]);
+
+    // Auto-focus the item search box so a barcode scanner (or typing) works immediately
+    useEffect(() => {
+        searchInputRef.current?.focus();
+    }, []);
+
+    const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setHighlightedIndex(prev => Math.min(prev + 1, items.length - 1));
+            return;
+        }
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setHighlightedIndex(prev => Math.max(prev - 1, 0));
+            return;
+        }
+        if (e.key !== 'Enter') return;
+
+        e.preventDefault();
+        const query = searchQuery.trim();
+        if (!query) return;
+
+        let resultItems = items;
+        let index = highlightedIndex;
+
+        // If the debounce hasn't caught up yet (e.g. a barcode scanner typing fast
+        // and pressing Enter immediately), fetch fresh results before acting.
+        if (lastSearchedQueryRef.current !== searchQuery) {
+            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+            resultItems = await loadItems(searchQuery);
+            index = 0;
+        }
+
+        if (resultItems.length === 0) {
+            showToast('No matching item found', 'error');
+            return;
+        }
+
+        addToCart(resultItems[Math.min(index, resultItems.length - 1)]);
+        setSearchQuery('');
+        setHighlightedIndex(0);
+    };
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -198,6 +275,34 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         }, 300);
         return () => clearTimeout(timer);
     }, [customerSearch]);
+
+    // Collect Payment: search outstanding invoices
+    useEffect(() => {
+        if (!showCollectModal) return;
+        const timer = setTimeout(async () => {
+            try {
+                const data = await apiService.getPosOutstandingInvoices(collectSearch);
+                setOutstandingInvoices(data);
+            } catch (error) {
+                console.error('Failed to load outstanding invoices:', error);
+            }
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [collectSearch, showCollectModal]);
+
+    // Return: search original invoices until one is selected
+    useEffect(() => {
+        if (!showReturnModal || returnDetail) return;
+        const timer = setTimeout(async () => {
+            try {
+                const data = await apiService.getPosReturnCandidates(returnInvoiceSearch);
+                setReturnCandidates(data);
+            } catch (error) {
+                console.error('Failed to search invoices for return:', error);
+            }
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [returnInvoiceSearch, showReturnModal, returnDetail]);
 
     // Cart calculations
     const cartSubtotal = useMemo(() => {
@@ -237,6 +342,26 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
     };
 
     const defaultPaymentMode = paymentModes[0]?.mode_of_payment || paymentModes[0]?.name || 'Cash';
+    const selectedPaymentMode = paymentSplits[0]?.mode_of_payment || defaultPaymentMode;
+
+    const handleSelectSingleMode = (mode: string) => {
+        setPaymentSplits(prev => [{
+            id: prev[0]?.id || `${Date.now()}`,
+            mode_of_payment: mode,
+            amount: roundCurrencyValue(cartTotal),
+        }]);
+    };
+
+    const handleSwitchToSplit = () => setIsSplitPayment(true);
+
+    const handleSwitchToSingle = () => {
+        setIsSplitPayment(false);
+        setPaymentSplits(prev => [{
+            id: prev[0]?.id || `${Date.now()}`,
+            mode_of_payment: prev[0]?.mode_of_payment || defaultPaymentMode,
+            amount: roundCurrencyValue(cartTotal),
+        }]);
+    };
 
     const getNextPaymentMode = (existingPayments: PaymentSplit[]) => {
         const availableModes = paymentModes.map(mode => mode.mode_of_payment || mode.name).filter(Boolean);
@@ -474,10 +599,54 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
             mode_of_payment: defaultPaymentMode,
             amount: roundCurrencyValue(cartTotal),
         }]);
+        setIsCreditSale(false);
+        const defaultDue = new Date();
+        defaultDue.setDate(defaultDue.getDate() + 30);
+        setCreditDueDate(defaultDue.toISOString().slice(0, 10));
         setShowPaymentModal(true);
     };
 
+    const handleConfirmCreditSale = async () => {
+        const customer = getEffectiveCustomer();
+        if (!customer) {
+            showToast('Select a customer for the credit sale', 'error');
+            return;
+        }
+        if (currentDraftName) {
+            showToast('Credit sale is not available for held orders — start a new sale instead', 'error');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const result = await apiService.createPosInvoice(
+                customer,
+                cart,
+                [],
+                effectiveDiscountPercent,
+                getPosOptions(),
+                { isCreditSale: true, dueDate: creditDueDate }
+            );
+            showToast(
+                `Credit sale ${result.invoice_name} created. ${formatCurrency(result.outstanding_amount ?? result.grand_total)} due ${result.due_date}.`,
+                'success'
+            );
+            clearCart();
+            setShowPaymentModal(false);
+            setIsCreditSale(false);
+            loadDrafts();
+        } catch (error: any) {
+            showToast(`Credit sale failed: ${error.message}`, 'error');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
     const handleConfirmPayment = async () => {
+        if (isCreditSale) {
+            return handleConfirmCreditSale();
+        }
+
         const normalizedPayments: POSPaymentSplit[] = paymentSplits.map(payment => ({
             mode_of_payment: payment.mode_of_payment,
             amount: roundCurrencyValue(Number(payment.amount) || 0),
@@ -524,6 +693,126 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
         }
     };
 
+    // ---- Collect Payment (settle outstanding / credit invoices) ----
+
+    const closeCollectModal = () => {
+        setShowCollectModal(false);
+        setCollectSearch('');
+        setOutstandingInvoices([]);
+        setCollectingInvoice(null);
+        setCollectAmount(0);
+    };
+
+    const handleSelectOutstandingInvoice = (invoice: apiService.POSOutstandingInvoice) => {
+        setCollectingInvoice(invoice);
+        setCollectAmount(roundCurrencyValue(invoice.outstanding_amount));
+        setCollectMode(paymentModes[0]?.mode_of_payment || paymentModes[0]?.name || 'Cash');
+    };
+
+    const handleSubmitCollection = async () => {
+        if (!collectingInvoice) return;
+        const amount = roundCurrencyValue(Number(collectAmount) || 0);
+        if (amount <= 0) {
+            showToast('Enter a payment amount greater than zero', 'error');
+            return;
+        }
+        if (amount > collectingInvoice.outstanding_amount + amountStep / 2) {
+            showToast(`Amount cannot exceed the outstanding balance of ${formatCurrency(collectingInvoice.outstanding_amount)}`, 'error');
+            return;
+        }
+
+        setIsCollecting(true);
+        try {
+            const result = await apiService.collectPosPayment(collectingInvoice.name, collectMode, amount);
+            showToast(
+                result.outstanding_amount > 0
+                    ? `Collected ${formatCurrency(amount)}. Remaining balance: ${formatCurrency(result.outstanding_amount)}.`
+                    : `Collected ${formatCurrency(amount)}. Invoice ${collectingInvoice.name} is now fully paid.`,
+                'success'
+            );
+            closeCollectModal();
+        } catch (error: any) {
+            showToast(`Payment collection failed: ${error.message}`, 'error');
+        } finally {
+            setIsCollecting(false);
+        }
+    };
+
+    // ---- Sales Return ----
+
+    const closeReturnModal = () => {
+        setShowReturnModal(false);
+        setReturnInvoiceSearch('');
+        setReturnCandidates([]);
+        setReturnDetail(null);
+        setReturnQtyMap({});
+    };
+
+    const handleSelectReturnInvoice = async (invoiceName: string) => {
+        setIsLoadingReturnDetail(true);
+        try {
+            const detail = await apiService.getPosInvoiceReturnItems(invoiceName);
+            setReturnDetail(detail);
+            setReturnQtyMap({});
+            setReturnRefundAmount(0);
+            setReturnRefundMode(paymentModes[0]?.mode_of_payment || paymentModes[0]?.name || 'Cash');
+        } catch (error: any) {
+            showToast(error.message || 'Failed to load invoice items', 'error');
+        } finally {
+            setIsLoadingReturnDetail(false);
+        }
+    };
+
+    const returnTotal = useMemo(() => {
+        if (!returnDetail) return 0;
+        return returnDetail.items.reduce((sum, item) => sum + (returnQtyMap[item.row_name] || 0) * item.rate, 0);
+    }, [returnDetail, returnQtyMap]);
+
+    // How much can actually be handed back as cash/card — capped at what was
+    // really paid on the original invoice, not just whichever items are picked.
+    const maxRefundable = useMemo(() => {
+        return roundCurrencyValue(Math.max(0, Math.min(returnTotal, returnDetail?.amount_paid || 0)));
+    }, [returnTotal, returnDetail, currencyPrecision]);
+
+    // Default the refund to "give back everything refundable" whenever the
+    // selected items (and therefore the cap) change; still editable down from there.
+    useEffect(() => {
+        setReturnRefundAmount(maxRefundable);
+    }, [maxRefundable]);
+
+    const handleSubmitReturn = async () => {
+        if (!returnDetail) return;
+        const items = returnDetail.items
+            .map(item => ({ row_name: item.row_name, qty: returnQtyMap[item.row_name] || 0 }))
+            .filter(item => item.qty > 0);
+
+        if (items.length === 0) {
+            showToast('Enter a quantity to return for at least one item', 'error');
+            return;
+        }
+
+        const refundAmount = roundCurrencyValue(Math.min(Math.max(0, returnRefundAmount), maxRefundable));
+
+        setIsProcessingReturn(true);
+        try {
+            const payments = refundAmount > 0
+                ? [{ mode_of_payment: returnRefundMode, amount: refundAmount }]
+                : [];
+            const result = await apiService.createPosReturn(returnDetail.invoice_name, items, payments);
+            const remainder = roundCurrencyValue(returnTotal - refundAmount);
+            const message = refundAmount > 0
+                ? `Return ${result.return_invoice} created. Refunded ${formatCurrency(result.refunded_amount)}.` +
+                  (remainder > 0 ? ` Remaining ${formatCurrency(remainder)} left as account credit.` : '')
+                : `Return ${result.return_invoice} created. Customer's account credited ${formatCurrency(Math.abs(result.grand_total))}.`;
+            showToast(message, 'success');
+            closeReturnModal();
+        } catch (error: any) {
+            showToast(`Return failed: ${error.message}`, 'error');
+        } finally {
+            setIsProcessingReturn(false);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: '#FAF7F2' }}>
             {/* Toast Notification */}
@@ -539,6 +828,13 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                     <h1 className="text-xl font-bold text-gray-900">Point of Sale</h1>
                 </div>
                 <div className="flex items-center space-x-2">
+                    <Button
+                        variant="outline"
+                        onClick={() => setShowCollectModal(true)}
+                        className="text-sm"
+                    >
+                        💰 Collect Payment
+                    </Button>
                     <Button
                         variant="outline"
                         onClick={() => setShowReturnModal(true)}
@@ -569,10 +865,12 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                 </svg>
                             </div>
                             <input
+                                ref={searchInputRef}
                                 type="text"
-                                placeholder="Search items..."
+                                placeholder="Search items or scan barcode..."
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
+                                onKeyDown={handleSearchKeyDown}
                                 className="w-full pl-12 pr-4 py-3 rounded-xl bg-white text-gray-900"
                                 style={{ border: '1px solid #E8E8E8' }}
                             />
@@ -589,12 +887,16 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             <div className="text-center py-8 text-gray-500">No items in stock</div>
                         ) : (
                             <div className="space-y-2">
-                                {items.map(item => (
+                                {items.map((item, index) => (
                                     <div
                                         key={item.name}
                                         onClick={() => addToCart(item)}
+                                        onMouseEnter={() => setHighlightedIndex(index)}
                                         className="bg-white rounded-xl p-3 cursor-pointer hover:shadow-sm transition-all flex items-center justify-between"
-                                        style={{ border: '1px solid #F0EEEB' }}
+                                        style={{
+                                            border: index === highlightedIndex ? '1px solid #C9A961' : '1px solid #F0EEEB',
+                                            backgroundColor: index === highlightedIndex ? '#FBF8F2' : '#FFFFFF',
+                                        }}
                                     >
                                         <div className="flex items-center space-x-3">
                                             <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: '#F5F1EC' }}>
@@ -629,7 +931,7 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             <div className="relative flex-1">
                                 <input
                                     type="text"
-                                    placeholder="Search customer..."
+                                    placeholder="Search customer by name or mobile..."
                                     value={selectedCustomer ? selectedCustomer.customer_name : customerSearch}
                                     onChange={(e) => {
                                         setCustomerSearch(e.target.value);
@@ -650,9 +952,12 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                                     setShowCustomerDropdown(false);
                                                     setCustomerSearch('');
                                                 }}
-                                                className="px-4 py-2 hover:bg-stone-50 cursor-pointer text-sm"
+                                                className="px-4 py-2 hover:bg-stone-50 cursor-pointer text-sm flex items-center justify-between"
                                             >
-                                                {customer.customer_name}
+                                                <span>{customer.customer_name}</span>
+                                                {customer.mobile_no && (
+                                                    <span className="text-xs text-gray-500 shrink-0 ml-2">{customer.mobile_no}</span>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -839,58 +1144,19 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                         <h2 className="text-xl font-bold text-gray-900 mb-4">Complete Payment</h2>
 
                         <div className="space-y-4">
-                            {/* Payment Splits */}
                             <div>
-                                <div className="flex items-center justify-between mb-2">
-                                    <label className="text-sm text-gray-600 block">Payment Methods</label>
-                                    <Button variant="outline" size="sm" onClick={addPaymentSplit} className="text-xs">
-                                        + Add Split
-                                    </Button>
-                                </div>
-                                <div className="space-y-2">
-                                    {paymentSplits.map((payment, index) => (
-                                        <div key={payment.id} className="grid grid-cols-[1fr_120px_auto] gap-2 items-center">
-                                            <select
-                                                value={payment.mode_of_payment}
-                                                onChange={(e) => updatePaymentSplit(payment.id, 'mode_of_payment', e.target.value)}
-                                                className="w-full px-3 py-2 rounded-xl bg-white text-sm"
-                                                style={{ border: '1px solid #E8E8E8' }}
-                                            >
-                                                {paymentModes.map(mode => (
-                                                    <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
-                                                        {mode.mode_of_payment || mode.name}
-                                                    </option>
-                                                ))}
-                                                {paymentModes.length === 0 && <option value="Cash">Cash</option>}
-                                            </select>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                step={amountStep}
-                                                value={payment.amount}
-                                                onChange={(e) => updatePaymentSplit(payment.id, 'amount', e.target.value)}
-                                                className="w-full px-3 py-2 rounded-xl bg-white text-sm"
-                                                style={{ border: '1px solid #E8E8E8' }}
-                                            />
-                                            <button
-                                                onClick={() => removePaymentSplit(payment.id)}
-                                                disabled={paymentSplits.length === 1}
-                                                className="text-red-500 text-sm disabled:opacity-40"
-                                                title={index === 0 && paymentSplits.length === 1 ? 'At least one payment row is required' : 'Remove split'}
-                                            >
-                                                ✕
-                                            </button>
-                                        </div>
+                                <label className="text-sm text-gray-600 block mb-2">Sales Person</label>
+                                <select
+                                    value={selectedSalesPerson}
+                                    onChange={(e) => setSelectedSalesPerson(e.target.value)}
+                                    className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                    style={{ border: '1px solid #E8E8E8' }}
+                                >
+                                    <option value="">Select sales person…</option>
+                                    {(runtimeConfig?.sales_persons || []).map(person => (
+                                        <option key={person} value={person}>{person}</option>
                                     ))}
-                                </div>
-                                <div className="flex items-center justify-between mt-2">
-                                    <p className="text-xs text-gray-500">Split one sale across multiple payment modes.</p>
-                                    {Math.abs(paymentRemaining) >= amountStep / 2 && (
-                                        <button onClick={autoBalancePayments} className="text-xs font-medium" style={{ color: '#648DDA' }}>
-                                            Auto-balance
-                                        </button>
-                                    )}
-                                </div>
+                                </select>
                             </div>
 
                             {/* Discount */}
@@ -933,20 +1199,137 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                 </div>
                             </div>
 
-                            <div>
-                                <label className="text-sm text-gray-600 block mb-2">Sales Person</label>
-                                <select
-                                    value={selectedSalesPerson}
-                                    onChange={(e) => setSelectedSalesPerson(e.target.value)}
-                                    className="w-full px-3 py-2 rounded-xl bg-white text-sm"
-                                    style={{ border: '1px solid #E8E8E8' }}
-                                >
-                                    <option value="">Select sales person…</option>
-                                    {(runtimeConfig?.sales_persons || []).map(person => (
-                                        <option key={person} value={person}>{person}</option>
-                                    ))}
-                                </select>
-                            </div>
+                            {isCreditSale ? (
+                                <div>
+                                    <label className="text-sm text-gray-600 block mb-2">Payment Due Date</label>
+                                    <input
+                                        type="date"
+                                        value={creditDueDate}
+                                        onChange={(e) => setCreditDueDate(e.target.value)}
+                                        className="w-full px-4 py-2 rounded-xl bg-white text-sm"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    />
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        The full amount will be recorded as an outstanding balance for {selectedCustomer?.customer_name || 'the selected customer'},
+                                        collectible later from "Collect Payment".
+                                    </p>
+                                </div>
+                            ) : !isSplitPayment ? (
+                                /* Single Payment Mode */
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="text-sm text-gray-600 block">Payment Mode</label>
+                                        <button onClick={handleSwitchToSplit} className="text-xs font-medium" style={{ color: '#648DDA' }}>
+                                            Split into multiple methods
+                                        </button>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {paymentModes.map(mode => {
+                                            const modeValue = mode.mode_of_payment || mode.name;
+                                            return (
+                                                <button
+                                                    key={modeValue}
+                                                    onClick={() => handleSelectSingleMode(modeValue)}
+                                                    className="p-3 rounded-xl border-2 text-sm font-medium transition-all"
+                                                    style={selectedPaymentMode === modeValue
+                                                        ? { borderColor: '#648DDA', backgroundColor: '#EEF2FC', color: '#3E5FA6' }
+                                                        : { borderColor: '#E8E8E8' }}
+                                                >
+                                                    {mode.type === 'Cash' && '💵 '}
+                                                    {mode.type === 'Bank' && '💳 '}
+                                                    {mode.type === 'General' && '📝 '}
+                                                    {modeValue}
+                                                </button>
+                                            );
+                                        })}
+                                        {paymentModes.length === 0 && (
+                                            <button
+                                                onClick={() => handleSelectSingleMode('Cash')}
+                                                className="p-3 rounded-xl border-2 text-sm font-medium"
+                                                style={{ borderColor: '#648DDA', backgroundColor: '#EEF2FC', color: '#3E5FA6' }}
+                                            >
+                                                Cash
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                /* Payment Splits */
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="text-sm text-gray-600 block">Payment Methods</label>
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={handleSwitchToSingle} className="text-xs font-medium" style={{ color: '#648DDA' }}>
+                                                Use single method
+                                            </button>
+                                            <Button variant="outline" size="sm" onClick={addPaymentSplit} className="text-xs">
+                                                + Add Split
+                                            </Button>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {paymentSplits.map((payment, index) => (
+                                            <div key={payment.id} className="grid grid-cols-[1fr_120px_auto] gap-2 items-center">
+                                                <select
+                                                    value={payment.mode_of_payment}
+                                                    onChange={(e) => updatePaymentSplit(payment.id, 'mode_of_payment', e.target.value)}
+                                                    className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                                    style={{ border: '1px solid #E8E8E8' }}
+                                                >
+                                                    {paymentModes.map(mode => (
+                                                        <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
+                                                            {mode.mode_of_payment || mode.name}
+                                                        </option>
+                                                    ))}
+                                                    {paymentModes.length === 0 && <option value="Cash">Cash</option>}
+                                                </select>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step={amountStep}
+                                                    value={payment.amount}
+                                                    onChange={(e) => updatePaymentSplit(payment.id, 'amount', e.target.value)}
+                                                    className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                                    style={{ border: '1px solid #E8E8E8' }}
+                                                />
+                                                <button
+                                                    onClick={() => removePaymentSplit(payment.id)}
+                                                    disabled={paymentSplits.length === 1}
+                                                    className="text-red-500 text-sm disabled:opacity-40"
+                                                    title={index === 0 && paymentSplits.length === 1 ? 'At least one payment row is required' : 'Remove split'}
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center justify-between mt-2">
+                                        <p className="text-xs text-gray-500">Split one sale across multiple payment modes.</p>
+                                        {Math.abs(paymentRemaining) >= amountStep / 2 && (
+                                            <button onClick={autoBalancePayments} className="text-xs font-medium" style={{ color: '#648DDA' }}>
+                                                Auto-balance
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {!currentDraftName && (
+                                <div className="flex items-center justify-between gap-3 text-sm text-gray-700 rounded-xl p-3" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
+                                    <span>Credit Sale</span>
+                                    <Toggle
+                                        checked={isCreditSale}
+                                        onChange={(checked) => {
+                                            setIsCreditSale(checked);
+                                            if (checked && !creditDueDate) {
+                                                const date = new Date();
+                                                date.setDate(date.getDate() + 15);
+                                                setCreditDueDate(date.toISOString().slice(0, 10));
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            )}
 
                             {/* Summary */}
                             <div className="rounded-xl p-4" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
@@ -960,16 +1343,20 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                                         <span>-{formatCurrency(discountAmount)}</span>
                                     </div>
                                 )}
-                                <div className="flex justify-between mb-2">
-                                    <span className="text-gray-600">Allocated</span>
-                                    <span>{formatCurrency(paymentAllocated)}</span>
-                                </div>
-                                <div className={`flex justify-between mb-2 ${paymentRemaining === 0 ? 'text-green-600' : paymentRemaining > 0 ? 'text-amber-600' : 'text-red-500'}`}>
-                                    <span>Remaining</span>
-                                    <span>{formatCurrency(paymentRemaining)}</span>
-                                </div>
+                                {!isCreditSale && isSplitPayment && (
+                                    <>
+                                        <div className="flex justify-between mb-2">
+                                            <span className="text-gray-600">Allocated</span>
+                                            <span>{formatCurrency(paymentAllocated)}</span>
+                                        </div>
+                                        <div className={`flex justify-between mb-2 ${paymentRemaining === 0 ? 'text-green-600' : paymentRemaining > 0 ? 'text-amber-600' : 'text-red-500'}`}>
+                                            <span>Remaining</span>
+                                            <span>{formatCurrency(paymentRemaining)}</span>
+                                        </div>
+                                    </>
+                                )}
                                 <div className="flex justify-between font-bold text-lg pt-2" style={{ borderTop: '1px solid #E8E8E8' }}>
-                                    <span>Total</span>
+                                    <span>{isCreditSale ? 'Outstanding' : 'Total'}</span>
                                     <span className="text-green-600">{formatCurrency(cartTotal)}</span>
                                 </div>
                             </div>
@@ -981,11 +1368,15 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                             </Button>
                             <Button
                                 onClick={handleConfirmPayment}
-                                disabled={isProcessing || hasInvalidPayments || !isPaymentBalanced}
+                                disabled={isProcessing || (isCreditSale ? !creditDueDate : (hasInvalidPayments || !isPaymentBalanced))}
                                 className="flex-1"
                                 style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
                             >
-                                {isProcessing ? 'Processing...' : `Pay ${formatCurrency(cartTotal)}`}
+                                {isProcessing
+                                    ? 'Processing...'
+                                    : isCreditSale
+                                        ? `Confirm Credit Sale — ${formatCurrency(cartTotal)}`
+                                        : `Pay ${formatCurrency(cartTotal)}`}
                             </Button>
                         </div>
                     </div>
@@ -1030,57 +1421,251 @@ const POS: React.FC<POSProps> = ({ onBack }) => {
                 </div>
             )}
 
+            {/* Collect Payment Modal */}
+            {showCollectModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 max-h-[85vh] flex flex-col" style={{ border: '1px solid #F0EEEB' }}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold text-gray-900">💰 Collect Payment</h2>
+                            <button onClick={closeCollectModal} className="text-gray-500 hover:text-gray-700">✕</button>
+                        </div>
+
+                        {!collectingInvoice ? (
+                            <>
+                                <input
+                                    type="text"
+                                    value={collectSearch}
+                                    onChange={(e) => setCollectSearch(e.target.value)}
+                                    placeholder="Search by invoice, customer name, or mobile..."
+                                    className="w-full px-4 py-3 rounded-xl bg-white mb-3"
+                                    style={{ border: '1px solid #E8E8E8' }}
+                                    autoFocus
+                                />
+                                <div className="flex-1 overflow-auto space-y-2">
+                                    {outstandingInvoices.length === 0 ? (
+                                        <p className="text-center text-gray-500 py-8">No outstanding invoices found</p>
+                                    ) : outstandingInvoices.map(invoice => (
+                                        <div
+                                            key={invoice.name}
+                                            onClick={() => handleSelectOutstandingInvoice(invoice)}
+                                            className="rounded-xl p-3 cursor-pointer hover:shadow-sm"
+                                            style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}
+                                        >
+                                            <div className="flex justify-between">
+                                                <span className="font-medium text-gray-900 text-sm">{invoice.name}</span>
+                                                <span className="font-bold text-amber-600 text-sm">{formatCurrency(invoice.outstanding_amount)}</span>
+                                            </div>
+                                            <div className="flex justify-between mt-1">
+                                                <span className="text-xs text-gray-500">{invoice.customer_name} {invoice.mobile_no ? `• ${invoice.mobile_no}` : ''}</span>
+                                                <span className="text-xs text-gray-500">Due {invoice.due_date}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="rounded-xl p-3" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
+                                    <div className="flex justify-between">
+                                        <span className="font-medium text-gray-900">{collectingInvoice.name}</span>
+                                        <span className="text-sm text-gray-500">Due {collectingInvoice.due_date}</span>
+                                    </div>
+                                    <p className="text-sm text-gray-500">{collectingInvoice.customer_name}</p>
+                                    <div className="flex justify-between mt-2 font-bold">
+                                        <span>Outstanding</span>
+                                        <span className="text-amber-600">{formatCurrency(collectingInvoice.outstanding_amount)}</span>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="text-sm text-gray-600 block mb-2">Payment Mode</label>
+                                    <select
+                                        value={collectMode}
+                                        onChange={(e) => setCollectMode(e.target.value)}
+                                        className="w-full px-3 py-2 rounded-xl bg-white text-sm"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    >
+                                        {paymentModes.map(mode => (
+                                            <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
+                                                {mode.mode_of_payment || mode.name}
+                                            </option>
+                                        ))}
+                                        {paymentModes.length === 0 && <option value="Cash">Cash</option>}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="text-sm text-gray-600 block mb-2">Amount</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max={collectingInvoice.outstanding_amount}
+                                        step={amountStep}
+                                        value={collectAmount}
+                                        onChange={(e) => setCollectAmount(parseFloat(e.target.value) || 0)}
+                                        className="w-full px-4 py-2 rounded-xl bg-white"
+                                        style={{ border: '1px solid #E8E8E8' }}
+                                    />
+                                </div>
+
+                                <div className="flex space-x-3">
+                                    <Button variant="outline" onClick={() => setCollectingInvoice(null)} className="flex-1">
+                                        Back
+                                    </Button>
+                                    <Button
+                                        onClick={handleSubmitCollection}
+                                        disabled={isCollecting}
+                                        className="flex-1"
+                                        style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
+                                    >
+                                        {isCollecting ? 'Processing...' : `Collect ${formatCurrency(collectAmount)}`}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Return Invoice Modal */}
             {showReturnModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" style={{ border: '1px solid #F0EEEB' }}>
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 max-h-[85vh] flex flex-col" style={{ border: '1px solid #F0EEEB' }}>
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold text-gray-900">↩️ Return Invoice</h2>
-                            <button onClick={() => setShowReturnModal(false)} className="text-gray-500 hover:text-gray-700">✕</button>
+                            <h2 className="text-xl font-bold text-gray-900">↩️ Return Items</h2>
+                            <button onClick={closeReturnModal} className="text-gray-500 hover:text-gray-700">✕</button>
                         </div>
 
-                        <div className="space-y-4">
-                            <div>
-                                <label className="text-sm text-gray-600 block mb-2">Invoice Number</label>
+                        {!returnDetail ? (
+                            <>
                                 <input
                                     type="text"
                                     value={returnInvoiceSearch}
                                     onChange={(e) => setReturnInvoiceSearch(e.target.value)}
-                                    placeholder="e.g. ACC-SINV-2025-00001"
-                                    className="w-full px-4 py-3 rounded-xl bg-white"
+                                    placeholder="Search by invoice, customer name, or mobile..."
+                                    className="w-full px-4 py-3 rounded-xl bg-white mb-3"
                                     style={{ border: '1px solid #E8E8E8' }}
+                                    autoFocus
                                 />
-                            </div>
+                                <div className="flex-1 overflow-auto space-y-2">
+                                    {isLoadingReturnDetail ? (
+                                        <div className="flex justify-center py-8">
+                                            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
+                                        </div>
+                                    ) : returnCandidates.length === 0 ? (
+                                        <p className="text-center text-gray-500 py-8">No matching invoices found</p>
+                                    ) : returnCandidates.map(invoice => (
+                                        <div
+                                            key={invoice.name}
+                                            onClick={() => handleSelectReturnInvoice(invoice.name)}
+                                            className="rounded-xl p-3 cursor-pointer hover:shadow-sm"
+                                            style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}
+                                        >
+                                            <div className="flex justify-between">
+                                                <span className="font-medium text-gray-900 text-sm">{invoice.name}</span>
+                                                <span className="font-bold text-green-600 text-sm">{formatCurrency(invoice.grand_total)}</span>
+                                            </div>
+                                            <div className="flex justify-between mt-1">
+                                                <span className="text-xs text-gray-500">{invoice.customer_name} {invoice.mobile_no ? `• ${invoice.mobile_no}` : ''}</span>
+                                                <span className="text-xs text-gray-500">{invoice.posting_date}{!invoice.is_pos ? ' • Credit Sale' : ''}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex-1 overflow-auto space-y-4">
+                                <div className="rounded-xl p-3" style={{ backgroundColor: '#F8F5F1', border: '1px solid #F0EEEB' }}>
+                                    <div className="flex justify-between">
+                                        <span className="font-medium text-gray-900">{returnDetail.invoice_name}</span>
+                                        <span className="text-sm text-gray-500">{returnDetail.posting_date}</span>
+                                    </div>
+                                    <p className="text-sm text-gray-500">{returnDetail.customer_name}</p>
+                                </div>
 
-                            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-                                <p className="text-sm text-yellow-800">
-                                    <strong>Note:</strong> To process a return, enter the original invoice number.
-                                    This will create a Credit Note to reverse the sale.
-                                </p>
-                            </div>
-                        </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm text-gray-600 block">Items to Return</label>
+                                    {returnDetail.items.map(item => (
+                                        <div key={item.row_name} className="grid grid-cols-[1fr_90px] gap-2 items-center rounded-lg p-2" style={{ border: '1px solid #F0EEEB' }}>
+                                            <div>
+                                                <p className="text-sm text-gray-900">{item.item_name}</p>
+                                                <p className="text-xs text-gray-500">{item.item_code} • {formatCurrency(item.rate)} each • {item.returnable_qty} returnable</p>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max={item.returnable_qty}
+                                                value={returnQtyMap[item.row_name] || 0}
+                                                onChange={(e) => {
+                                                    const qty = Math.max(0, Math.min(item.returnable_qty, parseFloat(e.target.value) || 0));
+                                                    setReturnQtyMap(prev => ({ ...prev, [item.row_name]: qty }));
+                                                }}
+                                                className="w-full px-2 py-1 rounded-lg bg-white text-sm"
+                                                style={{ border: '1px solid #E8E8E8' }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
 
-                        <div className="flex space-x-3 mt-6">
-                            <Button variant="outline" onClick={() => setShowReturnModal(false)} className="flex-1">
-                                Cancel
-                            </Button>
-                            <Button
-                                onClick={() => {
-                                    if (returnInvoiceSearch) {
-                                        // Open ERPNext return invoice page
-                                        window.open(`/app/sales-invoice/${returnInvoiceSearch}`, '_blank');
-                                        setShowReturnModal(false);
-                                        setReturnInvoiceSearch('');
-                                    } else {
-                                        showToast('Please enter an invoice number', 'error');
-                                    }
-                                }}
-                                className="flex-1"
-                                style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
-                            >
-                                Open Invoice
-                            </Button>
-                        </div>
+                                {maxRefundable > 0 ? (
+                                    <div>
+                                        <label className="text-sm text-gray-600 block mb-2">Refund Via</label>
+                                        <select
+                                            value={returnRefundMode}
+                                            onChange={(e) => setReturnRefundMode(e.target.value)}
+                                            className="w-full px-3 py-2 rounded-xl bg-white text-sm mb-3"
+                                            style={{ border: '1px solid #E8E8E8' }}
+                                        >
+                                            {paymentModes.map(mode => (
+                                                <option key={mode.mode_of_payment || mode.name} value={mode.mode_of_payment || mode.name}>
+                                                    {mode.mode_of_payment || mode.name}
+                                                </option>
+                                            ))}
+                                            {paymentModes.length === 0 && <option value="Cash">Cash</option>}
+                                        </select>
+                                        <label className="text-sm text-gray-600 block mb-2">Refund Amount</label>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max={maxRefundable}
+                                            step={amountStep}
+                                            value={returnRefundAmount}
+                                            onChange={(e) => setReturnRefundAmount(Math.max(0, Math.min(maxRefundable, parseFloat(e.target.value) || 0)))}
+                                            className="w-full px-4 py-2 rounded-xl bg-white"
+                                            style={{ border: '1px solid #E8E8E8' }}
+                                        />
+                                        <p className="text-xs text-gray-500 mt-1">
+                                            Up to {formatCurrency(maxRefundable)} — the amount already paid on this invoice. Lower it to leave some or all as account credit instead.
+                                        </p>
+                                        <div className="flex justify-between font-bold text-lg pt-3 mt-2" style={{ borderTop: '1px solid #E8E8E8' }}>
+                                            <span>Return Total</span>
+                                            <span className="text-red-500">{formatCurrency(returnTotal)}</span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
+                                        <p className="text-sm text-yellow-800">
+                                            Nothing has been paid on this invoice yet — no refund is possible. The customer's account
+                                            will be credited <strong>{formatCurrency(returnTotal)}</strong>, reducing what they owe.
+                                        </p>
+                                    </div>
+                                )}
+
+                                <div className="flex space-x-3">
+                                    <Button variant="outline" onClick={() => setReturnDetail(null)} className="flex-1">
+                                        Back
+                                    </Button>
+                                    <Button
+                                        onClick={handleSubmitReturn}
+                                        disabled={isProcessingReturn || returnTotal <= 0}
+                                        className="flex-1"
+                                        style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
+                                    >
+                                        {isProcessingReturn ? 'Processing...' : `Return ${formatCurrency(returnTotal)}`}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

@@ -1278,12 +1278,13 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 	# ERPNext's insert() fetches price_list_rate from the selling price list
 	# and overwrites our rate=0 on internal part lines. Force them back to zero.
 	_zero_internal_lines(invoice)
-	
-	# Link invoice to repair order
-	if not repair_order.sales_invoice:
-		repair_order.sales_invoice = invoice.name
-	repair_order.save(ignore_permissions=True)
-	
+
+	# Deliberately NOT linking this draft invoice to the repair order yet — that only
+	# happens in finalize_invoice, once payment is actually recorded and the invoice is
+	# submitted. Linking it here would make the repair order look "invoiced" (Billing
+	# Summary, outstanding-balance banner, "Create Invoice" action hidden) for a draft
+	# that might be abandoned if the user cancels the payment step that follows.
+
 	frappe.msgprint(_("Sales Invoice {0} created successfully").format(invoice.name))
 	
 	return {
@@ -1339,22 +1340,39 @@ def check_parts_availability(repair_order_name, warehouse=""):
 
 
 @frappe.whitelist()
-def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="Cash", mark_as_delivered=True):
+def finalize_invoice(
+	repair_order_name,
+	invoice_name,
+	discount=0,
+	payment_mode="Cash",
+	payments_json=None,
+	is_credit_sale=0,
+	due_date="",
+	mark_as_delivered=True,
+):
 	"""
-	Finalize an invoice with discount, payment mode, and optionally mark order as delivered.
-	
+	Finalize an invoice with a payment (single mode, or split across multiple modes),
+	or as a credit sale, and optionally mark order as delivered.
+
 	Args:
 		repair_order_name: Name of the repair order
 		invoice_name: Name of the sales invoice
 		discount: Discount amount to apply
-		payment_mode: Cash, Credit Card, or Credit (Pay Later)
+		payment_mode: Fallback single payment mode, used when payments_json is not provided
+		payments_json: Optional JSON list of {mode_of_payment, amount} split-payment rows
+		is_credit_sale: If truthy, bill now and collect payment later (no payment rows now)
+		due_date: Due date for a credit sale; defaults to +15 days when not provided
 		mark_as_delivered: Whether to submit the repair order
-	
+
 	Returns:
 		Dictionary with success status and message
 	"""
 	import json
+	from watch_doctor.api.pos import _get_currency_precision, _parse_pos_payments, _set_invoice_payments
+
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	is_credit_sale = frappe.utils.cint(is_credit_sale)
 	
 	# Parse boolean if passed as string
 	if isinstance(mark_as_delivered, str):
@@ -1399,49 +1417,23 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 		invoice.save(ignore_permissions=True)
 		invoice.reload()
 	
-	# Add payment mode entry if this is a POS invoice
-	mode_of_payment_doc = None
-	if invoice.is_pos:
-		# Clear existing payments
+	# Record payment: either a credit sale (bill now, collect later) or an
+	# immediate payment (single mode or split across multiple modes).
+	if is_credit_sale:
+		invoice.is_pos = 0
+		invoice.dw_is_credit_sale = 1
 		invoice.payments = []
-		
-		# Get the Mode of Payment details
-		mode_of_payment_doc = frappe.get_doc("Mode of Payment", payment_mode)
-		
-		# Get default account for this mode of payment
-		default_account = None
-		if mode_of_payment_doc.accounts:
-			for acc in mode_of_payment_doc.accounts:
-				if acc.company == invoice.company:
-					default_account = acc.default_account
-					break
-		
-		# If no account found, get company's default cash account
-		if not default_account:
-			default_account = frappe.get_cached_value("Company", invoice.company, "default_cash_account")
-		
-		# Add payment entry with the final amount (after discount)
-		payment_entry = invoice.append('payments', {})
-		payment_entry.mode_of_payment = payment_mode
-		payment_entry.account = default_account
-		
-		# Set payment amount based on payment mode TYPE (not name)
-		# Cash and Bank types = immediate payment
-		# General type = credit/pay later
-		if mode_of_payment_doc.type in ['Cash', 'Bank']:
-			# Full payment for Cash/Bank modes
-			payment_entry.amount = invoice.grand_total
-		else:
-			# Credit/Pay Later (General type) - no payment now
-			payment_entry.amount = 0
-		
-		# Save to update totals and calculate paid_amount
+		invoice.due_date = due_date or frappe.utils.add_days(frappe.utils.today(), 15)
 		invoice.save(ignore_permissions=True)
 		invoice.reload()
 	else:
-		# For non-POS invoices, set in remarks
-		if payment_mode:
-			invoice.db_set('remarks', f"Payment Mode: {payment_mode}", update_modified=False)
+		invoice.is_pos = 1
+		invoice.dw_is_credit_sale = 0
+		payments = _parse_pos_payments(payments_json, payment_mode)
+		precision = _get_currency_precision(invoice.company)
+		_set_invoice_payments(invoice, payments, precision)
+		invoice.save(ignore_permissions=True)
+		invoice.reload()
 	
 	# Submit the invoice
 	if invoice.docstatus == 0:
@@ -1475,14 +1467,22 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 				_("Finalize Invoice Stock Ledger Warning"),
 			)
 	
-	# Accumulate invoiced and paid amounts across multiple invoices (advance + balance flows)
-	is_immediate_payment = bool(mode_of_payment_doc and mode_of_payment_doc.type in ['Cash', 'Bank'])
+	# Link the invoice to the repair order now that it's actually submitted — this is what
+	# makes the repair order show up as "invoiced" in the UI (Billing Summary, outstanding
+	# balance banner), so it must not happen any earlier than this.
+	if not repair_order.sales_invoice:
+		repair_order.db_set('sales_invoice', invoice.name, update_modified=False)
+
+	# Accumulate invoiced and paid amounts across multiple invoices (advance + balance flows).
+	# Works uniformly for a single mode, a split across modes, or a credit sale, since
+	# outstanding_amount already reflects what (if anything) was actually paid now.
+	amount_paid_now = flt(invoice.grand_total) - flt(invoice.outstanding_amount)
 
 	prev_invoiced = float(frappe.db.get_value("DW Repair Order", repair_order_name, "invoiced_amount") or 0)
 	prev_paid     = float(frappe.db.get_value("DW Repair Order", repair_order_name, "paid_amount") or 0)
 
 	new_invoiced = prev_invoiced + float(invoice.grand_total or 0)
-	new_paid     = prev_paid + (float(invoice.grand_total or 0) if is_immediate_payment else 0)
+	new_paid     = prev_paid + amount_paid_now
 
 	# Balance = quotation total minus what has been paid; fall back to total invoiced
 	ref_total   = float(repair_order.quotation_amount or 0) or new_invoiced
@@ -1546,6 +1546,9 @@ def finalize_invoice(repair_order_name, invoice_name, discount=0, payment_mode="
 		"invoice_total": invoice.grand_total,
 		"discount_applied": discount,
 		"payment_mode": payment_mode,
+		"is_credit_sale": is_credit_sale,
+		"outstanding_amount": invoice.outstanding_amount,
+		"due_date": str(invoice.due_date),
 		"order_delivered": mark_as_delivered
 	}
 

@@ -48,7 +48,8 @@ def _compute_period_summary(from_date, to_date, company):
 	repair_invoice_count = len(repair_invoice_rows)
 
 	other_invoice_rows = frappe.db.sql(f"""
-		SELECT si.grand_total, si.total_taxes_and_charges, {pms_vat_expr} AS pms_vat, si.is_pos, si.is_return
+		SELECT si.grand_total, si.total_taxes_and_charges, {pms_vat_expr} AS pms_vat, si.is_pos, si.is_return,
+			si.dw_is_credit_sale
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
 		WHERE si.docstatus = 1 AND si.posting_date BETWEEN %s AND %s AND ro.name IS NULL
@@ -60,7 +61,9 @@ def _compute_period_summary(from_date, to_date, company):
 		if r["is_return"] == 1:
 			continue
 		net, _vat = _net_and_vat(r)
-		if r["is_pos"] == 1:
+		# A POS credit sale has is_pos=0 (so core doesn't demand a payment row) but
+		# is still a retail sale, not a B2B one.
+		if r["is_pos"] == 1 or r["dw_is_credit_sale"] == 1:
 			retail_net += net
 			retail_count += 1
 		else:

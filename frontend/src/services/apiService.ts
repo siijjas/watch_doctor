@@ -1026,8 +1026,9 @@ export const finalizeInvoice = async (
     repairOrderName: string,
     invoiceName: string,
     discount: number = 0,
-    paymentMode: string = 'Cash',
-    markAsDelivered: boolean = true
+    payments: POSPaymentSplit[] = [{ mode_of_payment: 'Cash', amount: 0 }],
+    markAsDelivered: boolean = true,
+    creditSale: { isCreditSale: boolean; dueDate?: string } = { isCreditSale: false }
 ): Promise<any> => {
     const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.finalize_invoice', {
         method: 'POST',
@@ -1035,7 +1036,10 @@ export const finalizeInvoice = async (
             repair_order_name: repairOrderName,
             invoice_name: invoiceName,
             discount: discount,
-            payment_mode: paymentMode,
+            payment_mode: payments[0]?.mode_of_payment || 'Cash',
+            payments_json: JSON.stringify(payments),
+            is_credit_sale: creditSale.isCreditSale ? 1 : 0,
+            due_date: creditSale.dueDate || '',
             mark_as_delivered: markAsDelivered
         }),
     });
@@ -1414,13 +1418,26 @@ const normalizePosPayments = (payments: POSPaymentSplit[] | string): POSPaymentS
     return payments;
 };
 
+export interface PosInvoiceResult {
+    invoice_name: string;
+    grand_total: number;
+    customer: string;
+    auto_print: number;
+    print_format?: string;
+    print_url?: string;
+    is_credit_sale?: number;
+    outstanding_amount?: number;
+    due_date?: string;
+}
+
 export const createPosInvoice = async (
     customer: string,
     items: CartItem[],
     payments: POSPaymentSplit[] | string = "Cash",
     discountPercent: number = 0,
-    options: POSOptions = {}
-): Promise<{ invoice_name: string; grand_total: number; customer: string; auto_print: number; print_format?: string; print_url?: string }> => {
+    options: POSOptions = {},
+    creditSale: { isCreditSale: boolean; dueDate?: string } = { isCreditSale: false }
+): Promise<PosInvoiceResult> => {
     const normalizedPayments = normalizePosPayments(payments);
     const primaryMode = typeof payments === 'string'
         ? payments
@@ -1435,6 +1452,105 @@ export const createPosInvoice = async (
             payments_json: JSON.stringify(normalizedPayments),
             discount_percent: discountPercent,
             options_json: JSON.stringify(options),
+            is_credit_sale: creditSale.isCreditSale ? 1 : 0,
+            due_date: creditSale.dueDate || '',
+        }),
+    });
+    return res.message;
+};
+
+// ==================== POS Credit Collection ====================
+
+export interface POSOutstandingInvoice {
+    name: string;
+    customer: string;
+    customer_name: string;
+    mobile_no?: string;
+    posting_date: string;
+    due_date: string;
+    grand_total: number;
+    outstanding_amount: number;
+    dw_is_credit_sale: number;
+}
+
+export const getPosOutstandingInvoices = async (search: string = ''): Promise<POSOutstandingInvoice[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_pos_outstanding_invoices', {
+        method: 'POST',
+        body: JSON.stringify({ search }),
+    });
+    return res.message || [];
+};
+
+export const collectPosPayment = async (
+    invoiceName: string,
+    modeOfPayment: string,
+    amount: number
+): Promise<{ payment_entry: string; invoice_name: string; amount_collected: number; outstanding_amount: number }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.collect_pos_payment', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_name: invoiceName, mode_of_payment: modeOfPayment, amount }),
+    });
+    return res.message;
+};
+
+// ==================== POS Sales Return ====================
+
+export interface POSReturnCandidate {
+    name: string;
+    customer: string;
+    customer_name: string;
+    mobile_no?: string;
+    posting_date: string;
+    grand_total: number;
+    is_pos: number;
+}
+
+export interface POSReturnableItem {
+    row_name: string;
+    item_code: string;
+    item_name: string;
+    rate: number;
+    returnable_qty: number;
+}
+
+export interface POSInvoiceReturnDetail {
+    invoice_name: string;
+    customer: string;
+    customer_name: string;
+    posting_date: string;
+    grand_total: number;
+    is_pos: number;
+    amount_paid: number;
+    items: POSReturnableItem[];
+}
+
+export const getPosReturnCandidates = async (search: string = ''): Promise<POSReturnCandidate[]> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_pos_return_candidates', {
+        method: 'POST',
+        body: JSON.stringify({ search }),
+    });
+    return res.message || [];
+};
+
+export const getPosInvoiceReturnItems = async (invoiceName: string): Promise<POSInvoiceReturnDetail> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_pos_invoice_return_items', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_name: invoiceName }),
+    });
+    return res.message;
+};
+
+export const createPosReturn = async (
+    invoiceName: string,
+    items: { row_name: string; qty: number }[],
+    payments: POSPaymentSplit[]
+): Promise<{ return_invoice: string; original_invoice: string; grand_total: number; refunded_amount: number }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.create_pos_return', {
+        method: 'POST',
+        body: JSON.stringify({
+            invoice_name: invoiceName,
+            items_json: JSON.stringify(items),
+            payments_json: JSON.stringify(payments),
         }),
     });
     return res.message;

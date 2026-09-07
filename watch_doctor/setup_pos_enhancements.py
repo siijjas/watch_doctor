@@ -9,11 +9,20 @@ def execute():
 	custom_fields = {
 		"Sales Invoice": [
 			{
+				"fieldname": "dw_is_credit_sale",
+				"label": "Credit Sale",
+				"fieldtype": "Check",
+				"insert_after": "is_pos",
+				"read_only": 1,
+				"print_hide": 1,
+				"description": "Sold on credit from the POS with no payment collected at time of sale.",
+			},
+			{
 				"fieldname": "dw_pos_profile",
 				"label": "DW POS Profile",
 				"fieldtype": "Link",
 				"options": "POS Profile",
-				"insert_after": "is_pos",
+				"insert_after": "dw_is_credit_sale",
 				"read_only": 1,
 				"print_hide": 1,
 			},

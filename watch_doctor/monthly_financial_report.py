@@ -50,15 +50,17 @@ def get_monthly_financial_report(from_date, to_date):
 
 	all_sales_invoices = frappe.db.sql("""
 		SELECT si.name, si.grand_total, si.outstanding_amount, si.is_pos, si.is_return, si.customer,
-			COALESCE(si.customer_name, '') AS customer_name
+			si.dw_is_credit_sale, COALESCE(si.customer_name, '') AS customer_name
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabDW Repair Order` ro ON ro.sales_invoice = si.name
 		WHERE si.docstatus = 1
 			AND si.posting_date BETWEEN %s AND %s
 			AND ro.name IS NULL
 	""", (from_date, to_date), as_dict=True)
-	total_retail_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 1 and inv["is_return"] == 0)
-	total_b2b_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 0 and inv["is_return"] == 0)
+	# A POS credit sale has is_pos=0 (so core doesn't demand a payment row) but is
+	# still a retail sale, not a B2B one — so it must count on the retail side here.
+	total_retail_sales = sum(inv["grand_total"] for inv in all_sales_invoices if (inv["is_pos"] == 1 or inv["dw_is_credit_sale"] == 1) and inv["is_return"] == 0)
+	total_b2b_sales = sum(inv["grand_total"] for inv in all_sales_invoices if inv["is_pos"] == 0 and inv["dw_is_credit_sale"] != 1 and inv["is_return"] == 0)
 	total_returns = sum(abs(inv["grand_total"]) for inv in all_sales_invoices if inv["is_return"] == 1)
 	return_invoice_names = [inv["name"] for inv in all_sales_invoices if inv["is_return"] == 1]
 	return_invoice_customers = {inv["name"]: (inv.get("customer_name") or inv.get("customer") or "") for inv in all_sales_invoices}
