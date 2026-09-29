@@ -434,8 +434,23 @@ def get_monthly_financial_report(from_date, to_date):
 	gl_total_cash_in = 0.0
 	gl_total_cash_out = 0.0
 	gl_account_summary = []
+	gl_closing_balances = {}  # account -> cumulative GL balance up to to_date
 	if cash_bank_accounts:
 		cb_ph = ", ".join(["%s"] * len(cash_bank_accounts))
+		# Closing balance = every GL posting up to and including the period end
+		for _bal in frappe.db.sql(
+			f"""SELECT gle.account, SUM(gle.debit) - SUM(gle.credit) AS balance
+			FROM `tabGL Entry` gle
+			WHERE gle.posting_date <= %s
+			  AND gle.docstatus = 1
+			  AND gle.is_cancelled = 0
+			  AND gle.account IN ({cb_ph})
+			GROUP BY gle.account""",
+			tuple([to_date] + list(cash_bank_accounts)),
+			as_dict=True,
+		):
+			gl_closing_balances[_bal["account"]] = float(_bal.get("balance") or 0)
+
 		gl_rows = frappe.db.sql(
 			f"""SELECT
 				gle.account,
@@ -456,7 +471,18 @@ def get_monthly_financial_report(from_date, to_date):
 			c = float(row.get("total_credit") or 0)
 			gl_total_cash_in += d
 			gl_total_cash_out += c
-			gl_account_summary.append({"account": row["account"], "total_debit": d, "total_credit": c, "net": d - c})
+			_closing = gl_closing_balances.get(row["account"], 0.0)
+			gl_account_summary.append({
+				"account": row["account"], "total_debit": d, "total_credit": c, "net": d - c,
+				# Opening = balance before from_date = closing minus the period's movement
+				"opening_balance": _closing - (d - c),
+				"closing_balance": _closing,
+			})
+
+	# Total opening/closing balances cover ALL cash/bank accounts, including those
+	# with no movement in the period.
+	gl_total_closing_balance = sum(gl_closing_balances.values())
+	gl_total_opening_balance = gl_total_closing_balance - (gl_total_cash_in - gl_total_cash_out)
 
 	_gl_mode_map = {}
 	for _row in gl_account_summary:
@@ -467,6 +493,17 @@ def get_monthly_financial_report(from_date, to_date):
 		_gl_mode_map[_mode]["total_credit"] += _row["total_credit"]
 		_gl_mode_map[_mode]["net"] += _row["net"]
 	gl_mode_summary = sorted(_gl_mode_map.values(), key=lambda x: abs(x["total_debit"] + x["total_credit"]), reverse=True)
+
+	# Accounts that hold a balance but had no movement in the period still belong in the
+	# per-account table so the balances add up to the total. Appended after the per-mode
+	# aggregation above so they don't create empty mode rows.
+	_moved_accounts = {_row["account"] for _row in gl_account_summary}
+	for _acc, _bal in sorted(gl_closing_balances.items(), key=lambda x: abs(x[1]), reverse=True):
+		if _acc not in _moved_accounts and abs(_bal) >= 0.0005:
+			gl_account_summary.append({
+				"account": _acc, "total_debit": 0.0, "total_credit": 0.0, "net": 0.0,
+				"opening_balance": _bal, "closing_balance": _bal,
+			})
 
 	# ---- Internal transfers (cash <-> cash), excluded from income/expense ----
 	cash_bank_set = set(cash_bank_accounts)
@@ -711,6 +748,8 @@ def get_monthly_financial_report(from_date, to_date):
 		"gl_account_summary": gl_account_summary,
 		"gl_total_cash_in": gl_total_cash_in,
 		"gl_total_cash_out": gl_total_cash_out,
+		"gl_total_opening_balance": gl_total_opening_balance,
+		"gl_total_closing_balance": gl_total_closing_balance,
 		"internal_transfers": internal_transfers_top,
 		"internal_transfers_count": len(internal_transfers),
 		"gl_transfer_total": gl_transfer_total,

@@ -83,6 +83,9 @@ interface MonthlyFinancialReportProps {
 const MonthlyFinancialReport: React.FC<MonthlyFinancialReportProps> = ({ data, monthLabel }) => {
     const { formatCurrency } = useAppConfig();
 
+    // Opening/closing cash & bank balances (absent on older backend responses)
+    const glOpeningTotal = data.gl_total_opening_balance ?? null;
+    const glClosingTotal = data.gl_total_closing_balance ?? null;
     const salesRevenue = data.total_retail_sales + data.total_b2b_sales - data.total_returns;
 
     return (
@@ -310,31 +313,53 @@ const MonthlyFinancialReport: React.FC<MonthlyFinancialReportProps> = ({ data, m
                             <thead>
                                 <tr className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-700">
                                     <th className="text-left pb-2 pr-3">Account</th>
+                                    {glOpeningTotal !== null && <th className="text-right pb-2 pr-3">Opening Balance</th>}
                                     <th className="text-right pb-2 pr-3">Cash In (Dr)</th>
                                     <th className="text-right pb-2 pr-3">Cash Out (Cr)</th>
-                                    <th className="text-right pb-2">Net</th>
+                                    <th className={`text-right pb-2 ${glClosingTotal !== null ? 'pr-3' : ''}`}>Net</th>
+                                    {glClosingTotal !== null && <th className="text-right pb-2">Closing Balance</th>}
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50 dark:divide-gray-700">
                                 {data.gl_account_summary.map((row, idx) => (
                                     <tr key={idx}>
                                         <td className="py-2.5 pr-3 font-medium text-gray-700 dark:text-gray-300">{row.account}</td>
+                                        {glOpeningTotal !== null && (
+                                            <td className={`py-2.5 pr-3 text-right ${(row.opening_balance ?? 0) >= 0 ? 'text-gray-600 dark:text-gray-300' : 'text-rose-600 dark:text-rose-400'}`}>
+                                                {(row.opening_balance ?? 0) < 0 ? '−' : ''}{formatCurrency(Math.abs(row.opening_balance ?? 0))}
+                                            </td>
+                                        )}
                                         <td className="py-2.5 pr-3 text-right text-emerald-600 dark:text-emerald-400">{row.total_debit > 0 ? formatCurrency(row.total_debit) : '—'}</td>
                                         <td className="py-2.5 pr-3 text-right text-rose-600 dark:text-rose-400">{row.total_credit > 0 ? formatCurrency(row.total_credit) : '—'}</td>
-                                        <td className={`py-2.5 text-right font-semibold ${row.net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                        <td className={`py-2.5 text-right font-semibold ${glClosingTotal !== null ? 'pr-3' : ''} ${row.net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
                                             {row.net < 0 ? '−' : ''}{formatCurrency(Math.abs(row.net))}
                                         </td>
+                                        {glClosingTotal !== null && (
+                                            <td className={`py-2.5 text-right font-bold ${(row.closing_balance ?? 0) >= 0 ? 'text-gray-900 dark:text-white' : 'text-rose-600 dark:text-rose-400'}`}>
+                                                {(row.closing_balance ?? 0) < 0 ? '−' : ''}{formatCurrency(Math.abs(row.closing_balance ?? 0))}
+                                            </td>
+                                        )}
                                     </tr>
                                 ))}
                             </tbody>
                             <tfoot>
                                 <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-bold">
                                     <td className="pt-2.5 text-sm text-gray-700 dark:text-gray-300">Total</td>
+                                    {glOpeningTotal !== null && (
+                                        <td className={`pt-2.5 pr-3 text-right text-sm ${glOpeningTotal >= 0 ? 'text-gray-600 dark:text-gray-300' : 'text-rose-600 dark:text-rose-400'}`}>
+                                            {glOpeningTotal < 0 ? '−' : ''}{formatCurrency(Math.abs(glOpeningTotal))}
+                                        </td>
+                                    )}
                                     <td className="pt-2.5 text-right text-sm text-emerald-600 dark:text-emerald-400">{formatCurrency(data.gl_total_cash_in)}</td>
                                     <td className="pt-2.5 text-right text-sm text-rose-600 dark:text-rose-400">{formatCurrency(data.gl_total_cash_out)}</td>
-                                    <td className={`pt-2.5 text-right text-sm font-bold ${(data.gl_total_cash_in - data.gl_total_cash_out) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                    <td className={`pt-2.5 text-right text-sm font-bold ${glClosingTotal !== null ? 'pr-3' : ''} ${(data.gl_total_cash_in - data.gl_total_cash_out) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
                                         {(data.gl_total_cash_in - data.gl_total_cash_out) < 0 ? '−' : ''}{formatCurrency(Math.abs(data.gl_total_cash_in - data.gl_total_cash_out))}
                                     </td>
+                                    {glClosingTotal !== null && (
+                                        <td className={`pt-2.5 text-right text-sm font-bold ${glClosingTotal >= 0 ? 'text-gray-900 dark:text-white' : 'text-rose-600 dark:text-rose-400'}`}>
+                                            {glClosingTotal < 0 ? '−' : ''}{formatCurrency(Math.abs(glClosingTotal))}
+                                        </td>
+                                    )}
                                 </tr>
                             </tfoot>
                         </table>

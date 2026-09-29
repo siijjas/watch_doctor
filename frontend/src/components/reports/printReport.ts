@@ -967,34 +967,47 @@ function buildFinancialHtml(data: DailyReportData): string {
     // Cash & Bank — per-account GL breakdown (ground truth, matches the Day Report).
     // Raw totals here INCLUDE internal transfers, so the footer uses the raw GL totals
     // to reconcile with the per-account rows above.
-    const glAccountSummary: Array<{ account: string; total_debit: number; total_credit: number; net: number }> =
+    const glAccountSummary: Array<{ account: string; total_debit: number; total_credit: number; net: number; opening_balance?: number; closing_balance?: number }> =
         fin.gl_account_summary ?? [];
     const glRawIn  = fin.gl_total_cash_in  ?? glAccountSummary.reduce((s, a) => s + a.total_debit, 0);
     const glRawOut = fin.gl_total_cash_out ?? glAccountSummary.reduce((s, a) => s + a.total_credit, 0);
     const glRawNet = glRawIn - glRawOut;
+    // Closing balance as of the report date (absent on older backend responses)
+    const glClosingTotal: number | null = fin.gl_total_closing_balance ?? null;
+    const glOpeningTotal: number | null = fin.gl_total_opening_balance ?? null;
+    const closingCell = (v: number, bold = false) =>
+        `<td class="amount" style="font-weight:${bold ? 700 : 600};color:${v >= 0 ? '#111827' : '#e11d48'}">${v < 0 ? '−' : ''}${fmt(Math.abs(v))}</td>`;
+    const openingCell = (v: number) =>
+        `<td class="amount" style="font-weight:400;color:${v >= 0 ? '#4b5563' : '#e11d48'}">${v < 0 ? '−' : ''}${fmt(Math.abs(v))}</td>`;
     const glBreakdownHtml = glAccountSummary.length === 0 ? '' : `
         <div class="card-full">
             <div class="section-title">Cash &amp; Bank — GL Breakdown <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0">— matches Day Report</span></div>
             <table>
                 <thead><tr>
                     <th>Account</th>
+                    ${glOpeningTotal !== null ? '<th class="right">Opening Balance</th>' : ''}
                     <th class="right">Cash In (Dr)</th>
                     <th class="right">Cash Out (Cr)</th>
                     <th class="right">Net</th>
+                    ${glClosingTotal !== null ? '<th class="right">Closing Balance</th>' : ''}
                 </tr></thead>
                 <tbody>
                     ${glAccountSummary.map(a => `<tr>
                         <td>${a.account}</td>
+                        ${glOpeningTotal !== null ? openingCell(a.opening_balance ?? 0) : ''}
                         <td class="${a.total_debit  > 0 ? 'amount-green' : 'right'}">${a.total_debit  > 0 ? fmt(a.total_debit)  : '—'}</td>
                         <td class="${a.total_credit > 0 ? 'amount-rose'  : 'right'}">${a.total_credit > 0 ? fmt(a.total_credit) : '—'}</td>
                         <td class="${a.net >= 0 ? 'amount-green' : 'amount-rose'}">${a.net < 0 ? '−' : ''}${fmt(Math.abs(a.net))}</td>
+                        ${glClosingTotal !== null ? closingCell(a.closing_balance ?? 0) : ''}
                     </tr>`).join('')}
                 </tbody>
                 <tfoot><tr class="total-row">
                     <td>Total</td>
+                    ${glOpeningTotal !== null ? openingCell(glOpeningTotal) : ''}
                     <td class="amount-green">${fmt(glRawIn)}</td>
                     <td class="amount-rose">${fmt(glRawOut)}</td>
                     <td class="${glRawNet >= 0 ? 'amount-green' : 'amount-rose'}">${glRawNet < 0 ? '−' : ''}${fmt(Math.abs(glRawNet))}</td>
+                    ${glClosingTotal !== null ? closingCell(glClosingTotal, true) : ''}
                 </tr></tfoot>
             </table>
         </div>`;
@@ -1767,24 +1780,35 @@ function buildMonthlyFinancialHtml(data: MonthlyFinancialReportData, monthLabel:
             </tr></tfoot>
         </table>`;
 
+    // Opening/closing balances (absent on older backend responses)
+    const glOpeningTotal: number | null = data.gl_total_opening_balance ?? null;
+    const glClosingTotal: number | null = data.gl_total_closing_balance ?? null;
+    const closingCell = (v: number, bold = false) =>
+        `<td class="amount" style="font-weight:${bold ? 700 : 600};color:${v >= 0 ? '#111827' : '#e11d48'}">${v < 0 ? '−' : ''}${fmt(Math.abs(v))}</td>`;
+    const openingCell = (v: number) =>
+        `<td class="amount" style="font-weight:400;color:${v >= 0 ? '#4b5563' : '#e11d48'}">${v < 0 ? '−' : ''}${fmt(Math.abs(v))}</td>`;
     const glAccountTable = data.gl_account_summary.length === 0 ? '' : `
         <div class="card-full">
             <div class="section-title">Cash &amp; Bank — GL Breakdown</div>
             <table>
-                <thead><tr><th>Account</th><th class="right">Cash In (Dr)</th><th class="right">Cash Out (Cr)</th><th class="right">Net</th></tr></thead>
+                <thead><tr><th>Account</th>${glOpeningTotal !== null ? '<th class="right">Opening Balance</th>' : ''}<th class="right">Cash In (Dr)</th><th class="right">Cash Out (Cr)</th><th class="right">Net</th>${glClosingTotal !== null ? '<th class="right">Closing Balance</th>' : ''}</tr></thead>
                 <tbody>
                     ${data.gl_account_summary.map(row => `<tr>
                         <td>${row.account}</td>
+                        ${glOpeningTotal !== null ? openingCell(row.opening_balance ?? 0) : ''}
                         <td class="${row.total_debit > 0 ? 'amount-green' : 'right'}">${row.total_debit > 0 ? fmt(row.total_debit) : '—'}</td>
                         <td class="${row.total_credit > 0 ? 'amount-rose' : 'right'}">${row.total_credit > 0 ? fmt(row.total_credit) : '—'}</td>
                         <td class="${row.net >= 0 ? 'amount-green' : 'amount-rose'}">${row.net < 0 ? '−' : ''}${fmt(Math.abs(row.net))}</td>
+                        ${glClosingTotal !== null ? closingCell(row.closing_balance ?? 0) : ''}
                     </tr>`).join('')}
                 </tbody>
                 <tfoot><tr class="total-row">
                     <td>Total</td>
+                    ${glOpeningTotal !== null ? openingCell(glOpeningTotal) : ''}
                     <td class="amount-green">${fmt(data.gl_total_cash_in)}</td>
                     <td class="amount-rose">${fmt(data.gl_total_cash_out)}</td>
                     <td class="${(data.gl_total_cash_in - data.gl_total_cash_out) >= 0 ? 'amount-green' : 'amount-rose'}">${(data.gl_total_cash_in - data.gl_total_cash_out) < 0 ? '−' : ''}${fmt(Math.abs(data.gl_total_cash_in - data.gl_total_cash_out))}</td>
+                    ${glClosingTotal !== null ? closingCell(glClosingTotal, true) : ''}
                 </tr></tfoot>
             </table>
         </div>`;

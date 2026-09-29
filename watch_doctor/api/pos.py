@@ -1628,9 +1628,24 @@ def get_daily_report(report_date=None):
 	gl_total_cash_in  = 0.0
 	gl_total_cash_out = 0.0
 	gl_account_summary = []
+	gl_closing_balances: dict = {}   # account -> cumulative GL balance up to report_date
 
 	if cash_bank_accounts:
 		cb_ph = ", ".join(["%s"] * len(cash_bank_accounts))
+		# Closing balance = every GL posting up to and including the report date
+		for _bal in frappe.db.sql(
+			f"""SELECT gle.account, SUM(gle.debit) - SUM(gle.credit) AS balance
+			FROM `tabGL Entry` gle
+			WHERE gle.posting_date <= %s
+			  AND gle.docstatus = 1
+			  AND gle.is_cancelled = 0
+			  AND gle.account IN ({cb_ph})
+			GROUP BY gle.account""",
+			tuple([report_date] + list(cash_bank_accounts)),
+			as_dict=True,
+		):
+			gl_closing_balances[_bal["account"]] = float(_bal.get("balance") or 0)
+
 		gl_rows = frappe.db.sql(
 			f"""SELECT
 				gle.account,
@@ -1656,7 +1671,15 @@ def get_daily_report(report_date=None):
 				"total_debit":  d,
 				"total_credit": c,
 				"net":          d - c,
+				# Opening = balance before the report date = closing minus today's movement
+				"opening_balance": gl_closing_balances.get(row["account"], 0.0) - (d - c),
+				"closing_balance": gl_closing_balances.get(row["account"], 0.0),
 			})
+
+	# Total opening/closing balances cover ALL cash/bank accounts, including those
+	# with no movement on the report date.
+	gl_total_closing_balance = sum(gl_closing_balances.values())
+	gl_total_opening_balance = gl_total_closing_balance - (gl_total_cash_in - gl_total_cash_out)
 
 	# Aggregate per-account GL into a per-mode summary.
 	# This covers ALL voucher types — PE Internal Transfer, SI returns, JE corrections,
@@ -1674,6 +1697,21 @@ def get_daily_report(report_date=None):
 		key=lambda x: abs(x["total_debit"] + x["total_credit"]),
 		reverse=True,
 	)
+
+	# Accounts that hold a balance but had no movement today still belong in the
+	# per-account table so the closing balances add up to the total. Appended after
+	# the per-mode aggregation above so they don't create empty mode rows.
+	_moved_accounts = {_row["account"] for _row in gl_account_summary}
+	for _acc, _bal in sorted(gl_closing_balances.items(), key=lambda x: abs(x[1]), reverse=True):
+		if _acc not in _moved_accounts and abs(_bal) >= 0.0005:
+			gl_account_summary.append({
+				"account":      _acc,
+				"total_debit":  0.0,
+				"total_credit": 0.0,
+				"net":          0.0,
+				"opening_balance": _bal,
+				"closing_balance": _bal,
+			})
 
 	# ---- INTERNAL TRANSFERS (cash ↔ cash) ----
 	# Vouchers that only move money between the shop's own cash/bank accounts are
@@ -2181,6 +2219,8 @@ def get_daily_report(report_date=None):
 			"gl_total_cash_out":  gl_total_cash_out,
 			"gl_net_cash":        gl_total_cash_in - gl_total_cash_out,
 			"gl_account_summary": gl_account_summary,
+			"gl_total_opening_balance": gl_total_opening_balance,
+			"gl_total_closing_balance": gl_total_closing_balance,
 			# External cash flow = GL totals minus internal (cash↔cash) transfers.
 			# These drive the KPI cards so they reflect real income/expense, not float moves.
 			"gl_external_cash_in":  gl_external_cash_in,

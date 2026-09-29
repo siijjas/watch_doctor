@@ -235,7 +235,10 @@ export interface FinancialReportData {
     gl_total_cash_in?: number;
     gl_total_cash_out?: number;
     gl_net_cash?: number;
-    gl_account_summary?: Array<{ account: string; total_debit: number; total_credit: number; net: number }>;
+    gl_account_summary?: Array<{ account: string; total_debit: number; total_credit: number; net: number; opening_balance?: number; closing_balance?: number }>;
+    // Sum of opening/closing balances across all cash/bank accounts for the report date
+    gl_total_opening_balance?: number;
+    gl_total_closing_balance?: number;
     // GL aggregated by payment mode — most accurate per-mode table (all voucher types)
     gl_mode_summary?: Array<{ mode_of_payment: string; total_debit: number; total_credit: number; net: number }>;
     // External cash flow = GL totals minus internal (cash↔cash) transfers — drives KPI cards

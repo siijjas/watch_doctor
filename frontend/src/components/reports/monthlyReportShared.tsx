@@ -212,6 +212,9 @@ export interface GLAccountRow {
     total_debit: number;
     total_credit: number;
     net: number;
+    // Balance before from_date / as of to_date (absent on older backend responses)
+    opening_balance?: number;
+    closing_balance?: number;
 }
 
 export interface InternalTransferRow {
@@ -275,6 +278,8 @@ export interface MonthlyFinancialReportData {
     gl_account_summary: GLAccountRow[];
     gl_total_cash_in: number;
     gl_total_cash_out: number;
+    gl_total_opening_balance?: number;
+    gl_total_closing_balance?: number;
     internal_transfers: InternalTransferRow[];
     internal_transfers_count: number;
     gl_transfer_total: number;
