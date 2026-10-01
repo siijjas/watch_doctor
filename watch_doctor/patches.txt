@@ -18,3 +18,4 @@ watch_doctor.patches.backfill_watch_condition_categories
 watch_doctor.patches.add_whatsapp_no_to_customer
 watch_doctor.patches.backfill_status_changed_on
 watch_doctor.patches.add_invoice_note
+watch_doctor.patches.add_invoice_note_to_pos_receipt

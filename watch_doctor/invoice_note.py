@@ -32,6 +32,18 @@ NOTE_PRINT_BLOCK = """
 
 """
 
+# Same note for the narrow thermal receipt layout (80mm roll).
+NOTE_PRINT_BLOCK_THERMAL = """
+<!-- INVOICE NOTE -->
+{% if doc.dw_invoice_note %}
+<div class="dw-invoice-note" style="margin-top: 12px; font-size: 14px; line-height: 1.4;">
+    <div style="font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Note</div>
+    <div style="white-space: pre-line;">{{ doc.dw_invoice_note | e }}</div>
+</div>
+{% endif %}
+
+"""
+
 # The note goes above the first of these found in the print format body.
 PRINT_ANCHORS = ['<div class="sig-section">', '<div class="doc-footer"']
 
@@ -44,7 +56,7 @@ def clean_invoice_note(note) -> str:
 	return str(note or "").strip()[:NOTE_MAX_LENGTH]
 
 
-def add_note_to_print_format(print_format_name: str) -> str:
+def add_note_to_print_format(print_format_name: str, block: str = NOTE_PRINT_BLOCK) -> str:
 	"""Insert the note block into a Jinja print format. Returns "added", "present" or "skipped"."""
 	if not print_format_name or not frappe.db.exists("Print Format", print_format_name):
 		return "skipped"
@@ -56,7 +68,7 @@ def add_note_to_print_format(print_format_name: str) -> str:
 	for anchor in PRINT_ANCHORS:
 		position = html.find(anchor)
 		if position != -1:
-			html = html[:position] + NOTE_PRINT_BLOCK.lstrip("\n") + "  " + html[position:]
+			html = html[:position] + block.lstrip("\n") + "  " + html[position:]
 			frappe.db.set_value("Print Format", print_format_name, "html", html)
 			frappe.clear_cache(doctype="Print Format")
 			return "added"
