@@ -3,6 +3,7 @@ import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Toggle } from './ui/Toggle';
+import { InvoiceNoteField } from './InvoiceNoteField';
 import * as apiService from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 import type { POSPaymentSplit } from '../services/apiService';
@@ -35,6 +36,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
     const [isSplitPayment, setIsSplitPayment] = useState(false);
     const [dueDate, setDueDate] = useState('');
     const [markAsDelivered, setMarkAsDelivered] = useState<boolean>(true);
+    const [invoiceNote, setInvoiceNote] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [paymentModes, setPaymentModes] = useState<Array<{ name: string; type: string }>>([]);
     const [isLoadingModes, setIsLoadingModes] = useState(true);
@@ -85,6 +87,20 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
             fetchPaymentModes();
         }
     }, [isOpen]);
+
+    // Start from the note already on the invoice (it can be set earlier from View Invoice).
+    useEffect(() => {
+        if (!isOpen || !invoiceName) return;
+        let cancelled = false;
+        setInvoiceNote('');
+        apiService.getDoc('Sales Invoice', invoiceName)
+            .then((doc) => {
+                // Don't overwrite anything typed while the invoice was loading.
+                if (!cancelled) setInvoiceNote(prev => prev || doc?.dw_invoice_note || '');
+            })
+            .catch(() => { /* keep the empty note */ });
+        return () => { cancelled = true; };
+    }, [isOpen, invoiceName]);
 
     const finalAmount = roundCurrencyValue(invoiceAmount - discount);
     const defaultPaymentMode = paymentModes[0]?.name || 'Cash';
@@ -235,7 +251,8 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
                 discount,
                 payments,
                 markAsDelivered,
-                { isCreditSale, dueDate }
+                { isCreditSale, dueDate },
+                invoiceNote
             );
             alert('Payment processed successfully!');
             onSuccess();
@@ -403,6 +420,12 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
                             }
                         }}
                     />
+                </div>
+
+                {/* Note printed on the invoice */}
+                <div>
+                    <label className="block text-sm font-medium mb-2">Note on Invoice</label>
+                    <InvoiceNoteField value={invoiceNote} onChange={setInvoiceNote} disabled={isSubmitting} />
                 </div>
 
                 {/* Mark as Delivered */}

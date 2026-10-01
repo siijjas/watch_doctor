@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal } from './ui/Modal';
 import { Button } from './ui/Button';
+import { InvoiceNoteField } from './InvoiceNoteField';
 import { Badge } from './ui/Badge';
 import * as apiService from '../services/apiService';
 
@@ -43,6 +44,9 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
   const [editedPostingDate, setEditedPostingDate] = useState('');
   const [editedDueDate, setEditedDueDate] = useState('');
   const [editedTerms, setEditedTerms] = useState('');
+  const [isEditingNote, setIsEditingNote] = useState(false);
+  const [editedNote, setEditedNote] = useState('');
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [emailTo, setEmailTo] = useState('');
@@ -69,6 +73,8 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
       setEditedPostingDate(doc.posting_date || '');
       setEditedDueDate(doc.due_date || '');
       setEditedTerms(doc.terms || '');
+      setEditedNote(doc.dw_invoice_note || '');
+      setIsEditingNote(false);
       const contactEmail = doc.contact_email || '';
       setEmailTo(contactEmail);
       setEmailSubject(`Invoice ${doc.name} – Watch Doctor`);
@@ -110,6 +116,21 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
       showToast(`Save failed: ${err?.message || err}`, 'error');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // The note is editable on submitted invoices too, so it saves on its own.
+  const handleSaveNote = async () => {
+    setIsSavingNote(true);
+    try {
+      await apiService.setInvoiceNote(invoiceName, editedNote);
+      await fetchInvoice();
+      showToast('Invoice note saved.', 'success');
+      onUpdated?.();
+    } catch (err: any) {
+      showToast(`Save failed: ${err?.message || err}`, 'error');
+    } finally {
+      setIsSavingNote(false);
     }
   };
 
@@ -523,6 +544,42 @@ export const ViewInvoiceModal: React.FC<ViewInvoiceModalProps> = ({
                 </>
               )}
             </div>
+          </div>
+
+          {/* Invoice Note */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Note on Invoice</h4>
+              {docstatusVal !== 2 && !isEditingNote && !isEditing && (
+                <Button variant="outline" size="sm" onClick={() => setIsEditingNote(true)}>
+                  {invoice.dw_invoice_note ? 'Edit note' : 'Add note'}
+                </Button>
+              )}
+            </div>
+            {isEditingNote ? (
+              <div className="space-y-2">
+                <InvoiceNoteField value={editedNote} onChange={setEditedNote} disabled={isSavingNote} />
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={isSavingNote}
+                    onClick={() => { setEditedNote(invoice.dw_invoice_note || ''); setIsEditingNote(false); }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={handleSaveNote} disabled={isSavingNote}>
+                    {isSavingNote ? 'Saving…' : 'Save note'}
+                  </Button>
+                </div>
+              </div>
+            ) : invoice.dw_invoice_note ? (
+              <p className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 whitespace-pre-line">
+                {invoice.dw_invoice_note}
+              </p>
+            ) : (
+              <p className="text-sm text-gray-400 dark:text-gray-500 italic">No note. Use this for warranty or similar remarks printed on the invoice.</p>
+            )}
           </div>
 
           {/* Terms & Conditions */}

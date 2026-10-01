@@ -1106,7 +1106,8 @@ export const finalizeInvoice = async (
     discount: number = 0,
     payments: POSPaymentSplit[] = [{ mode_of_payment: 'Cash', amount: 0 }],
     markAsDelivered: boolean = true,
-    creditSale: { isCreditSale: boolean; dueDate?: string } = { isCreditSale: false }
+    creditSale: { isCreditSale: boolean; dueDate?: string } = { isCreditSale: false },
+    invoiceNote?: string
 ): Promise<any> => {
     const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.finalize_invoice', {
         method: 'POST',
@@ -1118,8 +1119,17 @@ export const finalizeInvoice = async (
             payments_json: JSON.stringify(payments),
             is_credit_sale: creditSale.isCreditSale ? 1 : 0,
             due_date: creditSale.dueDate || '',
-            mark_as_delivered: markAsDelivered
+            mark_as_delivered: markAsDelivered,
+            invoice_note: invoiceNote
         }),
+    });
+    return res.message;
+};
+
+export const setInvoiceNote = async (invoiceName: string, note: string): Promise<{ invoice_name: string; note: string }> => {
+    const res = await apiFetch('/api/method/watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order.set_invoice_note', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_name: invoiceName, note }),
     });
     return res.message;
 };

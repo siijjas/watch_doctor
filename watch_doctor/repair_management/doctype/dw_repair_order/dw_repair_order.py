@@ -15,6 +15,7 @@ from watch_doctor.invoice_settings import (
 )
 from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
 from watch_doctor.inventory_helpers import validate_parts_stock_availability
+from watch_doctor.invoice_note import NOTE_FIELDNAME, clean_invoice_note
 from watch_doctor.list_field_utils import (
 	combine_movement_information,
 	normalize_string_list,
@@ -1419,6 +1420,7 @@ def finalize_invoice(
 	is_credit_sale=0,
 	due_date="",
 	mark_as_delivered=True,
+	invoice_note=None,
 ):
 	"""
 	Finalize an invoice with a payment (single mode, or split across multiple modes),
@@ -1433,6 +1435,8 @@ def finalize_invoice(
 		is_credit_sale: If truthy, bill now and collect payment later (no payment rows now)
 		due_date: Due date for a credit sale; defaults to +15 days when not provided
 		mark_as_delivered: Whether to submit the repair order
+		invoice_note: Customer-facing note printed on the invoice (warranty etc.);
+			None leaves any existing note untouched
 
 	Returns:
 		Dictionary with success status and message
@@ -1454,6 +1458,8 @@ def finalize_invoice(
 	# Get the invoice
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 	invoice.flags.ignore_permissions = True
+	if invoice_note is not None:
+		invoice.set(NOTE_FIELDNAME, clean_invoice_note(invoice_note))
 
 	# Get repair order
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
@@ -1628,6 +1634,22 @@ def finalize_invoice(
 		"due_date": str(invoice.due_date),
 		"order_delivered": mark_as_delivered
 	}
+
+
+@frappe.whitelist()
+def set_invoice_note(invoice_name, note=""):
+	"""Set the customer-facing note on an invoice. Works on submitted invoices too."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+
+	docstatus = frappe.db.get_value("Sales Invoice", invoice_name, "docstatus")
+	if docstatus is None:
+		frappe.throw(_("Invoice {0} not found").format(invoice_name), frappe.DoesNotExistError)
+	if docstatus == 2:
+		frappe.throw(_("Invoice {0} is cancelled.").format(invoice_name))
+
+	note = clean_invoice_note(note)
+	frappe.db.set_value("Sales Invoice", invoice_name, NOTE_FIELDNAME, note)
+	return {"invoice_name": invoice_name, "note": note}
 
 
 @frappe.whitelist()

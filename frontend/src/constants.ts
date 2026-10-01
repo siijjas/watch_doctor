@@ -31,3 +31,11 @@ export const PRIORITY_COLORS: { [key in Priority]: string } = {
     [Priority.Urgent]: 'bg-orange-200 text-orange-800',
     [Priority.VIP]: 'bg-pink-200 text-pink-800',
 };
+
+// Quick-pick lines for the note printed on a repair invoice (free text is also allowed).
+export const INVOICE_NOTE_PRESETS = [
+  '6 months warranty',
+  '1 year warranty',
+  'No water proof guarantee',
+];
+export const INVOICE_NOTE_MAX_LENGTH = 500;
