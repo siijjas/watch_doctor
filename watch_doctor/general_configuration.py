@@ -76,6 +76,17 @@ FIELD_DEFINITIONS = [
 		"label": "Default Country Code",
 		"description": "Digits only, e.g. 973 for Bahrain. Prepended to local mobile numbers when sending WhatsApp messages.",
 	},
+	{
+		"fieldname": "daily_summary_enabled",
+		"fieldtype": "Check",
+		"label": "Send Daily Order Summary",
+		"description": "Sends the owner a WhatsApp summary of stuck and uncollected orders every morning.",
+	},
+	{
+		"fieldname": "daily_summary_whatsapp_no",
+		"fieldtype": "Data",
+		"label": "Daily Summary WhatsApp No.",
+	},
 ]
 
 CONFIG_FIELDS = [
@@ -88,6 +99,8 @@ CONFIG_FIELDS = [
 	"vat_registration_number",
 	"repair_receipt_subtitle",
 	"whatsapp_default_country_code",
+	"daily_summary_enabled",
+	"daily_summary_whatsapp_no",
 ]
 
 
@@ -138,12 +151,15 @@ def get_general_configuration() -> dict[str, str]:
 	if not config.get("repair_receipt_subtitle"):
 		config["repair_receipt_subtitle"] = DEFAULT_RECEIPT_SUBTITLE
 
+	config["daily_summary_enabled"] = frappe.utils.cint(config.get("daily_summary_enabled"))
+	config.setdefault("daily_summary_whatsapp_no", "")
+
 	return config
 
 
 def set_general_configuration(config: dict[str, str]) -> dict[str, str]:
 	for fieldname in CONFIG_FIELDS:
-		frappe.db.set_single_value(DOCTYPE_NAME, fieldname, (config.get(fieldname) or "").strip())
+		frappe.db.set_single_value(DOCTYPE_NAME, fieldname, str(config.get(fieldname) or "").strip())
 	frappe.db.commit()
 	frappe.clear_cache()
 	return get_general_configuration()

@@ -11,6 +11,7 @@
         "customer",
         "contact_person",
         "status",
+        "status_changed_on",
         "priority",
         "received_date",
         "promised_delivery_date",
@@ -70,6 +71,13 @@
             "options": "\nPending\nIn Progress\nCreate Estimate\nAwaiting Parts\nRepaired\nDelivered",
             "default": "Pending",
             "in_list_view": 1
+        },
+        {
+            "fieldname": "status_changed_on",
+            "fieldtype": "Datetime",
+            "label": "Status Changed On",
+            "read_only": 1,
+            "no_copy": 1
         },
         {
             "fieldname": "priority",

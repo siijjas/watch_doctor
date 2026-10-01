@@ -23,6 +23,10 @@
         "diagnosis_date",
         "technician",
         "status",
+        "status_changed_on",
+        "awaiting_parts",
+        "parts_expected_date",
+        "parts_note",
         "intake_checklist",
         "tasks",
         "parts_used"
@@ -142,9 +146,37 @@
             "fieldname": "status",
             "fieldtype": "Select",
             "label": "Watch Status",
-            "options": "\nPending\nUnder Diagnosis\nDiagnosed\nCreate Estimate\nQuoted\nIn Repair\nCompleted\nNot Repairable\nDeclined\nDelivered",
+            "options": "\nPending\nUnder Diagnosis\nDiagnosed\nCreate Estimate\nQuoted\nApproved\nIn Repair\nCompleted\nNot Repairable\nDeclined\nDelivered",
             "default": "Pending",
             "in_list_view": 1
+        },
+        {
+            "fieldname": "status_changed_on",
+            "fieldtype": "Datetime",
+            "label": "Status Changed On",
+            "read_only": 1,
+            "no_copy": 1
+        },
+        {
+            "fieldname": "awaiting_parts",
+            "fieldtype": "Check",
+            "label": "Awaiting Parts",
+            "default": "0",
+            "no_copy": 1
+        },
+        {
+            "fieldname": "parts_expected_date",
+            "fieldtype": "Date",
+            "label": "Parts Expected On",
+            "depends_on": "eval:doc.awaiting_parts",
+            "no_copy": 1
+        },
+        {
+            "fieldname": "parts_note",
+            "fieldtype": "Data",
+            "label": "Parts Note",
+            "depends_on": "eval:doc.awaiting_parts",
+            "no_copy": 1
         },
         {
             "fieldname": "intake_checklist",

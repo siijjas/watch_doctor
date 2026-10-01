@@ -14,6 +14,7 @@ export const STATUS_COLORS: { [key: string]: string } = {
   'Diagnosed': 'bg-cyan-100 text-cyan-800',
   'Create Estimate': 'bg-orange-100 text-orange-800',
   'Quoted': 'bg-indigo-100 text-indigo-800',
+  'Approved': 'bg-teal-100 text-teal-800',
   'In Progress': 'bg-blue-200 text-blue-800',
   'In Repair': 'bg-blue-200 text-blue-800', // Same as In Progress, but explicit
   'Awaiting Parts': 'bg-yellow-200 text-yellow-800',

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getGeneralConfiguration, saveGeneralConfiguration, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosCustomers, getInvoiceWorkflowConfiguration, saveInvoiceWorkflowConfiguration } from '../services/apiService';
+import { getList, getDoc, saveDoc, deleteDoc, isErpNext, uploadFile, saveLogoUrl, getGeneralConfiguration, saveGeneralConfiguration, sendDailySummaryNow, getWhatsAppTemplates, saveWhatsAppTemplate, getWhatsAppConfig, getTemplatePlaceholders, getPmsConfiguration, savePmsConfiguration, getPosCustomers, getInvoiceWorkflowConfiguration, saveInvoiceWorkflowConfiguration } from '../services/apiService';
 import type { WhatsAppTemplate, WhatsAppConfig, WhatsAppPlaceholder, PmsConfiguration, PmsConfigurationOptions, GeneralConfiguration, InvoiceWorkflowConfiguration, InvoiceWorkflowConfigurationOptions } from '../services/apiService';
 import { useAppConfig } from '../context/AppConfigContext';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
+import { Toggle } from './ui/Toggle';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 
 // ─────────────────────────────────────────────────────────────
@@ -2303,8 +2304,11 @@ const GeneralSection: React.FC = () => {
         vat_registration_number: '',
         repair_receipt_subtitle: '',
         whatsapp_default_country_code: '',
+        daily_summary_enabled: 0,
+        daily_summary_whatsapp_no: '',
     });
     const [saveMsg, setSaveMsg] = useState('');
+    const [isSendingSummary, setIsSendingSummary] = useState(false);
     const fileRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => { setLogoPreview(config.logoUrl); }, [config.logoUrl]);
@@ -2372,6 +2376,18 @@ const GeneralSection: React.FC = () => {
             setSaveMsg(err?.message || 'Failed to save general configuration.');
         }
         setIsSavingGeneralConfig(false);
+    };
+
+    const handleSendSummaryNow = async () => {
+        setIsSendingSummary(true);
+        setSaveMsg('');
+        try {
+            const response = await sendDailySummaryNow();
+            setSaveMsg(`Summary sent to ${response.sent_to}.`);
+        } catch (err: any) {
+            setSaveMsg(`Failed to send the summary. ${err?.message || ''}`.trim());
+        }
+        setIsSendingSummary(false);
     };
 
     return (
@@ -2531,6 +2547,40 @@ const GeneralSection: React.FC = () => {
                                     <p className="text-xs text-gray-400 mt-1">
                                         Digits only (e.g. 973 for Bahrain). Prepended to local mobile numbers when sending WhatsApp messages.
                                     </p>
+                                </div>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <div className="flex items-center gap-3">
+                                        <Toggle
+                                            id="daily-summary-enabled"
+                                            checked={Boolean(generalConfig.daily_summary_enabled)}
+                                            onChange={(checked) => updateGeneralConfig('daily_summary_enabled', checked ? 1 : 0)}
+                                        />
+                                        <label htmlFor="daily-summary-enabled" className="text-sm font-medium text-gray-700">
+                                            Send me a daily order summary
+                                        </label>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-2">
+                                        Every morning at 8:00: how many watches are in the shop, ready, waiting on the customer or on parts, and which ones need follow-up. Sent only to the number here, never to customers.
+                                    </p>
+                                </div>
+                                <div>
+                                    <Input
+                                        label="Send the summary to (WhatsApp number)"
+                                        placeholder="e.g. 3912 3456"
+                                        value={generalConfig.daily_summary_whatsapp_no || ''}
+                                        onChange={(e) => updateGeneralConfig('daily_summary_whatsapp_no', e.target.value)}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleSendSummaryNow}
+                                        disabled={isSendingSummary || !generalConfig.daily_summary_whatsapp_no}
+                                        className="mt-2 text-sm font-medium text-purple-600 hover:text-purple-700 disabled:opacity-50"
+                                    >
+                                        {isSendingSummary ? 'Sending…' : 'Send it now to the saved number'}
+                                    </button>
                                 </div>
                             </div>
                         </div>

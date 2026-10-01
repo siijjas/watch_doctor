@@ -10,6 +10,8 @@ import { RepairOrderIntakeWizard } from './components/RepairOrderIntakeWizard';
 import Dashboard from './components/Dashboard';
 import POS from './components/POS';
 import DailyReport from './components/DailyReport';
+import OrderTracker from './components/OrderTracker';
+import type { TrackerTabId } from './components/OrderTracker';
 import Settings from './components/Settings';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
@@ -17,7 +19,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppConfigProvider } from './context/AppConfigContext';
 import { LoginPage } from './components/LoginPage';
 
-type ViewType = 'dashboard' | 'orders' | 'pos' | 'daily-report' | 'settings';
+type ViewType = 'dashboard' | 'orders' | 'tracker' | 'pos' | 'daily-report' | 'settings';
 const ORDER_PAGE_SIZE = 100;
 
 // Main app content (shown when authenticated)
@@ -44,6 +46,9 @@ const AppContent: React.FC = () => {
   const [hasMoreOrders, setHasMoreOrders] = useState(true);
   const [orderTotalCount, setOrderTotalCount] = useState(0);
   const latestOrdersRequestRef = useRef(0);
+  // Order Tracker: remember its search/tab and return to it after opening an order from it.
+  const [returnToTracker, setReturnToTracker] = useState(false);
+  const trackerViewRef = useRef<{ search: string; tab: TrackerTabId }>({ search: '', tab: 'all' });
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -152,8 +157,22 @@ const AppContent: React.FC = () => {
 
   const handleBackToList = useCallback(() => {
     setSelectedOrder(null);
+    if (returnToTracker) {
+      setReturnToTracker(false);
+      setCurrentView('tracker');
+      return;
+    }
     loadOrders();
-  }, [loadOrders]);
+  }, [loadOrders, returnToTracker]);
+
+  const handleSelectOrderFromTracker = useCallback((orderId: string) => {
+    setReturnToTracker(true);
+    void handleSelectOrderById(orderId);
+  }, [handleSelectOrderById]);
+
+  const handleTrackerViewChange = useCallback((search: string, tab: TrackerTabId) => {
+    trackerViewRef.current = { search, tab };
+  }, []);
 
   const handleOpenForm = useCallback((order?: RepairOrder | null) => {
     setOrderToEdit(order ?? undefined);
@@ -252,6 +271,7 @@ const AppContent: React.FC = () => {
         onChangeView={(view) => {
           setCurrentView(view);
           setSelectedOrder(null);
+          setReturnToTracker(false);
         }}
         isMobileOpen={isSidebarOpen}
         onMobileClose={() => setIsSidebarOpen(false)}
@@ -259,7 +279,7 @@ const AppContent: React.FC = () => {
 
       <div className="flex-1 flex flex-col overflow-hidden lg:ml-[240px]">
         <Header
-          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'pos' ? 'POS' : currentView === 'daily-report' ? 'Reports' : currentView === 'settings' ? 'Settings' : 'Repair Orders'}
+          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'tracker' ? 'Order Tracker' : currentView === 'pos' ? 'POS' : currentView === 'daily-report' ? 'Reports' : currentView === 'settings' ? 'Settings' : 'Repair Orders'}
           onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
         />
 
@@ -280,6 +300,13 @@ const AppContent: React.FC = () => {
             <Dashboard
               onNavigateToOrders={handleNavigateToOrders}
               onSelectOrder={handleSelectOrderById}
+            />
+          ) : currentView === 'tracker' && hasRole('executive', 'data_entry') ? (
+            <OrderTracker
+              onSelectOrder={handleSelectOrderFromTracker}
+              initialSearch={trackerViewRef.current.search}
+              initialTab={trackerViewRef.current.tab}
+              onViewChange={handleTrackerViewChange}
             />
           ) : currentView === 'pos' && hasRole('executive', 'data_entry') ? (
             <POS onBack={() => setCurrentView(getDefaultView())} />

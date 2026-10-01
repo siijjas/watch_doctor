@@ -6,7 +6,7 @@ import json
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, flt, getdate
+from frappe.utils import add_days, cint, flt, getdate, now_datetime
 
 from watch_doctor.invoice_settings import (
 	WORKFLOW_REPAIR_SERVICE,
@@ -27,6 +27,7 @@ WATCH_STATUS_UNDER_DIAGNOSIS = "Under Diagnosis"
 WATCH_STATUS_DIAGNOSED = "Diagnosed"
 WATCH_STATUS_APPROVAL_FOR_ESTIMATE = "Create Estimate"
 WATCH_STATUS_QUOTED = "Quoted"
+WATCH_STATUS_APPROVED = "Approved"
 WATCH_STATUS_IN_REPAIR = "In Repair"
 WATCH_STATUS_COMPLETED = "Completed"
 WATCH_STATUS_DELIVERED = "Delivered"
@@ -52,6 +53,7 @@ FINAL_ITEM_STATUSES = {
 MANUAL_ITEM_STATUSES = {
 	WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
 	WATCH_STATUS_QUOTED,
+	WATCH_STATUS_APPROVED,
 	WATCH_STATUS_IN_REPAIR,
 	WATCH_STATUS_COMPLETED,
 	WATCH_STATUS_DELIVERED,
@@ -152,7 +154,7 @@ def resolve_repair_item_diagnosis_status(item_status, current_diagnosis_status=N
 	if item_status in WATCH_TO_DIAGNOSIS_STATUS:
 		return WATCH_TO_DIAGNOSIS_STATUS[item_status]
 
-	if item_status in {WATCH_STATUS_IN_REPAIR, WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED}:
+	if item_status in {WATCH_STATUS_APPROVED, WATCH_STATUS_IN_REPAIR, WATCH_STATUS_COMPLETED, WATCH_STATUS_DELIVERED}:
 		if current_diagnosis_status in {"Quoted", "Awaiting Approval", "Not Repairable", "Declined"}:
 			return current_diagnosis_status
 		return "Diagnosed" if has_diagnosis_content else "Pending Diagnosis"
@@ -469,9 +471,10 @@ class DWRepairOrder(Document):
 	
 	# Define valid status transitions
 	VALID_TRANSITIONS = {
-		"Pending": ["In Progress", "Create Estimate", "Repaired"],
-		"In Progress": ["Create Estimate", "Repaired", "Pending"],
-		"Create Estimate": ["In Progress", "Repaired", "Pending"],
+		"Pending": ["In Progress", "Create Estimate", "Awaiting Parts", "Repaired"],
+		"In Progress": ["Create Estimate", "Awaiting Parts", "Repaired", "Pending"],
+		"Create Estimate": ["In Progress", "Awaiting Parts", "Repaired", "Pending"],
+		"Awaiting Parts": ["In Progress", "Create Estimate", "Repaired", "Pending"],
 		"Repaired": ["In Progress", "Create Estimate", "Delivered"],
 		"Delivered": ["Repaired"]  # Allow undoing delivery if needed (with care)
 	}
@@ -517,7 +520,32 @@ class DWRepairOrder(Document):
 			# Only validate if user manually changed it AND auto-update didn't override it
 			if status_manually_changed and not status_changed_by_auto:
 				self.validate_status_transition()
-	
+
+		self._stamp_status_changes()
+
+	def _stamp_status_changes(self):
+		"""Record when the order and each watch last changed status.
+
+		Drives "days in stage" on the Order Tracker. The stored value is always
+		taken from the database copy when the status is unchanged, so callers
+		(SPA payloads, Desk) cannot overwrite or blank it.
+		"""
+		before = None if self.is_new() else self.get_doc_before_save()
+		now = now_datetime()
+
+		if before and before.status == self.status and before.status_changed_on:
+			self.status_changed_on = before.status_changed_on
+		else:
+			self.status_changed_on = now
+
+		previous_items = {row.name: row for row in (before.items if before else [])}
+		for item in self.items or []:
+			previous = previous_items.get(item.name)
+			if previous and previous.status == item.status and previous.status_changed_on:
+				item.status_changed_on = previous.status_changed_on
+			else:
+				item.status_changed_on = now
+
 	def before_submit(self):
 		"""Validate before submitting the order."""
 		# Check all items are resolved: either repaired (Completed/Delivered) or
@@ -547,14 +575,21 @@ class DWRepairOrder(Document):
 	
 	def on_submit(self):
 		"""Actions to perform when the repair order is submitted."""
+		now = now_datetime()
 		self.db_set('status', 'Delivered', update_modified=False)
+		self.db_set('status_changed_on', now, update_modified=False)
 		self.db_set('delivery_date', getdate(), update_modified=False)
 
 		# Only promote Completed items to Delivered; items already Delivered from
 		# a prior partial-delivery finalize stay Delivered without being re-written.
 		for item in self.items:
 			if normalize_repair_item_status(item.status) == WATCH_STATUS_COMPLETED:
-				frappe.db.set_value('DW Repair Item', item.name, 'status', 'Delivered', update_modified=False)
+				frappe.db.set_value(
+					'DW Repair Item',
+					item.name,
+					{'status': 'Delivered', 'status_changed_on': now},
+					update_modified=False,
+				)
 
 		frappe.msgprint(_("Order marked as Delivered on {0}").format(getdate()))
 	
@@ -575,7 +610,14 @@ class DWRepairOrder(Document):
 		
 		# Calculate new status based on items
 		new_status = self.calculate_order_status(item_statuses)
-		
+
+		# A watch that is held up waiting for a part surfaces on the order,
+		# unless something more pressing (an estimate to prepare) already does.
+		if new_status in ("Pending", "In Progress") and any(
+			cint(item.awaiting_parts) for item in self.items
+		):
+			new_status = "Awaiting Parts"
+
 		# Update status if it changed (valid transitions are checked separately if manual, but here we force logic)
 		if new_status and new_status != self.status:
 			# We TRUST the calculated status over the previous status here, 
@@ -611,6 +653,7 @@ class DWRepairOrder(Document):
 			WATCH_STATUS_UNDER_DIAGNOSIS,
 			WATCH_STATUS_DIAGNOSED,
 			WATCH_STATUS_QUOTED,
+			WATCH_STATUS_APPROVED,
 			WATCH_STATUS_IN_REPAIR,
 			WATCH_STATUS_COMPLETED,
 		} | returned_without_repair for s in item_statuses):
@@ -694,7 +737,34 @@ class DWRepairOrder(Document):
 		for item in self.items or []:
 			sync_item_tasks_with_auto_sources(self, item)
 		self.update_item_statuses_from_workflow()
+		self._sync_awaiting_parts()
 		self.update_order_status_from_items()
+
+	def _sync_awaiting_parts(self):
+		"""Keep each watch's "awaiting parts" hold consistent.
+
+		The SPA's save payload only carries the item fields it knows about, so
+		a row arriving without the flag (None, as opposed to an explicit 0/1)
+		keeps what is stored. The hold ends on its own once the watch is
+		finished or handed back.
+		"""
+		before = self.get_doc_before_save()
+		previous_items = {row.name: row for row in (before.items if before else [])}
+
+		for item in self.items or []:
+			previous = previous_items.get(item.name)
+			if item.awaiting_parts is None and previous:
+				item.awaiting_parts = previous.awaiting_parts
+				item.parts_expected_date = previous.parts_expected_date
+				item.parts_note = previous.parts_note
+
+			if normalize_repair_item_status(item.status) in FINAL_ITEM_STATUSES:
+				item.awaiting_parts = 0
+
+			if not cint(item.awaiting_parts):
+				item.awaiting_parts = 0
+				item.parts_expected_date = None
+				item.parts_note = None
 
 	def _normalize_item_diagnosis_fields(self):
 		"""JSON-encode list-valued item fields and resolve diagnosis_status.
@@ -1513,7 +1583,14 @@ def finalize_invoice(
 			if item.name in covered_item_names and normalize_repair_item_status(item.status) not in (
 				WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED
 			):
-				frappe.db.set_value('DW Repair Item', item.name, 'status', 'Delivered', update_modified=False)
+				if normalize_repair_item_status(item.status) == WATCH_STATUS_DELIVERED:
+					continue
+				frappe.db.set_value(
+					'DW Repair Item',
+					item.name,
+					{'status': 'Delivered', 'status_changed_on': now_datetime()},
+					update_modified=False,
+				)
 
 	# Mark as delivered if requested
 	if mark_as_delivered:

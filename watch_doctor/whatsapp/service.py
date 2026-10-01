@@ -260,6 +260,31 @@ def build_watch_estimate_message(order_name: str, repair_item_name: str, notific
 	}
 
 
+def send_text(to: str, body: str) -> None:
+	"""Send a one-off text via whapi.cloud, raising on failure.
+
+	For messages that are not about a single repair order (DW WhatsApp Log
+	rows need an order and a customer), e.g. the owner's daily summary.
+	"""
+	token = frappe.conf.get("whapi_api_token")
+	if not token:
+		frappe.throw("whapi_api_token not configured in site_config.json")
+
+	base_url = frappe.conf.get("whapi_base_url", "https://gate.whapi.cloud")
+	resp = requests.post(
+		f"{base_url}/messages/text",
+		json={"to": to, "body": body},
+		headers={
+			"Authorization": f"Bearer {token}",
+			"Content-Type": "application/json",
+			"Accept": "application/json",
+		},
+		timeout=30,
+	)
+	if resp.status_code != 200:
+		frappe.throw(f"WhatsApp send failed (HTTP {resp.status_code}): {resp.text[:500]}")
+
+
 def send_whatsapp_message(log_name: str):
 	"""
 	Background job: send message via whapi.cloud and update log.

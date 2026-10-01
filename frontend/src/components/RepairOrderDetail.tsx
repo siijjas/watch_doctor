@@ -122,6 +122,7 @@ const WORKFLOW_STATUS_OPTIONS: WatchStatus[] = [
   WatchStatus.Diagnosed,
   WatchStatus.CreateEstimate,
   WatchStatus.Quoted,
+  WatchStatus.Approved,
   WatchStatus.InRepair,
   WatchStatus.Completed,
   WatchStatus.NotRepairable,
@@ -374,7 +375,8 @@ const WatchCard: React.FC<{
     }));
     const canSubmitForEstimateApproval = canManageWorkflowStatus && item.status === WatchStatus.Diagnosed;
     const canSubmitToQuoted = canManageWorkflowStatus && item.status === WatchStatus.CreateEstimate;
-    const canMoveToRepair = canManageWorkflowStatus && item.status === WatchStatus.Quoted;
+    const canMarkApproved = canManageWorkflowStatus && item.status === WatchStatus.Quoted;
+    const canMoveToRepair = canManageWorkflowStatus && item.status === WatchStatus.Approved;
     const canNotifyCustomerEstimate = canNotifyEstimateCustomer && item.status === WatchStatus.Quoted;
 
     return (
@@ -409,6 +411,11 @@ const WatchCard: React.FC<{
             )}
             <span className="font-bold text-green-600">{formatCurrency(totalCost)}</span>
             <Badge className={`${STATUS_COLORS[item.status]} px-3 py-1`}>{item.status}</Badge>
+            {Boolean(item.awaiting_parts) && (
+              <Badge className={`${STATUS_COLORS['Awaiting Parts']} px-3 py-1`}>
+                Awaiting parts{item.parts_expected_date ? ` · expected ${item.parts_expected_date}` : ''}
+              </Badge>
+            )}
             <span className={`text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}>
               ▼
             </span>
@@ -492,6 +499,19 @@ const WatchCard: React.FC<{
                     className="text-xs"
                   >
                     Notify Customer
+                  </Button>
+                )}
+                {canMarkApproved && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onSetWorkflowStatus(itemIndex, WatchStatus.Approved);
+                    }}
+                    className="text-xs"
+                  >
+                    Customer Approved
                   </Button>
                 )}
                 {canMoveToRepair && (

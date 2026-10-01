@@ -11,6 +11,7 @@ frappe.query_reports["DW Repair Job Orders"] = {
 				"Diagnosed",
 				"Create Estimate",
 				"Quoted",
+				"Approved",
 				"In Repair",
 				"Completed",
 				"Not Repairable",

@@ -943,6 +943,84 @@ export const getOutstandingInvoices = async (daysOverdue: number = 0): Promise<O
     return res.message || [];
 };
 
+// --- Order Tracker (front desk) ---
+
+export type TrackerStage = 'not_started' | 'workshop' | 'estimate' | 'approval' | 'parts' | 'ready' | 'collected';
+export type TrackerStageAction = 'approve' | 'decline' | 'start' | 'complete' | 'parts_wait' | 'parts_arrived';
+
+export interface TrackerRow {
+    item_name: string;
+    watch_brand: string;
+    watch_model: string;
+    serial_number: string | null;
+    watch_status: string;
+    status_changed_on: string | null;
+    awaiting_parts: boolean;
+    parts_expected_date: string | null;
+    parts_note: string | null;
+    parts_overdue_days: number;
+    technician: string | null;
+    repair_order: string;
+    reference_number: string | null;
+    order_status: string;
+    priority: string;
+    received_date: string | null;
+    promised_delivery_date: string | null;
+    delivery_date: string | null;
+    sales_invoice: string | null;
+    balance_amount: number;
+    customer_name: string;
+    customer_mobile: string;
+    stage: TrackerStage;
+    days_in_stage: number;
+    overdue_days: number;
+    needs_attention: boolean;
+    last_message: {
+        notification_key: string;
+        label: string;
+        status: string;
+        sent_at: string | null;
+    } | null;
+}
+
+export interface OrderTrackerData {
+    rows: TrackerRow[];
+    attention_after_days: Record<string, number>;
+    whatsapp_enabled: boolean;
+    truncated: boolean;
+}
+
+export const getOrderTracker = async (search: string = ''): Promise<OrderTrackerData> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_order_tracker', {
+        method: 'POST',
+        body: JSON.stringify({ search }),
+    });
+    const data = res.message || {};
+    return {
+        rows: data.rows || [],
+        attention_after_days: data.attention_after_days || {},
+        whatsapp_enabled: Boolean(data.whatsapp_enabled),
+        truncated: Boolean(data.truncated),
+    };
+};
+
+export const updateWatchStage = async (
+    itemName: string,
+    action: TrackerStageAction,
+    parts?: { expectedDate: string; note?: string },
+): Promise<{ repair_order: string; item_name: string; watch_status: string; order_status: string }> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.update_watch_stage', {
+        method: 'POST',
+        body: JSON.stringify({
+            item_name: itemName,
+            action,
+            expected_date: parts?.expectedDate,
+            note: parts?.note,
+        }),
+    });
+    return res.message;
+};
+
 // --- Quotation and Billing API Methods ---
 
 export const createQuotation = async (
@@ -1095,6 +1173,8 @@ export interface GeneralConfiguration {
     vat_registration_number: string;
     repair_receipt_subtitle: string;
     whatsapp_default_country_code?: string;
+    daily_summary_enabled?: number;
+    daily_summary_whatsapp_no?: string;
 }
 
 export interface InvoiceWorkflowConfiguration {
@@ -1181,6 +1261,14 @@ export const saveGeneralConfiguration = async (config: GeneralConfiguration): Pr
     const res = await apiFetch('/api/method/watch_doctor.api.save_general_configuration', {
         method: 'POST',
         body: JSON.stringify(config),
+    });
+    return res.message;
+};
+
+export const sendDailySummaryNow = async (): Promise<{ sent_to: string }> => {
+    const res = await apiFetch('/api/method/watch_doctor.whatsapp.summary.send_daily_summary_now', {
+        method: 'POST',
+        body: JSON.stringify({}),
     });
     return res.message;
 };

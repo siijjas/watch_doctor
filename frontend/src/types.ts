@@ -31,6 +31,7 @@ export enum WatchStatus {
     Diagnosed = 'Diagnosed',
     CreateEstimate = 'Create Estimate',
     Quoted = 'Quoted',
+    Approved = 'Approved',
     InRepair = 'In Repair',
     Completed = 'Completed',
     NotRepairable = 'Not Repairable',
@@ -183,6 +184,10 @@ export interface RepairItem {
     diagnosis_date?: string;
     technician: string; // Link to Employee name
     status: WatchStatus;
+    // Repair held up waiting for a part (set from the Order Tracker).
+    awaiting_parts?: number;
+    parts_expected_date?: string | null;
+    parts_note?: string | null;
     // Frappe doesn't have a direct checklist field like this,
     // This would typically be implemented as custom Check fields (e.g., 'has_scratches')
     // We'll keep it as a JSON object client-side for now.

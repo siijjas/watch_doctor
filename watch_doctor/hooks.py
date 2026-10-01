@@ -169,6 +169,13 @@ doc_events = {
 # 	],
 # }
 
+scheduler_events = {
+	"cron": {
+		# Owner's daily order summary, 08:00 site time. No-op unless enabled in Settings.
+		"0 8 * * *": ["watch_doctor.whatsapp.summary.send_daily_summary"],
+	},
+}
+
 # Testing
 # -------
 

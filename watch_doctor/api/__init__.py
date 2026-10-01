@@ -59,6 +59,12 @@ from watch_doctor.api.dashboard import (  # noqa: F401
     get_aged_pending_orders,
 )
 
+# Front-desk order tracker
+from watch_doctor.api.tracker import (  # noqa: F401
+    get_order_tracker,
+    update_watch_stage,
+)
+
 # POS
 from watch_doctor.api.pos import (  # noqa: F401
     get_pos_runtime_config,

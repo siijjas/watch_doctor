@@ -245,6 +245,8 @@ def save_general_configuration(
 	vat_registration_number: str = "",
 	repair_receipt_subtitle: str = "",
 	whatsapp_default_country_code: str = "",
+	daily_summary_enabled: int = 0,
+	daily_summary_whatsapp_no: str = "",
 ):
 	"""Persist editable general company information used in print formats."""
 	require_roles(ROLE_EXECUTIVE)
@@ -263,6 +265,8 @@ def save_general_configuration(
 		"vat_registration_number": vat_registration_number or "",
 		"repair_receipt_subtitle": repair_receipt_subtitle or "",
 		"whatsapp_default_country_code": whatsapp_default_country_code or "",
+		"daily_summary_enabled": 1 if frappe.utils.cint(daily_summary_enabled) else 0,
+		"daily_summary_whatsapp_no": daily_summary_whatsapp_no or "",
 	}
 
 	result = set_general_configuration(config)
