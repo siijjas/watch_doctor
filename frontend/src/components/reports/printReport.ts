@@ -2018,3 +2018,94 @@ export function printReport(
 </html>`);
     win.document.close();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDER TRACKER  (front-desk list, printed as shown on screen)
+// ─────────────────────────────────────────────────────────────────────────────
+export interface OrderTrackerPrintRow {
+    customer: string;
+    mobile: string;
+    order: string;
+    watch: string;
+    serial: string;
+    stage: string;
+    since: string;
+    answer: string;
+    promised: string;
+    lastMessage: string;
+    needsAttention: boolean;
+}
+
+const escapeHtml = (value: string) =>
+    String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+export function printOrderTracker(
+    listTitle: string,
+    rows: OrderTrackerPrintRow[],
+    options?: { logoUrl?: string }
+): void {
+    _logoUrl = options?.logoUrl ?? '';
+
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const followUp = rows.filter(row => row.needsAttention).length;
+
+    const body = rows.map((row, index) => `
+            <tr>
+                <td class="mono">${index + 1}</td>
+                <td><strong>${escapeHtml(row.customer)}</strong>${row.mobile ? `<br>${escapeHtml(row.mobile)}` : ''}</td>
+                <td class="mono">${escapeHtml(row.order)}</td>
+                <td>${escapeHtml(row.watch)}${row.serial ? `<br><span class="sub">S/N ${escapeHtml(row.serial)}</span>` : ''}</td>
+                <td><strong>${escapeHtml(row.stage)}</strong><br><span class="${row.needsAttention ? 'text-rose' : 'sub'}">${escapeHtml(row.since)}</span></td>
+                <td>${escapeHtml(row.answer)}${row.promised ? `<br><span class="sub">${escapeHtml(row.promised)}</span>` : ''}</td>
+                <td>${escapeHtml(row.lastMessage)}</td>
+            </tr>`).join('');
+
+    const win = window.open('', '_blank', 'width=1100,height=700');
+    if (!win) return;
+
+    win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WatchDoc — Order Tracker</title>
+    <style>${BASE_STYLES}
+      @page { size: A4 landscape; margin: 12mm; }
+      .sub { font-size: 10px; color: #6b7280; }
+      td { vertical-align: top; }
+      tr { break-inside: avoid; }
+    </style>
+</head>
+<body>
+    ${header(`Order Tracker — ${escapeHtml(listTitle)}`, todayIso)}
+    <div class="section">
+        <div class="section-title">${rows.length} ${rows.length === 1 ? 'watch' : 'watches'}${followUp ? ` · ${followUp} need follow-up` : ''}</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Customer</th>
+                    <th>Order</th>
+                    <th>Watch</th>
+                    <th>Stage</th>
+                    <th>Status for the customer</th>
+                    <th>Last message</th>
+                </tr>
+            </thead>
+            <tbody>${body || '<tr><td colspan="7" class="empty">No watches in this list.</td></tr>'}</tbody>
+        </table>
+    </div>
+    <script>
+        window.onload = function() {
+            window.print();
+            window.onafterprint = function() { window.close(); };
+        };
+    <\/script>
+</body>
+</html>`);
+    win.document.close();
+}

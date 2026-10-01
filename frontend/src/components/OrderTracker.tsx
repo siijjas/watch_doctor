@@ -10,6 +10,7 @@ import { Modal } from './ui/Modal';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 import { Toast } from './ui/Toast';
 import { NotifyCustomerModal } from './NotifyCustomerModal';
+import { printOrderTracker } from './reports/printReport';
 
 export type TrackerTabId = 'all' | 'ready' | 'approval' | 'estimate' | 'workshop' | 'parts' | 'not_started' | 'overdue' | 'attention';
 
@@ -137,7 +138,7 @@ const stageActions = (row: TrackerRow): TrackerStageAction[] => {
 };
 
 const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearch = '', initialTab = 'all', onViewChange }) => {
-  const { formatCurrency } = useAppConfig();
+  const { config, formatCurrency } = useAppConfig();
   const [data, setData] = useState<OrderTrackerData>(EMPTY_DATA);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -273,6 +274,12 @@ const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearc
 
   const canNotify = (row: TrackerRow) => data.whatsapp_enabled && row.stage === 'ready' && row.order_status === 'Repaired';
 
+  const promisedText = (row: TrackerRow): string => {
+    if (row.stage === 'ready' || row.stage === 'collected' || !row.promised_delivery_date) return '';
+    const late = row.overdue_days > 0 ? ` · ${daysLabel(row.overdue_days)} late` : '';
+    return `Promised ${formatDay(row.promised_delivery_date)}${late}`;
+  };
+
   const renderPromised = (row: TrackerRow) => {
     if (row.stage === 'ready' || row.stage === 'collected' || !row.promised_delivery_date) return null;
     return (
@@ -369,6 +376,32 @@ const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearc
     </>
   );
 
+  const handlePrint = () => {
+    const listTitle = isSearching
+      ? `Search "${debouncedSearch}"`
+      : (TABS.find((tab) => tab.id === activeTab) || TABS[0]).label;
+
+    printOrderTracker(
+      listTitle,
+      visibleRows.map((row) => ({
+        customer: row.customer_name,
+        mobile: row.customer_mobile,
+        order: row.reference_number ? `${row.repair_order} · Ref: ${row.reference_number}` : row.repair_order,
+        watch: watchLabel(row),
+        serial: row.serial_number || '',
+        stage: stageLabel(row),
+        since: stageSince(row),
+        answer: describe(row),
+        promised: promisedText(row),
+        lastMessage: row.last_message
+          ? `${row.last_message.label} · ${formatDay(row.last_message.sent_at)}`
+          : 'No message sent',
+        needsAttention: row.needs_attention,
+      })),
+      { logoUrl: config.logoUrl },
+    );
+  };
+
   const emptyMessage = isSearching
     ? `Nothing found for "${debouncedSearch}". Try the phone number or order number.`
     : 'No watches in this list.';
@@ -384,15 +417,29 @@ const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearc
               : `${tabCounts.all} ${tabCounts.all === 1 ? 'watch' : 'watches'} in the shop · ${tabCounts.ready} ready for collection`}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void load(debouncedSearch)}
-          disabled={isLoading}
-          className="px-4 py-2.5 rounded-xl bg-white text-sm font-semibold text-slate-600 hover:bg-stone-50 shadow-sm disabled:opacity-60"
-          style={{ border: '1px solid #E8E8E8' }}
-        >
-          {isLoading ? 'Loading...' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={isLoading || visibleRows.length === 0}
+            className="px-4 py-2.5 rounded-xl bg-white text-sm font-semibold text-slate-600 hover:bg-stone-50 shadow-sm disabled:opacity-60 flex items-center gap-2"
+            style={{ border: '1px solid #E8E8E8' }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+            </svg>
+            Print
+          </button>
+          <button
+            type="button"
+            onClick={() => void load(debouncedSearch)}
+            disabled={isLoading}
+            className="px-4 py-2.5 rounded-xl bg-white text-sm font-semibold text-slate-600 hover:bg-stone-50 shadow-sm disabled:opacity-60"
+            style={{ border: '1px solid #E8E8E8' }}
+          >
+            {isLoading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       <div className="mb-4 relative">
