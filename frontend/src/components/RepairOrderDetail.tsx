@@ -24,6 +24,7 @@ import { CreateInvoiceModal } from './CreateInvoiceModal';
 import PaymentModal from './PaymentModal';
 import { AssignTechnicianModal } from './AssignTechnicianModal';
 import { WatchDetailsModal, type WatchDetailsFields } from './WatchDetailsModal';
+import { ItemInternalNote } from './ItemInternalNote';
 import { ActionsDropdown } from './ui/ActionsDropdown';
 import { ViewQuotationModal } from './ViewQuotationModal';
 import { ViewInvoiceModal } from './ViewInvoiceModal';
@@ -249,6 +250,7 @@ const WatchCard: React.FC<{
     onUpdatePrices: (itemIndex: number) => void;
     onAssignTechnician: (itemIndex: number) => void;
     onViewWatchDetails: (itemIndex: number) => void;
+    onSaveInternalNote: (itemIndex: number, note: string) => Promise<void>;
     onAddIssue: (itemIndex: number) => void;
     onAddTask: (itemIndex: number) => void;
     onSetWorkflowStatus: (itemIndex: number, status: WatchStatus) => Promise<void>;
@@ -265,7 +267,7 @@ const WatchCard: React.FC<{
     isSavingPhotos: boolean;
     onSavePhotos: (itemIndex: number, payload: apiService.RepairItemPhotosPayload) => Promise<void>;
     defaultExpanded?: boolean;
-  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onMarkAllTasksCompleted, onUpdatePrices, onAssignTechnician, onViewWatchDetails, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, isSavingPhotos, onSavePhotos, defaultExpanded = true }) => {
+  }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onMarkAllTasksCompleted, onUpdatePrices, onAssignTechnician, onViewWatchDetails, onSaveInternalNote, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, isSavingPhotos, onSavePhotos, defaultExpanded = true }) => {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
@@ -529,6 +531,11 @@ const WatchCard: React.FC<{
                 )}
               </div>
             </div>
+
+            <ItemInternalNote
+              note={item.internal_note || ''}
+              onSave={(note) => onSaveInternalNote(itemIndex, note)}
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 pt-4">
               <div>
@@ -1438,6 +1445,17 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
     }
   };
 
+  const handleSaveInternalNote = async (watchIndex: number, note: string) => {
+    const updatedOrder = JSON.parse(JSON.stringify(order)) as RepairOrder;
+    updatedOrder.items[watchIndex].internal_note = note;
+
+    await apiService.saveRepairOrder(updatedOrder);
+
+    if (onRefresh) {
+      await onRefresh(order.name);
+    }
+  };
+
   const handleSaveDiagnosis = async (watchIndex: number, diagnosis: Pick<RepairItem, 'diagnosis_status' | 'diagnosis_summary' | 'movement_type' | 'movement_caliber' | 'movement_information' | 'recommended_work'>) => {
     const item = order.items[watchIndex];
     if (!item?.name) {
@@ -2065,6 +2083,7 @@ const RepairOrderDetail: React.FC<RepairOrderDetailProps> = ({ order, onBack, on
           onUpdatePrices={(itemIndex) => setUpdatePriceModal({ isOpen: true, watchIndex: itemIndex })}
           onAssignTechnician={(itemIndex) => setAssignTechnicianModal({ isOpen: true, watchIndex: itemIndex })}
           onViewWatchDetails={(itemIndex) => setWatchDetailsModal({ isOpen: true, watchIndex: itemIndex })}
+          onSaveInternalNote={handleSaveInternalNote}
           onAddIssue={(itemIndex) => setAddIssueModal({ isOpen: true, watchIndex: itemIndex })}
           onAddTask={(itemIndex) => setAddTaskModal({ isOpen: true, watchIndex: itemIndex })}
           onSetWorkflowStatus={handleSetWorkflowStatus}

@@ -739,7 +739,22 @@ class DWRepairOrder(Document):
 			sync_item_tasks_with_auto_sources(self, item)
 		self.update_item_statuses_from_workflow()
 		self._sync_awaiting_parts()
+		self._keep_item_internal_notes()
 		self.update_order_status_from_items()
+
+	def _keep_item_internal_notes(self):
+		"""Keep a watch's internal note when a save payload leaves it out.
+
+		Same reason as _sync_awaiting_parts: an SPA row arriving without the
+		field (None, as opposed to "") keeps what is stored.
+		"""
+		before = self.get_doc_before_save()
+		previous_items = {row.name: row for row in (before.items if before else [])}
+
+		for item in self.items or []:
+			previous = previous_items.get(item.name)
+			if item.internal_note is None and previous:
+				item.internal_note = previous.internal_note
 
 	def _sync_awaiting_parts(self):
 		"""Keep each watch's "awaiting parts" hold consistent.

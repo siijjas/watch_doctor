@@ -561,6 +561,7 @@ export const saveRepairOrder = async (order: RepairOrder): Promise<RepairOrder> 
             diagnosis_date: item.diagnosis_date,
             technician: item.technician,
             status: item.status,
+            internal_note: item.internal_note ?? '',
             intake_checklist: item.intake_checklist,
             photos: (item.photos || []).map(p => ({
                 name: p.name || undefined,

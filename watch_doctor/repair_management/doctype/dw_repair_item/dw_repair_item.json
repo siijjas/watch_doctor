@@ -27,6 +27,7 @@
         "awaiting_parts",
         "parts_expected_date",
         "parts_note",
+        "internal_note",
         "intake_checklist",
         "tasks",
         "parts_used"
@@ -176,6 +177,13 @@
             "fieldtype": "Data",
             "label": "Parts Note",
             "depends_on": "eval:doc.awaiting_parts",
+            "no_copy": 1
+        },
+        {
+            "fieldname": "internal_note",
+            "fieldtype": "Small Text",
+            "label": "Internal Note",
+            "description": "Staff-only note for later reference. Never shown to the customer.",
             "no_copy": 1
         },
         {

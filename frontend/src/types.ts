@@ -188,6 +188,8 @@ export interface RepairItem {
     awaiting_parts?: number;
     parts_expected_date?: string | null;
     parts_note?: string | null;
+    // Staff-only note for later reference; never shown to the customer.
+    internal_note?: string | null;
     // Frappe doesn't have a direct checklist field like this,
     // This would typically be implemented as custom Check fields (e.g., 'has_scratches')
     // We'll keep it as a JSON object client-side for now.
