@@ -269,6 +269,7 @@ const WatchCard: React.FC<{
     defaultExpanded?: boolean;
   }> = ({ item, itemIndex, employees, allItems, taskTemplates, issueTemplates, watchModels, onAddPart, onChangeTaskStatus, onMarkAllTasksCompleted, onUpdatePrices, onAssignTechnician, onViewWatchDetails, onSaveInternalNote, onAddIssue, onAddTask, onSetWorkflowStatus, onNotifyEstimateCustomer, diagnosisSummaryTemplates, recommendedWorkTemplates, movementTypeTemplates, movementCaliberTemplates, canEditDiagnosis, canManageWorkflowStatus, canNotifyEstimateCustomer, isSavingDiagnosis, onSaveDiagnosis, isSavingPhotos, onSavePhotos, defaultExpanded = true }) => {
     const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+    const [isAddingNote, setIsAddingNote] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
     const handleCapturePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -464,6 +465,16 @@ const WatchCard: React.FC<{
                 >
                   🔍 Watch Details
                 </Button>
+                {!item.internal_note && !isAddingNote && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={(e) => { e.stopPropagation(); setIsAddingNote(true); }}
+                    className="text-xs"
+                  >
+                    📝 Add Note
+                  </Button>
+                )}
                 {canSubmitForEstimateApproval && (
                   <Button
                     variant="primary"
@@ -532,10 +543,14 @@ const WatchCard: React.FC<{
               </div>
             </div>
 
-            <ItemInternalNote
-              note={item.internal_note || ''}
-              onSave={(note) => onSaveInternalNote(itemIndex, note)}
-            />
+            {(item.internal_note || isAddingNote) && (
+              <ItemInternalNote
+                note={item.internal_note || ''}
+                onSave={(note) => onSaveInternalNote(itemIndex, note)}
+                openInEditor={isAddingNote}
+                onDone={() => setIsAddingNote(false)}
+              />
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 pt-4">
               <div>
