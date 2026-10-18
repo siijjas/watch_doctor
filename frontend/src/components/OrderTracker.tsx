@@ -11,6 +11,7 @@ import { ConfirmDialog } from './ui/ConfirmDialog';
 import { Toast } from './ui/Toast';
 import { NotifyCustomerModal } from './NotifyCustomerModal';
 import { printOrderTracker } from './reports/printReport';
+import { exportOrderTrackerExcel } from './reports/exportExcel';
 
 export type TrackerTabId = 'all' | 'ready' | 'approval' | 'estimate' | 'workshop' | 'parts' | 'not_started' | 'overdue' | 'attention';
 
@@ -376,11 +377,11 @@ const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearc
     </>
   );
 
-  const handlePrint = () => {
-    const listTitle = isSearching
-      ? `Search "${debouncedSearch}"`
-      : (TABS.find((tab) => tab.id === activeTab) || TABS[0]).label;
+  const listTitle = isSearching
+    ? `Search "${debouncedSearch}"`
+    : (TABS.find((tab) => tab.id === activeTab) || TABS[0]).label;
 
+  const handlePrint = () => {
     printOrderTracker(
       listTitle,
       visibleRows.map((row) => ({
@@ -399,6 +400,33 @@ const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearc
         needsAttention: row.needs_attention,
       })),
       { logoUrl: config.logoUrl },
+    );
+  };
+
+  const handleExportExcel = () => {
+    exportOrderTrackerExcel(
+      listTitle,
+      visibleRows.map((row) => ({
+        customer: row.customer_name,
+        mobile: row.customer_mobile,
+        order: row.repair_order,
+        reference: row.reference_number || '',
+        watch: watchLabel(row),
+        serial: row.serial_number || '',
+        stage: stageLabel(row),
+        since: stageSince(row),
+        answer: describe(row),
+        promisedDate: row.stage === 'ready' || row.stage === 'collected' ? null : row.promised_delivery_date,
+        daysLate: row.stage === 'ready' || row.stage === 'collected' ? 0 : row.overdue_days,
+        technician: row.technician || '',
+        receivedDate: row.received_date,
+        orderStatus: row.order_status,
+        priority: row.priority,
+        balance: row.balance_amount || 0,
+        lastMessage: row.last_message ? row.last_message.label : 'No message sent',
+        lastMessageDate: row.last_message?.sent_at || null,
+        needsAttention: row.needs_attention,
+      })),
     );
   };
 
@@ -429,6 +457,18 @@ const OrderTracker: React.FC<OrderTrackerProps> = ({ onSelectOrder, initialSearc
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
             </svg>
             Print
+          </button>
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            disabled={isLoading || visibleRows.length === 0}
+            className="px-4 py-2.5 rounded-xl bg-white text-sm font-semibold text-slate-600 hover:bg-stone-50 shadow-sm disabled:opacity-60 flex items-center gap-2"
+            style={{ border: '1px solid #E8E8E8' }}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Excel
           </button>
           <button
             type="button"
