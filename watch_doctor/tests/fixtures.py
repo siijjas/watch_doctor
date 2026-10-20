@@ -100,3 +100,17 @@ def make_technician(create_user=False, technician_name=None):
 	})
 	doc.insert(ignore_permissions=True)
 	return doc.name, email
+
+
+def make_user(role):
+	"""A User holding just `role` (e.g. "DW Data Entry"). Returns the email."""
+	email = f"user.{unique_suffix()}@example.com"
+	user = frappe.get_doc({
+		"doctype": "User",
+		"email": email,
+		"first_name": role,
+		"send_welcome_email": 0,
+	})
+	user.insert(ignore_permissions=True)
+	user.add_roles(role)
+	return email

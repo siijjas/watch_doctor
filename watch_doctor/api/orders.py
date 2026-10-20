@@ -221,18 +221,22 @@ def update_repair_item_diagnosis(item_name, diagnosis_json):
 def update_repair_item_photos(item_name, payload_json):
 	"""Update visible-condition intake photos and identification fields for a single repair item.
 
-	No technician-assignment restriction here (unlike update_repair_item_diagnosis) --
-	capturing/editing intake condition photos is a general data-entry task, not diagnosis.
+	The front desk may edit any watch; a technician only the watches assigned
+	to them, since intake photos are the record of the watch's condition.
 	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	payload = json.loads(payload_json) if isinstance(payload_json, str) else (payload_json or {})
 
-	item_row = frappe.db.get_value("DW Repair Item", item_name, ["name", "parent"], as_dict=True)
+	item_row = frappe.db.get_value("DW Repair Item", item_name, ["name", "parent", "technician"], as_dict=True)
 	if not item_row:
 		frappe.throw(_("Repair item not found"), frappe.DoesNotExistError)
 
 	if not can_access_repair_order(item_row.parent):
 		frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
+
+	if not set(frappe.get_roles()) & PRIVILEGED_ROLES:
+		if (item_row.technician or "") not in set(get_current_technician_identifiers()):
+			frappe.throw(_("You can only update photos for watches assigned to you"), frappe.PermissionError)
 
 	allowed_fields = {"photos", "case_type", "strap_bracelet", "watch_type", "dial"}
 	for key in payload.keys():

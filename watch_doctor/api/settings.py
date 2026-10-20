@@ -59,6 +59,9 @@ def get_user_info():
 def get_app_config():
 	"""Return app-level configuration: logo URL, currency symbol, decimal places."""
 	from watch_doctor.pms import get_pms_runtime_configuration
+	# Staff only: website (portal) users have no business reading shop settings.
+	if frappe.get_cached_value("User", frappe.session.user, "user_type") != "System User":
+		frappe.throw(_("Insufficient permissions"), frappe.PermissionError)
 	invoice_settings = get_invoice_workflow_settings()
 	general_config = get_general_configuration()
 	config = {

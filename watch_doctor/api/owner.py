@@ -225,7 +225,7 @@ def receivables(limit=50):
 		ORDER BY si.posting_date ASC
 		LIMIT %(limit)s
 		""",
-		{"limit": int(limit)},
+		{"limit": max(1, min(int(limit or 50), 500))},
 		as_dict=True,
 	)
 	agg = frappe.db.sql(

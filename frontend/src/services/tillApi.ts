@@ -49,7 +49,7 @@ export interface TillPreview {
     has_pms_items: number;
     pms_total_vat: number;
     receipt_format: string;
-    lines: Array<{ item_code: string; is_pms: number; cost: number; margin: number; vat: number }>;
+    lines: Array<{ item_code: string; is_pms: number; cost: number | null; margin: number | null; vat: number }>;
 }
 
 export interface ChargeResult {

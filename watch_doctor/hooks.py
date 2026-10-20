@@ -134,6 +134,11 @@ jinja = {
 
 permission_query_conditions = {
 	"DW Repair Order": "watch_doctor.permissions.repair_order_query_conditions",
+	"DW Repair Item": "watch_doctor.permissions.repair_order_child_query_conditions",
+	"DW Repair Task": "watch_doctor.permissions.repair_order_child_query_conditions",
+	"DW Repair Part Used": "watch_doctor.permissions.repair_order_child_query_conditions",
+	"DW Repair Item Issue": "watch_doctor.permissions.repair_order_child_query_conditions",
+	"DW Repair Item Image": "watch_doctor.permissions.repair_order_child_query_conditions",
 }
 
 has_permission = {

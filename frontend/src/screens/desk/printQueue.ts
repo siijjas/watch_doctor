@@ -177,7 +177,7 @@ const BASE_STYLES = `
 function header(title: string, date: string): string {
     const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
     const logoHtml = _logoUrl
-        ? `<img src="${_logoUrl}" alt="Logo" style="max-height:44px;max-width:180px;object-fit:contain;" />`
+        ? `<img src="${escapeHtml(_logoUrl)}" alt="Logo" style="max-height:44px;max-width:180px;object-fit:contain;" />`
         : `<div class="rpt-logo-icon">⌚</div><div class="rpt-logo-name">WatchDoc</div>`;
     return `
     <div class="rpt-header">

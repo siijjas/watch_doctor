@@ -603,7 +603,7 @@ def collect_watches(
 	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import (
-		create_sales_invoice,
+		build_sales_invoice,
 		finalize_invoice,
 	)
 
@@ -624,7 +624,7 @@ def collect_watches(
 	if discount < 0:
 		frappe.throw(_("A discount cannot be negative."))
 
-	draft = create_sales_invoice(order.name, source_type="order", payment_type="full", item_indices=names)
+	draft = build_sales_invoice(order.name, source_type="order", payment_type="full", item_indices=names)
 	if discount > flt(draft["invoice_amount"]):
 		frappe.throw(_("The discount is more than the invoice."))
 
@@ -668,14 +668,14 @@ def preview_collect(name: str, item_names: str | list, discount: float = 0):
 	not the browser) inside a savepoint and rolls it back.
 	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import create_sales_invoice
+	from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import build_sales_invoice
 
 	names = json.loads(item_names) if isinstance(item_names, str) else (item_names or [])
 	if not names:
 		return {"net_total": 0, "taxes": 0, "discount": 0, "grand_total": 0}
 	frappe.db.savepoint("dw_preview_collect")
 	try:
-		draft = create_sales_invoice(name, source_type="order", payment_type="full", item_indices=names)
+		draft = build_sales_invoice(name, source_type="order", payment_type="full", item_indices=names)
 		invoice = frappe.get_doc("Sales Invoice", draft["invoice_name"])
 		if flt(discount) > 0:
 			invoice.discount_amount = flt(discount)

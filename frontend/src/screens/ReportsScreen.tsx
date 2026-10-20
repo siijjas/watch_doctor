@@ -278,7 +278,7 @@ const BlockView: React.FC<{ b: Block; money: Fmt }> = ({ b, money }) => (
     </Card>
 );
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** Print / PDF: a plain A4 page of the same blocks, opened inside the click. */
 const printView = (title: string, period: string, view: View, money: Fmt, logo: string) => {

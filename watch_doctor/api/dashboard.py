@@ -10,6 +10,7 @@ from watch_doctor.permissions import require_roles, ROLE_EXECUTIVE, ROLE_DATA_EN
 def get_dashboard_stats(days: int = 7):
 	"""Get summary statistics for dashboard KPI cards."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	days = max(1, min(int(days or 7), 366))
 	from datetime import timedelta
 	from frappe.utils import getdate, nowdate
 
@@ -76,6 +77,7 @@ def get_dashboard_stats(days: int = 7):
 def get_orders_trend(days: int = 7):
 	"""Get daily order counts for the last N days."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	days = max(1, min(int(days or 7), 366))
 	from datetime import timedelta
 	from frappe.utils import getdate, nowdate
 
@@ -190,7 +192,7 @@ def get_top_issues(limit: int = 10):
 		GROUP BY ri.issue, it.issue_name
 		ORDER BY count DESC
 		LIMIT %s
-	""", (int(limit),), as_dict=True)
+	""", (max(1, min(int(limit or 10), 100)),), as_dict=True)
 	
 	# Calculate percentages
 	total = sum(i['count'] for i in issues)
@@ -212,7 +214,7 @@ def get_aged_pending_orders(limit: int = 5):
 		WHERE status = 'Pending'
 		ORDER BY received_date ASC
 		LIMIT %s
-	""", (int(limit),), as_dict=True)
+	""", (max(1, min(int(limit or 5), 100)),), as_dict=True)
 	
 	# Add customer name for display
 	for o in orders:

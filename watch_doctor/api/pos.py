@@ -236,7 +236,7 @@ def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 			HAVING SUM(b.actual_qty) > 0
 			ORDER BY {rank_expr} i.item_name ASC
 			LIMIT %s
-		""", values + rank_params + [int(limit)], as_dict=True)
+		""", values + rank_params + [max(1, min(int(limit or 100), 500))], as_dict=True)
 	else:
 		items = frappe.db.sql(f"""
 			SELECT i.name, i.item_name, i.item_code, i.item_group, i.standard_rate, i.image
@@ -246,7 +246,7 @@ def get_pos_items(search: str = "", limit: int = 100, in_stock_only: int = 1):
 			GROUP BY i.name
 			ORDER BY {rank_expr} i.item_name ASC
 			LIMIT %s
-		""", values + rank_params + [int(limit)], as_dict=True)
+		""", values + rank_params + [max(1, min(int(limit or 100), 500))], as_dict=True)
 
 		item_names = [item['name'] for item in items]
 		stock_rows = frappe.db.sql("""
@@ -281,14 +281,14 @@ def get_pos_customers(search: str = "", limit: int = 20):
 				["mobile_no", "like", f"%{search}%"]
 			],
 			fields=["name", "customer_name", "mobile_no"],
-			limit_page_length=int(limit),
+			limit_page_length=max(1, min(int(limit or 20), 200)),
 			order_by="customer_name asc"
 		)
 	else:
 		customers = frappe.get_all(
 			"Customer",
 			fields=["name", "customer_name", "mobile_no"],
-			limit_page_length=int(limit),
+			limit_page_length=max(1, min(int(limit or 20), 200)),
 			order_by="modified desc"
 		)
 
@@ -310,7 +310,7 @@ def get_customer_repair_history(customer: str, limit: int = 20):
 		ORDER BY o.received_date DESC
 		LIMIT %s
 		""",
-		(customer, int(limit)),
+		(customer, max(1, min(int(limit or 20), 200))),
 		as_dict=True,
 	)
 
@@ -418,6 +418,40 @@ def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_n
 	}
 
 
+def _validate_pos_cart(items, discount_percent=0, discount_amount=0):
+	"""Bounds on what the till sends. Prices stay editable at the till, but a
+	line cannot go negative (that would pay money out on a sale) and a discount
+	cannot exceed the cart."""
+	subtotal = 0
+	for item in items:
+		qty = frappe.utils.flt(item.get("qty", 1))
+		rate = frappe.utils.flt(item.get("rate", 0))
+		if not item.get("item_code"):
+			frappe.throw("Each line needs an item")
+		if qty <= 0:
+			frappe.throw(f"Quantity for {item.get('item_code')} must be greater than zero")
+		if rate < 0:
+			frappe.throw(f"Price for {item.get('item_code')} cannot be negative")
+		subtotal += qty * rate
+
+	discount_percent = frappe.utils.flt(discount_percent)
+	discount_amount = frappe.utils.flt(discount_amount)
+	if discount_percent < 0 or discount_percent > 100:
+		frappe.throw("Discount must be between 0 and 100%")
+	if discount_amount < 0 or discount_amount > subtotal + 0.0005:
+		frappe.throw("Discount cannot be more than the cart total")
+
+
+def _check_held_sale(invoice_name):
+	"""Throw unless the invoice is a held till sale. Repair invoices are
+	drafted as Sales Invoices too; only the till's own drafts carry a POS
+	profile, and the draft endpoints must not load, charge or delete others."""
+	row = frappe.db.get_value("Sales Invoice", invoice_name, ["docstatus", "dw_pos_profile"], as_dict=True) if invoice_name else None
+	if not row or row.docstatus != 0 or not row.dw_pos_profile:
+		frappe.throw(_("That held sale is gone. It may have been charged or deleted on another till."))
+	return invoice_name
+
+
 def build_pos_invoice(customer, items, options, discount_percent=0, discount_amount=0, is_credit_sale=0, due_date="", is_draft=False):
 	"""A retail Sales Invoice for the cart, not yet inserted.
 
@@ -429,6 +463,7 @@ def build_pos_invoice(customer, items, options, discount_percent=0, discount_amo
 		frappe.throw("At least one item is required")
 	if is_credit_sale and not (customer or "").strip():
 		frappe.throw("A customer is required for a credit sale")
+	_validate_pos_cart(items, discount_percent, discount_amount)
 
 	has_pms_items = _validate_pos_pms_item_mix(items)
 	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
@@ -564,7 +599,7 @@ def get_pos_outstanding_invoices(search: str = "", limit: int = 20):
 		WHERE {where_clause}
 		ORDER BY si.due_date ASC, si.posting_date ASC
 		LIMIT %s
-	""", values + [int(limit)], as_dict=True)
+	""", values + [max(1, min(int(limit or 20), 200))], as_dict=True)
 
 
 @frappe.whitelist()
@@ -577,7 +612,11 @@ def collect_pos_payment(invoice_name: str, mode_of_payment: str = "Cash", amount
 	if invoice.docstatus != 1:
 		frappe.throw("Only submitted invoices can be collected against")
 
-	outstanding = frappe.utils.flt(invoice.outstanding_amount)
+	# Lock the invoice and read its latest balance, so two tills collecting at
+	# once cannot both take the same outstanding amount.
+	outstanding = frappe.utils.flt(
+		frappe.db.get_value("Sales Invoice", invoice_name, "outstanding_amount", for_update=True)
+	)
 	if outstanding <= 0:
 		frappe.throw("This invoice has no outstanding balance")
 
@@ -654,7 +693,44 @@ def get_pos_return_candidates(search: str = "", limit: int = 20):
 		WHERE {where_clause}
 		ORDER BY si.posting_date DESC, si.creation DESC
 		LIMIT %s
-	""", values + [int(limit)], as_dict=True)
+	""", values + [max(1, min(int(limit or 20), 200))], as_dict=True)
+
+
+def _payment_entry_total(invoice_name, payment_type):
+	total = frappe.db.sql("""
+		SELECT SUM(per.allocated_amount)
+		FROM `tabPayment Entry Reference` per
+		INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
+		WHERE pe.docstatus = 1 AND pe.payment_type = %s
+			AND per.reference_doctype = 'Sales Invoice' AND per.reference_name = %s
+	""", (payment_type, invoice_name))[0][0]
+	return abs(frappe.utils.flt(total))
+
+
+def _cash_refundable(original, precision):
+	"""Money actually taken on an invoice and not yet handed back.
+
+	Taken: the checkout payment on a POS sale, plus Payment Entries collected
+	since (settling a credit sale). Handed back: refunds on earlier returns,
+	at the till or by Payment Entry. A credit note that only reduced what the
+	customer owed handed nothing back, and it must not free up a cash refund:
+	grand_total - outstanding counts it as if it had been paid.
+	"""
+	taken = _payment_entry_total(original.name, "Receive")
+	if original.is_pos:
+		taken += frappe.utils.flt(original.paid_amount) - frappe.utils.flt(original.change_amount)
+
+	refunded = 0
+	for ret in frappe.get_all(
+		"Sales Invoice",
+		filters={"return_against": original.name, "is_return": 1, "docstatus": 1},
+		fields=["name", "is_pos", "paid_amount"],
+	):
+		if ret.is_pos:
+			refunded += abs(frappe.utils.flt(ret.paid_amount))
+		refunded += _payment_entry_total(ret.name, "Pay")
+
+	return max(frappe.utils.flt(taken - refunded, precision), 0)
 
 
 def _make_return_doc(invoice_name):
@@ -701,10 +777,7 @@ def get_pos_invoice_return_items(invoice_name: str):
 	# credit sale (is_pos=0) can have since been fully or partially settled via
 	# collect_pos_payment, and that money is just as refundable as a checkout payment.
 	precision = _get_currency_precision(original.company)
-	amount_paid = frappe.utils.flt(
-		frappe.utils.flt(original.grand_total, precision) - frappe.utils.flt(original.outstanding_amount, precision),
-		precision,
-	)
+	amount_paid = _cash_refundable(original, precision)
 
 	return {
 		"invoice_name": original.name,
@@ -713,7 +786,7 @@ def get_pos_invoice_return_items(invoice_name: str):
 		"posting_date": str(original.posting_date),
 		"grand_total": original.grand_total,
 		"is_pos": original.is_pos,
-		"amount_paid": max(amount_paid, 0),
+		"amount_paid": amount_paid,
 		"items": items,
 	}
 
@@ -746,10 +819,7 @@ def create_pos_return(invoice_name: str, items_json: str = "[]", payments_json=N
 		frappe.throw("Cannot return a return invoice")
 
 	precision = _get_currency_precision(original.company)
-	amount_paid = max(frappe.utils.flt(
-		frappe.utils.flt(original.grand_total, precision) - frappe.utils.flt(original.outstanding_amount, precision),
-		precision,
-	), 0)
+	amount_paid = _cash_refundable(original, precision)
 
 	return_doc = _make_return_doc(invoice_name)
 
@@ -806,7 +876,7 @@ def create_pos_return(invoice_name: str, items_json: str = "[]", payments_json=N
 	tolerance = (0.5 / (10 ** precision)) if precision > 0 else 0
 	if total_requested > max_refundable + tolerance:
 		frappe.throw(
-			f"Refund amount cannot exceed {max_refundable} — that is all that has been collected on {invoice_name} so far."
+			f"Refund amount cannot exceed {max_refundable} — that is all that has been collected on {invoice_name} and not yet refunded."
 		)
 
 	return_doc.set("payments", [])
@@ -862,58 +932,7 @@ def save_pos_draft(customer: str = "", items_json: str = "[]", options_json=None
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	items = json.loads(items_json) if isinstance(items_json, str) else items_json
 	options = _parse_pos_options(options_json)
-	
-	if not items or len(items) == 0:
-		frappe.throw("At least one item is required")
-
-	has_pms_items = _validate_pos_pms_item_mix(items)
-	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
-	require_pms_runtime_configuration()
-	standard_sales_taxes_template = get_standard_sales_taxes_template()
-	
-	# Get company from settings or first company
-	company = options.get("company") or _get_default_company()
-	
-	# Create draft Sales Invoice (is_pos but not submitted)
-	invoice = frappe.get_doc({
-		"doctype": "Sales Invoice",
-		"customer": customer,
-		"company": company,
-		"posting_date": frappe.utils.today(),
-		"due_date": frappe.utils.today(),
-		"is_pos": 1,
-		"update_stock": 1,
-		"items": []
-	})
-	invoice.flags.ignore_permissions = True
-	
-	# Add items
-	for item in items:
-		invoice.append("items", {
-			"item_code": item.get("item_code"),
-			"qty": item.get("qty", 1),
-			"rate": item.get("rate", 0)
-		})
-
-	apply_pos_profile(
-		invoice,
-		has_pms_items=has_pms_items,
-		customer=customer,
-		pos_profile=options.get("pos_profile") or "",
-		sales_person=options.get("sales_person") or "",
-		commission_rate=options.get("commission_rate") or 0,
-		receipt_format=options.get("receipt_format") or "",
-		naming_series=options.get("naming_series") or "",
-	)
-
-	if has_pms_items:
-		invoice.taxes_and_charges = ""
-		invoice.set("taxes", [])
-	elif standard_sales_taxes_template:
-		invoice.taxes_and_charges = standard_sales_taxes_template
-	else:
-		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before saving POS drafts.")
-
+	invoice, _profile, _has_pms = build_pos_invoice(customer, items, options, is_draft=True)
 	invoice.insert(ignore_permissions=True)
 
 	return {
@@ -937,7 +956,7 @@ def get_pos_drafts(limit: int = 20):
 			"dw_pos_profile": ["is", "set"],
 		},
 		fields=["name", "customer", "customer_name", "grand_total", "creation", "modified"],
-		limit_page_length=int(limit),
+		limit_page_length=max(1, min(int(limit or 20), 200)),
 		order_by="modified desc"
 	)
 	
@@ -957,10 +976,7 @@ def get_pos_drafts(limit: int = 20):
 def load_pos_draft(invoice_name: str):
 	"""Load a draft invoice to continue in POS."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	invoice = frappe.get_doc("Sales Invoice", invoice_name)
-	
-	if invoice.docstatus != 0:
-		frappe.throw("Invoice is not a draft")
+	invoice = frappe.get_doc("Sales Invoice", _check_held_sale(invoice_name))
 	
 	items = []
 	for item in invoice.items:
@@ -989,11 +1005,7 @@ def load_pos_draft(invoice_name: str):
 def delete_pos_draft(invoice_name: str):
 	"""Delete a draft POS invoice."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	invoice = frappe.get_doc("Sales Invoice", invoice_name)
-	
-	if invoice.docstatus != 0:
-		frappe.throw("Can only delete draft invoices")
-	
+	_check_held_sale(invoice_name)
 	frappe.delete_doc("Sales Invoice", invoice_name)
 
 	return {"success": True}
@@ -1003,15 +1015,13 @@ def delete_pos_draft(invoice_name: str):
 def submit_pos_draft(invoice_name: str, payment_mode: str = "Cash", discount_percent: float = 0, payments_json=None, options_json=None):
 	"""Submit a draft POS invoice with single or split payment."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	invoice = frappe.get_doc("Sales Invoice", invoice_name)
+	invoice = frappe.get_doc("Sales Invoice", _check_held_sale(invoice_name))
 	invoice.flags.ignore_permissions = True
 	payments = _parse_pos_payments(payments_json, payment_mode)
 	options = _parse_pos_options(options_json)
 	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
-	
-	if invoice.docstatus != 0:
-		frappe.throw("Invoice is not a draft")
-	
+	_validate_pos_cart([row.as_dict() for row in invoice.items], discount_percent)
+
 	invoice.additional_discount_percentage = discount_percent
 
 	# Clear standard taxes for PMS invoices (if any PMS item present)

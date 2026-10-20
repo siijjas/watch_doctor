@@ -501,11 +501,11 @@ def _get_pms_vat_account(company: str) -> str | None:
 def get_pms_info(item_code: str, selling_price: float = 0, warehouse: str = ""):
     """
     Return PMS calculation info for a given item.
-    Called by the POS frontend to show internal margin info to staff.
+    Purchase cost and margin are owner figures, so Executive only.
     """
-    from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
+    from watch_doctor.permissions import ROLE_EXECUTIVE, require_roles
 
-    require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+    require_roles(ROLE_EXECUTIVE)
     if not _is_pms_item(item_code):
         return {"is_pms": False}
 

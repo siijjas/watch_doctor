@@ -70,7 +70,7 @@ function _show_pms_banner(frm) {
 		pms_items.forEach(function(d) {
 			html +=
 				"<tr>" +
-				"<td style='padding:2px 6px;'>" + (d.item_name || d.item_code) + "</td>" +
+				"<td style='padding:2px 6px;'>" + frappe.utils.escape_html(d.item_name || d.item_code) + "</td>" +
 				"<td style='padding:2px 6px;text-align:right;'>" +
 				format_currency(d.amount, frm.doc.currency) + "</td>" +
 				"<td style='padding:2px 6px;text-align:right;'>" +
@@ -87,7 +87,7 @@ function _show_pms_banner(frm) {
 	if (disclaimer) {
 		html +=
 			'<div style="margin-top:6px;font-size:10px;color:#856404;font-style:italic;">' +
-			disclaimer +
+			frappe.utils.escape_html(disclaimer) +
 			"</div>";
 	}
 	html += "</div>";
@@ -105,7 +105,7 @@ function _add_pms_print_button(frm) {
 			method: "watch_doctor.api.get_app_config",
 			args: {},
 			callback: function(r) {
-				var printFormat = (r.message && r.message.pms_print_format) || "";
+				var printFormat = (r.message && r.message.pos_pms_print_format) || "";
 				if (!printFormat) {
 					frappe.msgprint({
 						title: __("PMS Print Format Missing"),

@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import json
+import re
 
 import frappe
 from frappe import _
@@ -34,6 +35,15 @@ WATCH_STATUS_COMPLETED = "Completed"
 WATCH_STATUS_DELIVERED = "Delivered"
 WATCH_STATUS_NOT_REPAIRABLE = "Not Repairable"
 WATCH_STATUS_DECLINED = "Declined"
+
+# Set by create_quotation / finalize_invoice / collect_pos_payment only.
+BILLING_FIELDS = (
+	"quotation", "quotation_type", "quotation_amount",
+	"sales_invoice", "invoiced_amount", "paid_amount", "balance_amount",
+	"public_token",
+)
+BILLING_EDITOR_ROLES = {"System Manager", "Administrator", ROLE_EXECUTIVE}
+LOCAL_FILE_URL = re.compile(r"^/(private/)?files/[^\"'<>\\]+$")
 
 LEGACY_WATCH_STATUS_MAP = {
 	"Awaiting Approval": WATCH_STATUS_APPROVAL_FOR_ESTIMATE,
@@ -514,6 +524,9 @@ class DWRepairOrder(Document):
 		if not self.items:
 			frappe.throw(_("A repair order must contain at least one watch."))
 
+		self._keep_billing_fields()
+		self._validate_photo_urls()
+
 		# Ensure a non-guessable token exists for future customer-portal use
 		if not self.public_token:
 			self.public_token = frappe.generate_hash(length=16)
@@ -551,7 +564,57 @@ class DWRepairOrder(Document):
 			if status_manually_changed and not status_changed_by_auto:
 				self.validate_status_transition()
 
+		# After the pipeline: it flattens the SPA's nested rows into the tables.
+		self._validate_child_rows_belong_here()
+		self._validate_delivered_items()
+
 		self._stamp_status_changes()
+
+	def _may_edit_billing(self):
+		"""Owner roles may correct billing links and collected watches from Desk."""
+		return bool(set(frappe.get_roles()) & BILLING_EDITOR_ROLES)
+
+	def _keep_billing_fields(self):
+		"""Billing fields are written by the quotation and invoicing code, never
+		by a client payload (save_repair_order, /api/resource, Desk)."""
+		if self.flags.allow_billing_update or self._may_edit_billing():
+			return
+		before = None if self.is_new() else self.get_doc_before_save()
+		for fieldname in BILLING_FIELDS:
+			self.set(fieldname, before.get(fieldname) if before else None)
+
+	def _validate_photo_urls(self):
+		"""Photos must be files uploaded to this site; print formats put them in <img src>."""
+		for row in self.all_photos or []:
+			if row.image and not LOCAL_FILE_URL.match(row.image):
+				frappe.throw(_("Photo {0} must be a file uploaded to this site.").format(row.idx))
+
+	def _validate_child_rows_belong_here(self):
+		"""A payload row carrying the name of another order's row would be
+		re-parented onto this order by Frappe's child-table update."""
+		before = None if self.is_new() else self.get_doc_before_save()
+		for df in self.meta.get_table_fields():
+			own = {row.name for row in (before.get(df.fieldname) if before else [])}
+			for row in self.get(df.fieldname) or []:
+				if not row.is_new() and row.name not in own:
+					frappe.throw(_("Row {0} in {1} does not belong to this order. Reload and try again.").format(
+						row.idx, _(df.label)
+					), frappe.PermissionError)
+
+	def _validate_delivered_items(self):
+		"""A watch becomes Delivered only when it is collected and invoiced
+		(finalize_invoice / on_submit write the status directly)."""
+		if self._may_edit_billing():
+			return
+		before = None if self.is_new() else self.get_doc_before_save()
+		previous = {row.name: normalize_repair_item_status(row.status) for row in (before.items if before else [])}
+		for item in self.items:
+			was_delivered = previous.get(item.name) == WATCH_STATUS_DELIVERED
+			is_delivered = normalize_repair_item_status(item.status) == WATCH_STATUS_DELIVERED
+			if is_delivered != was_delivered:
+				frappe.throw(_("{0} {1}: a watch is marked collected only through invoicing.").format(
+					item.watch_brand or "", item.watch_model or ""
+				), frappe.PermissionError)
 
 	def _stamp_status_changes(self):
 		"""Record when the order and each watch last changed status.
@@ -1127,6 +1190,7 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	repair_order.quotation_type = quotation_type
 	# Use the quotation's calculated grand_total
 	repair_order.quotation_amount = quotation.grand_total or quotation.total or 0
+	repair_order.flags.allow_billing_update = True
 	repair_order.save(ignore_permissions=True)
 	frappe.db.commit()  # Ensure changes are committed to database
 	
@@ -1234,6 +1298,16 @@ def get_quotation_summary(repair_order_name):
 
 @frappe.whitelist()
 def create_sales_invoice(repair_order_name, source_type="quotation", payment_type="full", amount=None, item_indices=None):
+	"""Desk "Create Invoice" button: a draft for an Executive to finish in Desk.
+
+	The front desk invoices through api.jobs.collect_watches, which checks the
+	watches are ready and the discount fits before calling build_sales_invoice.
+	"""
+	require_roles(ROLE_EXECUTIVE)
+	return build_sales_invoice(repair_order_name, source_type, payment_type, amount, item_indices)
+
+
+def build_sales_invoice(repair_order_name, source_type="quotation", payment_type="full", amount=None, item_indices=None):
 	"""
 	Create a sales invoice from a repair order.
 
@@ -1251,10 +1325,11 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 
-	# Convert amount to float if it's a string
-	if amount:
-		if isinstance(amount, str):
-			amount = float(amount)
+	if source_type not in ("quotation", "order"):
+		frappe.throw(_("Unknown invoice source"))
+	if payment_type not in ("full", "advance", "balance"):
+		frappe.throw(_("Unknown payment type"))
+	amount = flt(amount) if amount not in (None, "") else None
 
 	# Parse item_indices
 	covered_item_names = None
@@ -1269,6 +1344,8 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 	
 	# Fetch the repair order
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
+	if repair_order.docstatus != 0:
+		frappe.throw(_("Repair order {0} is closed.").format(repair_order.name))
 	
 	# Create sales invoice as POS invoice for payment tracking
 	invoice = frappe.new_doc("Sales Invoice")
@@ -1402,8 +1479,10 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 
 	# Handle partial payments
 	if payment_type == "advance" or payment_type == "balance":
-		if not amount:
+		if not amount or amount <= 0:
 			frappe.throw(_("Amount is required for {0} payment").format(payment_type))
+		if amount > flt(total_amount):
+			frappe.throw(_("The amount is more than the invoice total."))
 		
 		# Adjust invoice total by adding a discount
 		discount_amount = total_amount - amount
@@ -1488,7 +1567,6 @@ def check_parts_availability(repair_order_name, warehouse=""):
 	return validate_parts_stock_availability(repair_order, warehouse=warehouse or "", company=company)
 
 
-@frappe.whitelist()
 def finalize_invoice(
 	repair_order_name,
 	invoice_name,
@@ -1503,6 +1581,9 @@ def finalize_invoice(
 	"""
 	Finalize an invoice with a payment (single mode, or split across multiple modes),
 	or as a credit sale, and optionally mark order as delivered.
+
+	Not whitelisted: called by api.jobs.collect_watches with the draft it has
+	just built, after checking the watches and the discount.
 
 	Args:
 		repair_order_name: Name of the repair order
@@ -1542,6 +1623,24 @@ def finalize_invoice(
 	# Get repair order
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
 	repair_order.flags.ignore_permissions = True
+
+	# Only a draft built for this order (build_sales_invoice records its watches).
+	covered = _covered_item_names(invoice.remarks)
+	if invoice.docstatus != 0:
+		frappe.throw(_("Invoice {0} is already finalised.").format(invoice.name))
+	if repair_order.docstatus != 0:
+		frappe.throw(_("Repair order {0} is closed.").format(repair_order.name))
+	if (
+		invoice.customer != repair_order.customer
+		or not covered
+		or not set(covered) <= {item.name for item in repair_order.items}
+	):
+		frappe.throw(
+			_("Invoice {0} was not made for repair order {1}.").format(invoice.name, repair_order.name),
+			frappe.PermissionError,
+		)
+	if discount < 0 or discount > flt(invoice.grand_total):
+		frappe.throw(_("The discount must be between zero and the invoice total."))
 
 	# Validate stock availability before finalizing invoice.
 	warehouse = invoice.set_warehouse or ""
@@ -1646,17 +1745,7 @@ def finalize_invoice(
 	repair_order.db_set('paid_amount', new_paid, update_modified=False)
 	repair_order.db_set('balance_amount', new_balance, update_modified=False)
 	
-	# Parse which watch rows this invoice covers (stored in remarks by create_sales_invoice)
-	import json as _json
-	covered_item_names = None
-	if invoice.remarks and 'covered_items:' in invoice.remarks:
-		try:
-			raw = invoice.remarks.split('covered_items:')[1]
-			# Grab the JSON array portion
-			end = raw.index(']') + 1
-			covered_item_names = _json.loads(raw[:end])
-		except Exception:
-			covered_item_names = None
+	covered_item_names = covered
 
 	# Mark covered items as Delivered regardless of mark_as_delivered flag.
 	# Skip watches already resolved as Not Repairable/Declined — those were only
@@ -1714,6 +1803,17 @@ def finalize_invoice(
 	}
 
 
+def _covered_item_names(remarks):
+	"""Watch rows an invoice covers, stored in its remarks by build_sales_invoice."""
+	if not remarks or "covered_items:" not in remarks:
+		return None
+	try:
+		raw = remarks.split("covered_items:")[1]
+		return json.loads(raw[: raw.index("]") + 1])
+	except Exception:
+		return None
+
+
 @frappe.whitelist()
 def set_invoice_note(invoice_name, note=""):
 	"""Set the customer-facing note on an invoice. Works on submitted invoices too."""
@@ -1724,6 +1824,11 @@ def set_invoice_note(invoice_name, note=""):
 		frappe.throw(_("Invoice {0} not found").format(invoice_name), frappe.DoesNotExistError)
 	if docstatus == 2:
 		frappe.throw(_("Invoice {0} is cancelled.").format(invoice_name))
+	# The front desk edits the note from a repair order; other invoices are the owner's.
+	if not set(frappe.get_roles()) & BILLING_EDITOR_ROLES and not frappe.db.exists(
+		"DW Repair Order", {"sales_invoice": invoice_name}
+	):
+		frappe.throw(_("Only an Executive can change the note on this invoice."), frappe.PermissionError)
 
 	note = clean_invoice_note(note)
 	frappe.db.set_value("Sales Invoice", invoice_name, NOTE_FIELDNAME, note)
@@ -1771,6 +1876,24 @@ def close_repair_order_without_invoice(repair_order_name):
 		for item in repair_order.items
 	):
 		frappe.throw(_("This action is only needed when a watch is being returned without repair."))
+
+	# A watch with finished work or fitted parts is a billable job; moving it to
+	# Declined must not let it leave unpaid without the owner's say.
+	if not set(frappe.get_roles()) & BILLING_EDITOR_ROLES:
+		worked = {str(t.repair_item_key) for t in repair_order.all_tasks or [] if t.status == "Completed"}
+		worked |= {str(p.repair_item_key) for p in repair_order.all_parts or []}
+		billable = [
+			item for item in repair_order.items
+			if normalize_repair_item_status(item.status) in (WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED)
+			and str(item.idx) in worked
+		]
+		if billable:
+			frappe.throw(
+				_("{0} has completed work or parts on it. Invoice it, or ask an Executive to close the order.").format(
+					", ".join(f"{item.watch_brand} {item.watch_model}" for item in billable)
+				),
+				frappe.PermissionError,
+			)
 
 	repair_order.submit()
 	frappe.db.commit()

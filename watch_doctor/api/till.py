@@ -6,20 +6,21 @@ rounding), a discount kept as an amount, held sales that keep their edits,
 and a reprint of the last receipt.
 """
 
+import hashlib
 import json
 
 import frappe
-from frappe import _
 from frappe.utils import cint, flt
 
 from watch_doctor.api.pos import (
+	_check_held_sale,
 	_get_currency_precision,
 	_parse_pos_options,
 	_parse_pos_payments,
 	_set_invoice_payments,
 	build_pos_invoice,
 )
-from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
+from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, get_dw_roles, require_roles
 from watch_doctor.pos_enhancements import build_pos_print_url
 
 
@@ -38,13 +39,29 @@ def _discount(discount, discount_type):
 	return 0, discount
 
 
+def _hold_charge_lock(client_ref):
+	"""Make a retried charge wait for the first attempt to finish.
+
+	Without this, two requests with the same ref (a double tap, or a retry
+	while the first is still running) both find no sale and both charge.
+	The named lock lasts until this request's transaction ends; the commit
+	after taking it starts a fresh snapshot, so the replay check then sees
+	the sale the first request committed.
+	"""
+	key = "dw_till_charge:" + hashlib.sha1(client_ref.encode()).hexdigest()
+	if not frappe.db.sql("SELECT GET_LOCK(%s, 30)", key)[0][0]:
+		frappe.throw("This sale is still being charged on another request. Try again in a moment.")
+	frappe.db.commit()
+
+	def release():
+		frappe.db.sql("SELECT RELEASE_LOCK(%s)", key)
+
+	frappe.db.after_commit.add(release)
+	frappe.db.after_rollback.add(release)
+
+
 def _check_held(name):
-	if not name:
-		return None
-	row = frappe.db.get_value("Sales Invoice", name, ["docstatus", "dw_pos_profile"], as_dict=True)
-	if not row or row.docstatus != 0 or not row.dw_pos_profile:
-		frappe.throw(_("That held sale is gone. It may have been charged or deleted on another till."))
-	return name
+	return _check_held_sale(name) if name else None
 
 
 @frappe.whitelist()
@@ -80,7 +97,8 @@ def till_items(search: str = "", item_group: str = "", limit: int = 60):
 def till_preview(customer: str = "", items_json: str = "[]", discount: float = 0, discount_type: str = "amount", options_json=None):
 	"""Totals the cart would be charged, from a real draft invoice that is rolled back.
 
-	Also returns the PMS margin figures per line for the staff-only note.
+	Also returns the PMS margin figures per line; purchase cost and margin
+	only to an Executive.
 	A cart that mixes PMS and standard items returns `mixed` instead of throwing,
 	so the till can say so before anyone presses Pay.
 	"""
@@ -95,6 +113,7 @@ def till_preview(customer: str = "", items_json: str = "[]", discount: float = 0
 
 	percent, amount = _discount(discount, discount_type)
 	options = _parse_pos_options(options_json)
+	show_cost = "executive" in get_dw_roles()
 	frappe.db.savepoint("dw_till_preview")
 	try:
 		invoice, profile, has_pms = build_pos_invoice(customer, items, options, discount_percent=percent, discount_amount=amount)
@@ -114,8 +133,8 @@ def till_preview(customer: str = "", items_json: str = "[]", discount: float = 0
 				{
 					"item_code": row.item_code,
 					"is_pms": cint(row.get("dw_is_pms_item")),
-					"cost": flt(row.get("dw_pms_purchase_cost")),
-					"margin": flt(row.get("dw_pms_margin")),
+					"cost": flt(row.get("dw_pms_purchase_cost")) if show_cost else None,
+					"margin": flt(row.get("dw_pms_margin")) if show_cost else None,
 					"vat": flt(row.get("dw_pms_vat")),
 				}
 				for row in invoice.items
@@ -157,6 +176,7 @@ def till_charge(
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	client_ref = (client_ref or "").strip()[:64]
 	if client_ref:
+		_hold_charge_lock(client_ref)
 		done = frappe.db.get_value("Sales Invoice", {"remarks": f"till_ref:{client_ref}", "docstatus": 1}, "name")
 		if done:
 			return _charge_result(frappe.get_doc("Sales Invoice", done), replayed=True)

@@ -178,6 +178,23 @@ def repair_order_query_conditions(user):
     return "1=0"
 
 
+def repair_order_child_query_conditions(user, doctype=None):
+    """Return SQL WHERE fragment for the repair order's child tables.
+
+    `frappe.client.get_list("DW Repair Item", parent="DW Repair Order")` only
+    checks read access on the parent DocType, so without this a technician
+    could list every order's watches, photos, tasks and parts.
+    """
+    order_condition = repair_order_query_conditions(user)
+    if not order_condition or not doctype:
+        return order_condition
+    return (
+        "`tab{doctype}`.parenttype = 'DW Repair Order' AND `tab{doctype}`.parent IN ("
+        "  SELECT name FROM `tabDW Repair Order` WHERE {condition}"
+        ")".format(doctype=doctype, condition=order_condition)
+    )
+
+
 def repair_order_has_permission(doc, ptype="read", user=None):
     """Document-level permission check for DW Repair Order.
 

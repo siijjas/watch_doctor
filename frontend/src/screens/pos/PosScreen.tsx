@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { navigate, useLocation } from '../../router';
 import { useAppConfig } from '../../context/AppConfigContext';
+import { useAuth } from '../../context/AuthContext';
 import {
     Button, Card, EmptyState, Field, Icon, IconButton, MoneyInput, PaymentModes, Segmented, SelectInput, Sheet, Spinner,
     StageBadge, TextInput, addDays, cx, isCashMode, paymentError, roundMoney, toISODate, useToast, type PaymentValue,
@@ -104,6 +105,7 @@ const CustomerPicker: React.FC<{ value: Customer; isDefault: boolean; onChange: 
 
 const PosScreen: React.FC = () => {
     const { formatCurrency } = useAppConfig();
+    const { hasRole } = useAuth();
     const toast = useToast();
     const { query } = useLocation();
     const [config, setConfig] = useState<POSRuntimeConfig | null>(null);
@@ -475,8 +477,8 @@ const PosScreen: React.FC = () => {
                                 {config.sales_persons.map(s => <option key={s} value={s}>{s}</option>)}
                             </SelectInput>
                         </Field>
-                        <Field label="Commission %" optional>
-                            <TextInput type="number" inputMode="decimal" value={options.commission_rate ?? 0} onChange={e => setOptions(o => ({ ...o, commission_rate: Number(e.target.value) || 0 }))} />
+                        <Field label="Commission %" optional hint={hasRole('executive') ? undefined : 'Set by the owner'}>
+                            <TextInput type="number" inputMode="decimal" disabled={!hasRole('executive')} value={options.commission_rate ?? 0} onChange={e => setOptions(o => ({ ...o, commission_rate: Number(e.target.value) || 0 }))} />
                         </Field>
                         <p className="m-0 text-[12px] text-dw-caption">Receipt format and invoice series come from Settings: standard sales print {config.default_receipt_format || 'the default receipt'}, PMS sales print the PMS invoice. Auto print is {config.auto_print ? 'on' : 'off'}.</p>
                     </div>

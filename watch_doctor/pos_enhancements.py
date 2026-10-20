@@ -110,16 +110,39 @@ def resolve_receipt_format(selected_format: str, has_pms_items: bool, profile_se
 	return resolved
 
 
+def resolve_commission_rate(sales_person: str, requested, profile_settings: dict) -> float:
+	"""The commission on a till sale. Front desk staff get the configured rate
+	(the profile default or the sales person's own); only an Executive may set
+	another, so nobody can raise their own commission at the till."""
+	from watch_doctor.permissions import get_dw_roles
+
+	default_rate = flt(profile_settings.get("default_commission_rate"))
+	rate = flt(requested or default_rate)
+	if rate < 0 or rate > 100:
+		frappe.throw("Commission must be between 0 and 100%.")
+
+	configured = [default_rate]
+	if sales_person:
+		configured.append(flt(frappe.db.get_value("Sales Person", sales_person, "commission_rate")))
+	if all(abs(rate - c) > 1e-6 for c in configured) and "executive" not in get_dw_roles():
+		frappe.throw("Only an Executive can change the commission rate.", frappe.PermissionError)
+	return rate
+
+
 def apply_pos_profile(invoice, *, has_pms_items: bool, customer: str = "", pos_profile: str = "", sales_person: str = "", commission_rate: float = 0, receipt_format: str = "", naming_series: str = "") -> dict:
 	profile_settings = get_pos_profile_settings(invoice.company, pos_profile)
 	resolved_customer = customer or profile_settings.get("default_customer") or ""
 	if not resolved_customer:
 		frappe.throw("Customer is required or a default customer must be configured on the POS Profile.")
 
+	sales_person = (sales_person or "").strip()
+	if sales_person and not frappe.db.exists("Sales Person", {"name": sales_person, "is_group": 0, "enabled": 1}):
+		frappe.throw(f"{sales_person} is not an active sales person.")
+
 	invoice.customer = resolved_customer
 	invoice.dw_pos_profile = profile_settings.get("pos_profile") or ""
 	invoice.dw_pos_sales_person = sales_person or profile_settings.get("default_sales_person") or ""
-	invoice.dw_pos_commission_rate = flt(commission_rate or profile_settings.get("default_commission_rate") or 0)
+	invoice.dw_pos_commission_rate = resolve_commission_rate(invoice.dw_pos_sales_person, commission_rate, profile_settings)
 	workflow_settings = apply_pos_workflow_settings(invoice, has_pms_items)
 	profile_settings["default_receipt_format"] = workflow_settings.get("print_format") or ""
 	profile_settings["allowed_naming_series"] = [workflow_settings.get("naming_series")] if workflow_settings.get("naming_series") else []
