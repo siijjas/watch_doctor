@@ -19,6 +19,7 @@ from watch_doctor.general_configuration import get_general_configuration, set_ge
 from watch_doctor.permissions import (
     require_roles,
     get_dw_roles,
+    ROLE_TECHNICIAN,
     get_current_technician_identifiers,
     ROLE_EXECUTIVE,
     ROLE_DATA_ENTRY,
@@ -114,6 +115,11 @@ def get_app_config():
 	except Exception:
 		pass
 
+	# Any signed-in user may load this (the Sales Invoice desk script uses it);
+	# the owner's daily summary settings stay with the owner.
+	if "executive" not in get_dw_roles():
+		for key in ("daily_summary_enabled", "daily_summary_whatsapp_no"):
+			config["general_configuration"].pop(key, None)
 	return config
 
 
@@ -185,6 +191,7 @@ def get_sales_invoice_print_context_api(invoice_name: str):
 @frappe.whitelist()
 def get_ro_label_print_format():
 	"""Return the configured repair order label print format."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
 	from watch_doctor.invoice_settings import get_ro_label_print_format
 	return {"print_format": get_ro_label_print_format()}
 

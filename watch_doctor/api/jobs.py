@@ -66,7 +66,9 @@ def _item_tasks(order, item):
 
 
 def _done(order):
-	order.save()
+	# Callers check roles and watch ownership first (_load_watch); technicians
+	# hold read-only rights on the doctype so they cannot edit outside these.
+	order.save(ignore_permissions=True)
 	return {"repair_order": order.name, "order_status": order.status}
 
 

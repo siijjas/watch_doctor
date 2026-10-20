@@ -21,12 +21,10 @@ PERMISSIONS = [
     # ── Customer ───────────────────────────────────────────────────────────
     ("Customer",        "DW Executive",   {"read": 1, "write": 1, "create": 1, "delete": 1, "print": 1, "email": 1, "report": 1, "export": 1}),
     ("Customer",        "DW Data Entry",  {"read": 1, "write": 1, "create": 1, "print": 1, "email": 1}),
-    ("Customer",        "DW Technician",  {"read": 1}),
 
     # ── Contact ────────────────────────────────────────────────────────────
     ("Contact",         "DW Executive",   {"read": 1, "write": 1, "create": 1, "delete": 1}),
     ("Contact",         "DW Data Entry",  {"read": 1, "write": 1, "create": 1}),
-    ("Contact",         "DW Technician",  {"read": 1}),
 
     # ── Item (parts / services) ────────────────────────────────────────────
     ("Item",            "DW Executive",   {"read": 1, "write": 1, "create": 1, "print": 1, "report": 1, "export": 1}),
@@ -45,10 +43,23 @@ PERMISSIONS = [
 ]
 
 
+# Rows granted by earlier versions and since withdrawn. Technicians reach
+# customer names through the order page, which hides phone numbers; direct
+# read access would expose every customer's contact details.
+REVOKED = [
+    ("Customer", "DW Technician"),
+    ("Contact",  "DW Technician"),
+]
+
+
 def execute():
     """Idempotently add/update DocPerm rows for DW roles on native doctypes."""
     for doctype, role, perms in PERMISSIONS:
         add_permission(doctype, role, 0)
         for prop, val in perms.items():
             update_permission_property(doctype, role, 0, prop, val)
+    for doctype, role in REVOKED:
+        if frappe.db.exists("Custom DocPerm", {"parent": doctype, "role": role}):
+            frappe.db.delete("Custom DocPerm", {"parent": doctype, "role": role})
+            frappe.clear_cache(doctype=doctype)
     frappe.db.commit()

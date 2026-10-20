@@ -503,6 +503,9 @@ def get_pms_info(item_code: str, selling_price: float = 0, warehouse: str = ""):
     Return PMS calculation info for a given item.
     Called by the POS frontend to show internal margin info to staff.
     """
+    from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
+
+    require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
     if not _is_pms_item(item_code):
         return {"is_pms": False}
 

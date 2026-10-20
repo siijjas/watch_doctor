@@ -40,13 +40,13 @@ def save_repair_order(doc_json):
 	controller (DWRepairOrder._run_save_pipeline) so Desk edits get the same
 	rules. See API_PY_AUDIT.md item 6.
 	"""
-	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	# Technicians edit through the narrow job endpoints (api/jobs.py), which
+	# limit them to their own watches and keep prices with the front desk.
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	doc_dict = json.loads(doc_json) if isinstance(doc_json, str) else doc_json
-
-	# Technicians may only update orders they are assigned to
-	if doc_dict.get('name'):
-		if not can_access_repair_order(doc_dict['name']):
-			frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
+	if not isinstance(doc_dict, dict) or doc_dict.get('doctype', 'DW Repair Order') != 'DW Repair Order':
+		frappe.throw(_("Only repair orders can be saved here."), frappe.PermissionError)
+	doc_dict['doctype'] = 'DW Repair Order'
 
 	# Remove system fields recursively.
 	# `modified` is kept on the ROOT doc so doc.save() below can detect a
@@ -202,7 +202,7 @@ def update_repair_item_diagnosis(item_name, diagnosis_json):
 		target_item.diagnosed_by = None
 		target_item.diagnosis_date = None
 
-	order_doc.save()
+	order_doc.save(ignore_permissions=True)  # access checked above
 
 	return {
 		"item_name": target_item.name,
@@ -266,7 +266,7 @@ def update_repair_item_photos(item_name, payload_json):
 		if fieldname in payload:
 			target_item.set(fieldname, payload.get(fieldname) or "")
 
-	order_doc.save()
+	order_doc.save(ignore_permissions=True)  # access checked above
 
 	item_key = str(target_item.idx)
 	return {

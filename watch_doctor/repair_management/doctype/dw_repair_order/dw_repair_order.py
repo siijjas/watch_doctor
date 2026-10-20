@@ -13,7 +13,7 @@ from watch_doctor.invoice_settings import (
 	apply_workflow_naming_series,
 	get_workflow_settings,
 )
-from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, require_roles
+from watch_doctor.permissions import ROLE_DATA_ENTRY, ROLE_EXECUTIVE, ROLE_TECHNICIAN, can_access_repair_order, require_roles
 from watch_doctor.inventory_helpers import validate_parts_stock_availability
 from watch_doctor.invoice_note import NOTE_FIELDNAME, clean_invoice_note
 from watch_doctor.list_field_utils import (
@@ -1185,6 +1185,9 @@ def _zero_internal_lines(doc):
 @frappe.whitelist()
 def get_quotation_history(repair_order_name):
 	"""Return all ERPNext Quotations whose title references this repair order."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	if not (repair_order_name or "").strip():
+		return []
 	rows = frappe.db.sql(
 		"""
 		SELECT name, title, transaction_date, valid_till, grand_total, status
@@ -1209,6 +1212,7 @@ def get_quotation_summary(repair_order_name):
 	Returns:
 		Dictionary with quotation details
 	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
 	
 	if not repair_order.quotation:
@@ -1446,6 +1450,7 @@ def get_invoice_summary(repair_order_name):
 	Returns:
 		Dictionary with invoice details
 	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
 	
 	if not repair_order.sales_invoice:
@@ -1475,6 +1480,9 @@ def get_invoice_summary(repair_order_name):
 @frappe.whitelist()
 def check_parts_availability(repair_order_name, warehouse=""):
 	"""Return part shortages for a repair order, grouped by item_code."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	if not can_access_repair_order(repair_order_name):
+		frappe.throw(_("You do not have access to this repair order"), frappe.PermissionError)
 	repair_order = frappe.get_doc("DW Repair Order", repair_order_name)
 	company = frappe.db.get_single_value("Global Defaults", "default_company") or ""
 	return validate_parts_stock_availability(repair_order, warehouse=warehouse or "", company=company)

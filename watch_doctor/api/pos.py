@@ -657,11 +657,20 @@ def get_pos_return_candidates(search: str = "", limit: int = 20):
 	""", values + [int(limit)], as_dict=True)
 
 
+def _make_return_doc(invoice_name):
+	"""ERPNext's make_return_doc refuses users without create permission on
+	Sales Invoice, which the front desk does not hold; callers check roles first."""
+	from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+	target = frappe.new_doc("Sales Invoice")
+	target.flags.ignore_permissions = True
+	return make_return_doc("Sales Invoice", invoice_name, target_doc=target)
+
+
 @frappe.whitelist()
 def get_pos_invoice_return_items(invoice_name: str):
 	"""Return each line item on an invoice with how much of it is still returnable."""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	from erpnext.controllers.sales_and_purchase_return import make_return_doc
 
 	original = frappe.get_doc("Sales Invoice", invoice_name)
 	if original.docstatus != 1:
@@ -669,7 +678,7 @@ def get_pos_invoice_return_items(invoice_name: str):
 	if original.is_return:
 		frappe.throw("This invoice is already a return")
 
-	return_doc = make_return_doc("Sales Invoice", invoice_name)
+	return_doc = _make_return_doc(invoice_name)
 
 	items = []
 	for row in return_doc.items:
@@ -722,7 +731,6 @@ def create_pos_return(invoice_name: str, items_json: str = "[]", payments_json=N
 	cash is left as a reduced/negative outstanding balance (a credit note).
 	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
-	from erpnext.controllers.sales_and_purchase_return import make_return_doc
 	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
 	requested_items = json.loads(items_json) if isinstance(items_json, str) else items_json
@@ -743,8 +751,7 @@ def create_pos_return(invoice_name: str, items_json: str = "[]", payments_json=N
 		precision,
 	), 0)
 
-	return_doc = make_return_doc("Sales Invoice", invoice_name)
-	return_doc.flags.ignore_permissions = True
+	return_doc = _make_return_doc(invoice_name)
 
 	# naming_series has no_copy=1 on Sales Invoice, so make_return_doc never
 	# copies it from the original — left alone it falls back to ERPNext's
