@@ -4,6 +4,7 @@ import type { UserSession } from '../services/authService';
 import { getUserInfo } from '../services/apiService';
 import { isErpNext } from '../services/apiService';
 import type { DWRole, UserInfo } from '../types';
+import { navigate } from '../router';
 
 interface AuthContextType {
     user: UserSession | null;
@@ -72,8 +73,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     const login = useCallback(async (username: string, password: string) => {
         const session = await authService.login(username, password);
-        setUser(session);
+        // Load roles before marking the user signed in, so role landing sees them.
         await fetchUserInfo();
+        setUser(session);
     }, [fetchUserInfo]);
 
     const logout = useCallback(async () => {
@@ -84,6 +86,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         } finally {
             setUser(null);
             setUserInfo(null);
+            // The next person to sign in starts on their own role's home.
+            navigate('/', { replace: true });
         }
     }, []);
 

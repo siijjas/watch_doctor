@@ -418,6 +418,76 @@ def create_pos_customer(customer_name: str = "", customer_id: str = "", mobile_n
 	}
 
 
+def build_pos_invoice(customer, items, options, discount_percent=0, discount_amount=0, is_credit_sale=0, due_date="", is_draft=False):
+	"""A retail Sales Invoice for the cart, not yet inserted.
+
+	Shared by checkout, held sales and the till's live totals, so all three
+	agree on taxes, PMS handling, profile, series and receipt format.
+	Returns (invoice, profile_settings, has_pms_items).
+	"""
+	if not items:
+		frappe.throw("At least one item is required")
+	if is_credit_sale and not (customer or "").strip():
+		frappe.throw("A customer is required for a credit sale")
+
+	has_pms_items = _validate_pos_pms_item_mix(items)
+	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
+	require_pms_runtime_configuration()
+	standard_sales_taxes_template = get_standard_sales_taxes_template()
+
+	company = options.get("company") or _get_default_company()
+	invoice = frappe.get_doc({
+		"doctype": "Sales Invoice",
+		"customer": customer,
+		"company": company,
+		"posting_date": frappe.utils.today(),
+		"due_date": due_date or (frappe.utils.add_days(frappe.utils.today(), 15) if is_credit_sale else frappe.utils.today()),
+		"is_pos": 0 if is_credit_sale else 1,
+		"dw_is_credit_sale": 1 if is_credit_sale else 0,
+		"update_stock": 1,
+		"additional_discount_percentage": frappe.utils.flt(discount_percent) or 0,
+		"items": [],
+	})
+	invoice.flags.ignore_permissions = True
+	if frappe.utils.flt(discount_amount) > 0:
+		# An amount stays an amount; converting it to a percentage drifts with rounding.
+		invoice.apply_discount_on = "Grand Total"
+		invoice.additional_discount_percentage = 0
+		invoice.discount_amount = frappe.utils.flt(discount_amount)
+
+	for item in items:
+		invoice.append("items", {
+			"item_code": item.get("item_code"),
+			"qty": item.get("qty", 1),
+			"rate": item.get("rate", 0),
+		})
+
+	profile_settings = apply_pos_profile(
+		invoice,
+		has_pms_items=has_pms_items,
+		customer=customer,
+		pos_profile=options.get("pos_profile") or "",
+		sales_person=options.get("sales_person") or "",
+		commission_rate=options.get("commission_rate") or 0,
+		receipt_format=options.get("receipt_format") or "",
+		naming_series=options.get("naming_series") or "",
+	)
+
+	# PMS invoices must NOT have standard Sales Taxes applied —
+	# the PMS VAT is calculated via margin and posted as GL entries on submit.
+	if has_pms_items:
+		invoice.taxes_and_charges = ""
+		invoice.set("taxes", [])
+	elif standard_sales_taxes_template:
+		invoice.taxes_and_charges = standard_sales_taxes_template
+	else:
+		frappe.throw(
+			"Standard Sales Taxes Template must be configured in DW PMS Settings before "
+			+ ("saving POS drafts." if is_draft else "creating POS invoices.")
+		)
+	return invoice, profile_settings, has_pms_items
+
+
 @frappe.whitelist()
 def create_pos_invoice(
 	customer: str = "",
@@ -441,63 +511,14 @@ def create_pos_invoice(
 	is_credit_sale = frappe.utils.cint(is_credit_sale)
 	payments = [] if is_credit_sale else _parse_pos_payments(payments_json, payment_mode)
 	options = _parse_pos_options(options_json)
-	discount_percent = frappe.utils.flt(discount_percent) if discount_percent else 0
 
-	if not items or len(items) == 0:
-		frappe.throw("At least one item is required")
-
-	if is_credit_sale and not (customer or "").strip():
-		frappe.throw("A customer is required for a credit sale")
-
-	has_pms_items = _validate_pos_pms_item_mix(items)
-	from watch_doctor.pms import get_standard_sales_taxes_template, require_pms_runtime_configuration
-	require_pms_runtime_configuration()
-	standard_sales_taxes_template = get_standard_sales_taxes_template()
-
-	company = options.get("company") or _get_default_company()
-	precision = _get_currency_precision(company)
-
-	invoice = frappe.get_doc({
-		"doctype": "Sales Invoice",
-		"customer": customer,
-		"company": company,
-		"posting_date": frappe.utils.today(),
-		"due_date": due_date or (frappe.utils.add_days(frappe.utils.today(), 15) if is_credit_sale else frappe.utils.today()),
-		"is_pos": 0 if is_credit_sale else 1,
-		"dw_is_credit_sale": 1 if is_credit_sale else 0,
-		"update_stock": 1,
-		"additional_discount_percentage": discount_percent,
-		"items": []
-	})
-	invoice.flags.ignore_permissions = True
-
-	for item in items:
-		invoice.append("items", {
-			"item_code": item.get("item_code"),
-			"qty": item.get("qty", 1),
-			"rate": item.get("rate", 0)
-		})
-
-	profile_settings = apply_pos_profile(
-		invoice,
-		has_pms_items=has_pms_items,
-		customer=customer,
-		pos_profile=options.get("pos_profile") or "",
-		sales_person=options.get("sales_person") or "",
-		commission_rate=options.get("commission_rate") or 0,
-		receipt_format=options.get("receipt_format") or "",
-		naming_series=options.get("naming_series") or "",
+	invoice, profile_settings, has_pms_items = build_pos_invoice(
+		customer, items, options,
+		discount_percent=discount_percent,
+		is_credit_sale=is_credit_sale,
+		due_date=due_date,
 	)
-
-	# PMS invoices must NOT have standard Sales Taxes applied —
-	# the PMS VAT is calculated via margin and posted as GL entries on submit.
-	if has_pms_items:
-		invoice.taxes_and_charges = ""
-		invoice.set("taxes", [])
-	elif standard_sales_taxes_template:
-		invoice.taxes_and_charges = standard_sales_taxes_template
-	else:
-		frappe.throw("Standard Sales Taxes Template must be configured in DW PMS Settings before creating POS invoices.")
+	precision = _get_currency_precision(invoice.company)
 
 	invoice.insert(ignore_permissions=True)
 	if not is_credit_sale:
@@ -903,7 +924,10 @@ def get_pos_drafts(limit: int = 20):
 		"Sales Invoice",
 		filters={
 			"is_pos": 1,
-			"docstatus": 0  # Draft
+			"docstatus": 0,  # Draft
+			# Repair invoices are drafted with is_pos=1 before payment too;
+			# only drafts made by the till carry a POS profile.
+			"dw_pos_profile": ["is", "set"],
 		},
 		fields=["name", "customer", "customer_name", "grand_total", "creation", "modified"],
 		limit_page_length=int(limit),

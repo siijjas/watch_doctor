@@ -421,3 +421,168 @@ def list_repair_orders(
 		}
 
 	return orders
+
+
+# UI stage → watch statuses (frontend/src/design/stages.ts).
+HISTORY_STAGE_STATUSES = {
+	"received": ("Pending",),
+	"diagnosing": ("Under Diagnosis",),
+	"estimate": ("Diagnosed", "Create Estimate"),
+	"customer": ("Quoted",),
+	"repair": ("Approved", "In Repair"),
+	"ready": ("Completed",),
+	"return": ("Not Repairable", "Declined"),
+}
+
+
+@frappe.whitelist()
+def list_order_history(
+	start: int = 0,
+	page_length: int = 50,
+	search: str = "",
+	stage: str = "",
+	technician: str = "",
+	from_date: str = "",
+	to_date: str = "",
+	money: str = "",
+	show_collected: int = 1,
+):
+	"""Orders screen (canvas D3): one row per order, open and collected.
+
+	Filters: stage (any watch on the order in that stage; "parts" = waiting
+	for a part; "collected"), technician ("unassigned" = a watch without
+	one), received date range, money (due / paid / none). Technicians only
+	see orders with a watch assigned to them.
+	"""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	start = max(0, int(start or 0))
+	page_length = max(1, min(int(page_length or 50), 200))
+	search = (search or "").strip()
+
+	where = ["o.docstatus < 2"]
+	values = {"start": start, "limit": page_length}
+
+	roles = set(frappe.get_roles())
+	if not (roles & PRIVILEGED_ROLES):
+		tech_values = get_current_technician_identifiers()
+		if not tech_values:
+			return {"orders": [], "total_count": 0}
+		where.append(
+			"EXISTS (SELECT 1 FROM `tabDW Repair Item` ti WHERE ti.parent = o.name AND ti.technician IN %(my_techs)s)"
+		)
+		values["my_techs"] = tuple(tech_values)
+
+	if search:
+		values["needle"] = f"%{search}%"
+		clauses = [
+			"o.name LIKE %(needle)s",
+			"IFNULL(o.reference_number, '') LIKE %(needle)s",
+			"IFNULL(c.customer_name, '') LIKE %(needle)s",
+			"IFNULL(c.mobile_no, '') LIKE %(needle)s",
+			"""EXISTS (
+				SELECT 1 FROM `tabDW Repair Item` si
+				LEFT JOIN `tabDW Watch Model` sm ON sm.name = si.watch_model
+				LEFT JOIN `tabDW Technician` st ON st.name = si.technician
+				WHERE si.parent = o.name AND (
+					IFNULL(si.serial_number, '') LIKE %(needle)s
+					OR IFNULL(si.watch_brand, '') LIKE %(needle)s
+					OR IFNULL(sm.model_name, '') LIKE %(needle)s
+					OR IFNULL(st.technician_name, '') LIKE %(needle)s
+				)
+			)""",
+			# Dashboard links search by complaint ("Battery Dead").
+			"""EXISTS (
+				SELECT 1 FROM `tabDW Repair Item Issue` sx
+				WHERE sx.parent = o.name AND sx.parenttype = 'DW Repair Order' AND sx.issue LIKE %(needle)s
+			)""",
+		]
+		digits = "".join(ch for ch in search if ch.isdigit())
+		if len(digits) >= 3 and len(digits) >= len(search.replace(" ", "")) - 1:
+			values["digits"] = f"%{digits}%"
+			clauses.append("REPLACE(REPLACE(REPLACE(IFNULL(c.mobile_no, ''), ' ', ''), '-', ''), '+', '') LIKE %(digits)s")
+			clauses.append("REPLACE(o.name, '.', '') LIKE %(digits)s")
+		where.append("(" + " OR ".join(clauses) + ")")
+
+	collected_sql = "(o.docstatus = 1 OR o.status = 'Delivered')"
+	if stage == "collected":
+		where.append(collected_sql)
+	elif stage == "parts":
+		where.append(f"NOT {collected_sql}")
+		where.append(
+			"EXISTS (SELECT 1 FROM `tabDW Repair Item` pi WHERE pi.parent = o.name AND pi.awaiting_parts = 1)"
+		)
+	elif stage in HISTORY_STAGE_STATUSES:
+		where.append(f"NOT {collected_sql}")
+		where.append(
+			"EXISTS (SELECT 1 FROM `tabDW Repair Item` gi WHERE gi.parent = o.name AND gi.status IN %(stage_statuses)s)"
+		)
+		values["stage_statuses"] = HISTORY_STAGE_STATUSES[stage]
+	elif not int(show_collected or 0):
+		where.append(f"NOT {collected_sql}")
+
+	if technician == "unassigned":
+		where.append(f"NOT {collected_sql}")
+		where.append(
+			"EXISTS (SELECT 1 FROM `tabDW Repair Item` ui WHERE ui.parent = o.name AND IFNULL(ui.technician, '') = '')"
+		)
+	elif technician:
+		where.append("EXISTS (SELECT 1 FROM `tabDW Repair Item` ki WHERE ki.parent = o.name AND ki.technician = %(tech)s)")
+		values["tech"] = technician
+
+	if from_date:
+		where.append("o.received_date >= %(from_date)s")
+		values["from_date"] = from_date
+	if to_date:
+		where.append("o.received_date <= %(to_date)s")
+		values["to_date"] = to_date
+
+	if money == "due":
+		where.append("IFNULL(o.balance_amount, 0) > 0")
+	elif money == "paid":
+		where.append("IFNULL(o.sales_invoice, '') != '' AND IFNULL(o.balance_amount, 0) <= 0")
+	elif money == "none":
+		where.append("IFNULL(o.sales_invoice, '') = ''")
+
+	where_sql = " AND ".join(where)
+	from_sql = "FROM `tabDW Repair Order` o LEFT JOIN `tabCustomer` c ON c.name = o.customer"
+	count_values = {k: v for k, v in values.items() if k not in ("start", "limit")}
+	count_sql = f"SELECT COUNT(*) {from_sql} WHERE {where_sql}"
+	total = (frappe.db.sql(count_sql, count_values) if count_values else frappe.db.sql(count_sql))[0][0]
+
+	orders = frappe.db.sql(
+		f"""
+		SELECT o.name, o.reference_number, o.customer, c.customer_name, c.mobile_no AS customer_mobile,
+			o.priority, o.status, o.docstatus, o.received_date, o.promised_delivery_date, o.delivery_date,
+			o.quotation, o.quotation_amount, o.sales_invoice, o.invoiced_amount, o.paid_amount, o.balance_amount
+		{from_sql}
+		WHERE {where_sql}
+		ORDER BY o.received_date DESC, o.name DESC
+		LIMIT %(limit)s OFFSET %(start)s
+		""",
+		values,
+		as_dict=True,
+	)
+
+	watches = {}
+	if orders:
+		for row in frappe.db.sql(
+			"""
+			SELECT i.parent, i.name, i.watch_brand, COALESCE(m.model_name, i.watch_model) AS watch_model,
+				i.status, i.awaiting_parts, COALESCE(t.technician_name, i.technician) AS technician
+			FROM `tabDW Repair Item` i
+			LEFT JOIN `tabDW Watch Model` m ON m.name = i.watch_model
+			LEFT JOIN `tabDW Technician` t ON t.name = i.technician
+			WHERE i.parenttype = 'DW Repair Order' AND i.parent IN %(names)s
+			ORDER BY i.idx
+			""",
+			{"names": tuple(o.name for o in orders)},
+			as_dict=True,
+		):
+			watches.setdefault(row.parent, []).append(row)
+
+	for o in orders:
+		o.customer_name = o.customer_name or o.customer
+		o.customer_mobile = o.customer_mobile or ""
+		o.watches = watches.get(o.name, [])
+
+	return {"orders": orders, "total_count": int(total or 0)}

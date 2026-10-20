@@ -25,6 +25,7 @@ from watch_doctor.api.orders import (  # noqa: F401
     update_repair_item_diagnosis,
     update_repair_item_photos,
     list_repair_orders,
+    list_order_history,
 )
 
 # Catalog / reference lookups
@@ -63,6 +64,37 @@ from watch_doctor.api.dashboard import (  # noqa: F401
 from watch_doctor.api.tracker import (  # noqa: F401
     get_order_tracker,
     update_watch_stage,
+    set_watch_stage,
+)
+
+# Order page + technician bench (narrow edits)
+from watch_doctor.api.jobs import (  # noqa: F401
+    get_order_context,
+    get_my_bench,
+    assign_technician,
+    add_task,
+    set_task_status,
+    remove_task,
+    add_part,
+    remove_part,
+    set_awaiting_parts,
+    set_internal_note,
+    set_watch_issues,
+    update_order_details,
+    set_task_rate,
+    set_part_line,
+    create_estimate,
+    collect_watches,
+    preview_collect,
+    update_watch_details,
+    add_watch,
+)
+
+# Intake (one form for new orders)
+from watch_doctor.api.intake import (  # noqa: F401
+    find_customers,
+    check_phone,
+    create_customer,
 )
 
 # POS
@@ -85,4 +117,44 @@ from watch_doctor.api.pos import (  # noqa: F401
     delete_pos_draft,
     submit_pos_draft,
     get_daily_report,
+)
+
+# Point of sale v2 (till) and customer profile
+from watch_doctor.api.till import (  # noqa: F401
+    till_categories,
+    till_items,
+    till_preview,
+    till_charge,
+    till_hold,
+    till_held,
+    till_load,
+    till_last_receipt,
+    till_collect,
+    till_return_details,
+)
+from watch_doctor.api.customers import (  # noqa: F401
+    list_customers,
+    get_customer_profile,
+    update_customer,
+)
+
+# Owner dashboard
+from watch_doctor.api.owner import get_overview  # noqa: F401
+
+# Reports (four, one period) and settings lists
+from watch_doctor.api.reports import (  # noqa: F401
+    report_workshop,
+    report_sales,
+    report_cash,
+    report_profit,
+)
+from watch_doctor.api.setup_lists import (  # noqa: F401
+    setup_list,
+    setup_options,
+    setup_save,
+    setup_delete,
+    pos_profiles,
+    save_pos_profile,
+    whatsapp_log,
+    daily_summary_preview,
 )

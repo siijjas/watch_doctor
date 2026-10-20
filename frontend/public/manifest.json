@@ -1,0 +1,16 @@
+{
+  "name": "Watch Doctor",
+  "short_name": "Watch Doctor",
+  "description": "Repair orders, the workshop bench and the shop till.",
+  "start_url": "/repair/",
+  "scope": "/repair/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F6F3EE",
+  "theme_color": "#F6F3EE",
+  "icons": [
+    { "src": "/assets/watch_doctor/frontend/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/assets/watch_doctor/frontend/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/assets/watch_doctor/frontend/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,390 +1,188 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { RepairOrder } from './types';
-import * as apiService from './services/apiService';
-import { isErpNext } from './services/apiService';
-import { mockRepairOrders } from './services/mockData';
-import RepairOrderList from './components/RepairOrderList';
-import RepairOrderDetail from './components/RepairOrderDetail';
-import { RepairOrderForm } from './components/RepairOrderForm';
-import { RepairOrderIntakeWizard } from './components/RepairOrderIntakeWizard';
-import Dashboard from './components/Dashboard';
-import POS from './components/POS';
-import DailyReport from './components/DailyReport';
-import OrderTracker from './components/OrderTracker';
-import type { TrackerTabId } from './components/OrderTracker';
-import Settings from './components/Settings';
-import Sidebar from './components/layout/Sidebar';
-import Header from './components/layout/Header';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppConfigProvider } from './context/AppConfigContext';
 import { LoginPage } from './components/LoginPage';
+import { matchPath, navigate, path as buildPath, useLocation } from './router';
+import { landingFor } from './design/nav';
+import { AppShell, Spinner, ToastProvider } from './design/kit';
+import FrontDesk from './screens/FrontDesk';
+import OrdersScreen from './screens/OrdersScreen';
+import OrderScreen from './screens/OrderScreen';
+import Bench from './screens/Bench';
+import WatchJob from './screens/WatchJob';
+import Intake from './screens/Intake';
+import EstimateScreen from './screens/EstimateScreen';
+import CollectScreen from './screens/CollectScreen';
+import DashboardScreen from './screens/DashboardScreen';
+import ReportsScreen, { type ReportId } from './screens/ReportsScreen';
+import SettingsScreen from './screens/settings/SettingsScreen';
+import PosScreen from './screens/pos/PosScreen';
+import PosBackOffice from './screens/pos/PosBackOffice';
+import { CustomerScreen, CustomersScreen } from './screens/CustomerScreen';
+import type { DWRole } from './types';
 
-type ViewType = 'dashboard' | 'orders' | 'tracker' | 'pos' | 'daily-report' | 'settings';
-const ORDER_PAGE_SIZE = 100;
+const KitGallery = React.lazy(() => import('./design/KitGallery'));
+
+/** Screens addressable by URL (spec B3). Screens not rebuilt yet render the existing component. */
+type Route =
+    | { view: 'dashboard' }
+    | { view: 'desk' }
+    | { view: 'bench' }
+    | { view: 'orders' }
+    | { view: 'order'; name: string }
+    | { view: 'job'; name: string; item: string }
+    | { view: 'estimate'; name: string }
+    | { view: 'collect'; name: string }
+    | { view: 'intake' }
+    | { view: 'pos' }
+    | { view: 'posDesk'; tab: 'held' | 'collect' | 'returns' }
+    | { view: 'customers' }
+    | { view: 'customer'; name: string }
+    | { view: 'reports'; report: ReportId }
+    | { view: 'settings'; section: string }
+    | { view: 'kit' };
+
+const DESK_ROLES: DWRole[] = ['executive', 'data_entry'];
+const ROUTE_ROLES: Partial<Record<Route['view'], DWRole[]>> = {
+    dashboard: DESK_ROLES,
+    desk: DESK_ROLES,
+    intake: DESK_ROLES,
+    estimate: DESK_ROLES,
+    collect: DESK_ROLES,
+    pos: DESK_ROLES,
+    posDesk: DESK_ROLES,
+    customers: DESK_ROLES,
+    customer: DESK_ROLES,
+    reports: DESK_ROLES,
+    settings: ['executive'],
+};
+
+const resolveRoute = (p: string): Route | null => {
+    let m: Record<string, string> | null;
+    if ((m = matchPath('/orders/:name/watch/:item', p))) return { view: 'job', name: m.name, item: m.item };
+    if ((m = matchPath('/orders/:name/estimate', p))) return { view: 'estimate', name: m.name };
+    if ((m = matchPath('/orders/:name/collect', p))) return { view: 'collect', name: m.name };
+    if ((m = matchPath('/orders/:name', p))) return { view: 'order', name: m.name };
+    if (matchPath('/orders', p)) return { view: 'orders' };
+    if (matchPath('/desk', p)) return { view: 'desk' };
+    if (matchPath('/bench', p)) return { view: 'bench' };
+    if (matchPath('/intake', p)) return { view: 'intake' };
+    if (matchPath('/dashboard', p)) return { view: 'dashboard' };
+    if ((m = matchPath('/pos/:tab', p)) && ['held', 'collect', 'returns'].includes(m.tab)) return { view: 'posDesk', tab: m.tab as 'held' | 'collect' | 'returns' };
+    if (matchPath('/pos', p)) return { view: 'pos' };
+    if ((m = matchPath('/customers/:name', p))) return { view: 'customer', name: m.name };
+    if (matchPath('/customers', p)) return { view: 'customers' };
+    if ((m = matchPath('/reports/:report', p))) return { view: 'reports', report: m.report as ReportId };
+    if (matchPath('/reports', p)) return { view: 'reports', report: 'workshop' };
+    if ((m = matchPath('/settings/:section', p))) return { view: 'settings', section: m.section };
+    if (matchPath('/settings', p)) return { view: 'settings', section: 'company' };
+    if (matchPath('/kit', p)) return { view: 'kit' };
+    return null;
+};
+
+/** Phone header titles; desk screens carry their own heading. */
+const TITLES: Partial<Record<Route['view'], string>> = {
+    dashboard: 'Today',
+    desk: 'Front desk',
+    bench: 'My bench',
+    orders: 'Orders',
+    order: 'Order',
+    job: 'Job',
+    estimate: 'Estimate',
+    collect: 'Collect',
+    intake: 'New order',
+    pos: 'Point of sale',
+    posDesk: 'Point of sale',
+    customers: 'Customers',
+    customer: 'Customer',
+    reports: 'Reports',
+    settings: 'Settings',
+};
+
 
 // Main app content (shown when authenticated)
 const AppContent: React.FC = () => {
-  const { user, logout, hasRole } = useAuth();
+    const { hasRole, roles } = useAuth();
+    const { path: currentPath, query } = useLocation();
+    const landing = landingFor(roles);
 
-  // Determine default view based on role
-  const getDefaultView = (): ViewType => {
-    if (hasRole('executive')) return 'dashboard';
-    return 'orders'; // Data Entry and Technicians land on orders
-  };
+    const resolved = useMemo(() => resolveRoute(currentPath), [currentPath]);
+    const allowed = !!resolved && (!ROUTE_ROLES[resolved.view] || hasRole(...(ROUTE_ROLES[resolved.view] as DWRole[])));
+    const route: Route | null = allowed ? resolved : null;
 
-  const [currentView, setCurrentView] = useState<ViewType>(getDefaultView());
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [repairOrders, setRepairOrders] = useState<RepairOrder[]>([]);
-  const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(null);
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [orderToEdit, setOrderToEdit] = useState<RepairOrder | null | undefined>(undefined);
-  const [orderStatusFilter, setOrderStatusFilter] = useState<string>('All');
-  const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
-  const [debouncedOrderSearchQuery, setDebouncedOrderSearchQuery] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMoreOrders, setIsLoadingMoreOrders] = useState(false);
-  const [hasMoreOrders, setHasMoreOrders] = useState(true);
-  const [orderTotalCount, setOrderTotalCount] = useState(0);
-  const latestOrdersRequestRef = useRef(0);
-  // Order Tracker: remember its search/tab and return to it after opening an order from it.
-  const [returnToTracker, setReturnToTracker] = useState(false);
-  const trackerViewRef = useRef<{ search: string; tab: TrackerTabId }>({ search: '', tab: 'all' });
+    // `/`, unknown paths, old `/tracker` and screens the role cannot open go to the role's home.
+    useEffect(() => {
+        if (currentPath === '/tracker') navigate('/desk', { replace: true });
+        else if (!allowed) navigate(landing, { replace: true });
+    }, [allowed, currentPath, landing]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedOrderSearchQuery(orderSearchQuery);
-    }, 300);
 
-    return () => window.clearTimeout(timer);
-  }, [orderSearchQuery]);
+    if (!route) return null;
 
-  const loadOrders = useCallback(async () => {
-    const requestId = ++latestOrdersRequestRef.current;
-    setIsLoading(true);
-    try {
-      if (isErpNext) {
-        const response = await apiService.getRepairOrders(0, ORDER_PAGE_SIZE, debouncedOrderSearchQuery, orderStatusFilter, true);
-        if (requestId !== latestOrdersRequestRef.current) {
-          return;
+    if (route.view === 'kit') {
+        return (
+            <React.Suspense fallback={<div className="min-h-screen" style={{ backgroundColor: '#F6F3EE' }} />}>
+                <KitGallery />
+            </React.Suspense>
+        );
+    }
+
+    const screen = (() => {
+        switch (route.view) {
+            case 'desk': return <FrontDesk />;
+            case 'bench': return <Bench />;
+            case 'orders': return <OrdersScreen />;
+            case 'order': return <OrderScreen key={route.name} name={route.name} />;
+            case 'job': return <WatchJob key={route.item} orderName={route.name} itemName={route.item} />;
+            case 'estimate': return <EstimateScreen key={route.name} name={route.name} />;
+            case 'collect': return <CollectScreen key={route.name} name={route.name} preselect={query.get('watch')} />;
+            case 'intake': return <Intake />;
+            case 'dashboard': return <DashboardScreen />;
+            case 'pos': return <PosScreen />;
+            case 'posDesk': return <PosBackOffice key={route.tab} tab={route.tab} />;
+            case 'customers': return <CustomersScreen />;
+            case 'customer': return <CustomerScreen key={route.name} name={route.name} />;
+            case 'reports': return <ReportsScreen report={route.report} />;
+            case 'settings': return <SettingsScreen section={route.section} />;
         }
-        setRepairOrders(response.orders as RepairOrder[]);
-        setOrderTotalCount(response.total_count || 0);
-        setHasMoreOrders(response.orders.length < response.total_count);
-      } else {
-        setRepairOrders(mockRepairOrders as RepairOrder[]);
-        setOrderTotalCount(mockRepairOrders.length);
-        setHasMoreOrders(false);
-      }
-    } catch (error) {
-      console.error("Failed to load repair orders:", error);
-      setRepairOrders(mockRepairOrders as RepairOrder[]);
-      setOrderTotalCount(mockRepairOrders.length);
-      setHasMoreOrders(false);
-    } finally {
-      if (requestId === latestOrdersRequestRef.current) {
-        setIsLoading(false);
-      }
-    }
-  }, [debouncedOrderSearchQuery, orderStatusFilter]);
+    })();
 
-  const loadMoreOrders = useCallback(async () => {
-    if (!isErpNext || isLoadingMoreOrders || !hasMoreOrders) {
-      return;
-    }
-
-    const requestId = ++latestOrdersRequestRef.current;
-    setIsLoadingMoreOrders(true);
-    try {
-      const currentLoaded = repairOrders.length;
-      const response = await apiService.getRepairOrders(
-        repairOrders.length,
-        ORDER_PAGE_SIZE,
-        debouncedOrderSearchQuery,
-        orderStatusFilter,
-        true,
-      );
-      if (requestId !== latestOrdersRequestRef.current) {
-        return;
-      }
-      setRepairOrders(prev => [...prev, ...(response.orders as RepairOrder[])]);
-      setOrderTotalCount(response.total_count || currentLoaded + response.orders.length);
-      setHasMoreOrders(currentLoaded + response.orders.length < response.total_count);
-    } catch (error) {
-      console.error("Failed to load more repair orders:", error);
-    } finally {
-      if (requestId === latestOrdersRequestRef.current) {
-        setIsLoadingMoreOrders(false);
-      }
-    }
-  }, [debouncedOrderSearchQuery, hasMoreOrders, isLoadingMoreOrders, orderStatusFilter, repairOrders.length]);
-
-  useEffect(() => {
-    if (currentView === 'orders') {
-      loadOrders();
-    } else {
-      setIsLoading(false);
-    }
-  }, [currentView, loadOrders]);
-
-  const handleSelectOrder = useCallback(async (orderSummary: RepairOrder) => {
-    if (isErpNext) {
-      setIsLoading(true);
-      const fullOrder = await apiService.getRepairOrder(orderSummary.name);
-      setSelectedOrder(fullOrder);
-      setIsLoading(false);
-    } else {
-      setSelectedOrder(orderSummary);
-    }
-  }, []);
-
-  const handleSelectOrderById = useCallback(async (orderId: string) => {
-    setIsLoading(true);
-    try {
-      if (isErpNext) {
-        const fullOrder = await apiService.getRepairOrder(orderId);
-        setSelectedOrder(fullOrder);
-      } else {
-        const order = repairOrders.find(o => o.name === orderId) || null;
-        setSelectedOrder(order);
-      }
-      setCurrentView('orders');
-    } catch (error) {
-      console.error("Failed to select order:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [repairOrders]);
-
-  const handleBackToList = useCallback(() => {
-    setSelectedOrder(null);
-    if (returnToTracker) {
-      setReturnToTracker(false);
-      setCurrentView('tracker');
-      return;
-    }
-    loadOrders();
-  }, [loadOrders, returnToTracker]);
-
-  const handleSelectOrderFromTracker = useCallback((orderId: string) => {
-    setReturnToTracker(true);
-    void handleSelectOrderById(orderId);
-  }, [handleSelectOrderById]);
-
-  const handleTrackerViewChange = useCallback((search: string, tab: TrackerTabId) => {
-    trackerViewRef.current = { search, tab };
-  }, []);
-
-  const handleOpenForm = useCallback((order?: RepairOrder | null) => {
-    setOrderToEdit(order ?? undefined);
-    setIsFormOpen(true);
-  }, []);
-
-  const handleCloseForm = useCallback(() => {
-    setIsFormOpen(false);
-    setOrderToEdit(undefined);
-  }, []);
-
-  const handleSaveOrder = useCallback(async (order: RepairOrder) => {
-    try {
-      if (isErpNext) {
-        const savedOrder = await apiService.saveRepairOrder(order);
-        handleCloseForm();
-        await loadOrders();
-        setSelectedOrder(savedOrder as RepairOrder);
-      } else {
-        if (order.name) {
-          setRepairOrders(prev => prev.map(o => o.name === order.name ? order : o));
-        } else {
-          const now = new Date();
-          const yy = String(now.getFullYear()).slice(-2);
-          const mm = String(now.getMonth() + 1).padStart(2, '0');
-          const seq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
-          const newOrder = { ...order, name: `${yy}${mm}${seq}` };
-          setRepairOrders(prev => [...prev, newOrder]);
-        }
-        handleCloseForm();
-      }
-    } catch (error) {
-      console.error("Failed to save order:", error);
-    }
-  }, [loadOrders, handleCloseForm]);
-
-  const handleDeleteOrder = useCallback(async (orderId: string) => {
-    if (isErpNext) {
-      await apiService.deleteRepairOrder(orderId);
-      loadOrders();
-    } else {
-      setRepairOrders(prev => prev.filter(o => o.name !== orderId));
-    }
-    setSelectedOrder(null);
-  }, [loadOrders]);
-
-  const handleRefreshOrder = useCallback(async (orderId: string) => {
-    if (isErpNext) {
-      const refreshedOrder = await apiService.getRepairOrder(orderId);
-      setSelectedOrder(refreshedOrder);
-    }
-  }, []);
-
-  const handleNavigateToOrders = useCallback((filter?: string, search?: string) => {
-    const nextStatus = filter || 'All';
-    const nextSearch = search || '';
-    setOrderStatusFilter(nextStatus);
-    setOrderSearchQuery(nextSearch);
-    setDebouncedOrderSearchQuery(nextSearch);
-    setCurrentView('orders');
-  }, []);
-
-  // Tab button component
-  const TabButton: React.FC<{ view: ViewType; icon: React.ReactNode; label: string }> = ({ view, icon, label }) => (
-    <button
-      onClick={() => {
-        setCurrentView(view);
-        setSelectedOrder(null);
-        if (view === 'orders') {
-          setOrderStatusFilter('All');
-          setOrderSearchQuery('');
-          setDebouncedOrderSearchQuery('');
-        }
-      }}
-      className={`flex items-center px-4 py-2 rounded-lg font-medium transition-all duration-200 ${currentView === view
-        ? 'bg-blue-500 text-white shadow-md'
-        : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-        }`}
-    >
-      {icon}
-      <span className="ml-2">{label}</span>
-    </button>
-  );
-
-  // POS Icon
-  const POSIcon = () => (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-    </svg>
-  );
-
-  return (
-    <div className="flex h-screen" style={{ backgroundColor: '#FAF7F2' }}>
-      <Sidebar
-        currentView={currentView}
-        onChangeView={(view) => {
-          setCurrentView(view);
-          setSelectedOrder(null);
-          setReturnToTracker(false);
-        }}
-        isMobileOpen={isSidebarOpen}
-        onMobileClose={() => setIsSidebarOpen(false)}
-      />
-
-      <div className="flex-1 flex flex-col overflow-hidden lg:ml-[240px]">
-        <Header
-          title={currentView === 'dashboard' ? 'Dashboard' : currentView === 'tracker' ? 'Order Tracker' : currentView === 'pos' ? 'POS' : currentView === 'daily-report' ? 'Reports' : currentView === 'settings' ? 'Settings' : 'Repair Orders'}
-          onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
-        />
-
-        <main className={currentView === 'pos' ? 'flex-1 overflow-hidden p-0' : 'flex-1 overflow-y-auto px-4 pb-6 sm:px-6 lg:px-8 lg:pb-8'}>
-          {currentView === 'orders' && !selectedOrder && hasRole('executive', 'data_entry') && (
-            <div className="mb-4 flex justify-end">
-              <button
-                onClick={() => handleOpenForm()}
-                className="font-semibold py-2.5 px-5 rounded-xl shadow-sm transition duration-200 flex items-center text-sm hover:opacity-90"
-                style={{ backgroundColor: '#648DDA', color: '#FDFEFF' }}
-              >
-                <span className="mr-2">+</span> New Order
-              </button>
-            </div>
-          )}
-
-          {currentView === 'dashboard' && hasRole('executive', 'data_entry') ? (
-            <Dashboard
-              onNavigateToOrders={handleNavigateToOrders}
-              onSelectOrder={handleSelectOrderById}
-            />
-          ) : currentView === 'tracker' && hasRole('executive', 'data_entry') ? (
-            <OrderTracker
-              onSelectOrder={handleSelectOrderFromTracker}
-              initialSearch={trackerViewRef.current.search}
-              initialTab={trackerViewRef.current.tab}
-              onViewChange={handleTrackerViewChange}
-            />
-          ) : currentView === 'pos' && hasRole('executive', 'data_entry') ? (
-            <POS onBack={() => setCurrentView(getDefaultView())} />
-          ) : currentView === 'daily-report' && hasRole('executive', 'data_entry') ? (
-            <DailyReport onSelectOrder={handleSelectOrderById} />
-          ) : currentView === 'settings' && hasRole('executive') ? (
-            <Settings />
-          ) : selectedOrder ? (
-            <RepairOrderDetail order={selectedOrder} onBack={handleBackToList} onEdit={hasRole('executive', 'data_entry', 'technician') ? handleOpenForm : undefined} onDelete={hasRole('executive') ? handleDeleteOrder : undefined} onRefresh={handleRefreshOrder} />
-          ) : (
-            <RepairOrderList
-              orders={repairOrders}
-              onSelectOrder={handleSelectOrder}
-              searchQuery={orderSearchQuery}
-              statusFilter={orderStatusFilter}
-              onSearchQueryChange={setOrderSearchQuery}
-              onStatusFilterChange={setOrderStatusFilter}
-              serverSideSearch={isErpNext}
-              totalOrdersCount={orderTotalCount}
-              onLoadMore={loadMoreOrders}
-              hasMoreOrders={hasMoreOrders}
-              isLoadingMoreOrders={isLoadingMoreOrders}
-            />
-          )}
-        </main>
-      </div>
-
-      {isFormOpen && (
-        orderToEdit ? (
-          <RepairOrderForm
-            isOpen={isFormOpen}
-            onClose={handleCloseForm}
-            onSave={handleSaveOrder}
-            order={orderToEdit}
-          />
-        ) : (
-          <RepairOrderIntakeWizard
-            isOpen={isFormOpen}
-            onClose={handleCloseForm}
-            onSave={handleSaveOrder}
-          />
-        )
-      )}
-    </div>
-  );
+    return (
+        <AppShell title={TITLES[route.view]}>
+            {screen}
+        </AppShell>
+    );
 };
 
 // App wrapper with auth check
 const App: React.FC = () => {
-  const { isAuthenticated, isLoading } = useAuth();
+    const { isAuthenticated, isLoading } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+    if (isLoading) {
+        return (
+            <div className="dw-root min-h-screen flex items-center justify-center" role="status" aria-label="Loading">
+                <Spinner size={32} />
+            </div>
+        );
+    }
 
-  if (!isAuthenticated) {
-    return <LoginPage />;
-  }
+    if (!isAuthenticated) {
+        return <LoginPage />;
+    }
 
-  return <AppContent />;
+    return <AppContent />;
 };
 
 // Root component with AuthProvider
-const Root: React.FC = () => {
-  return (
+const Root: React.FC = () => (
     <AuthProvider>
-      <AppConfigProvider>
-        <App />
-      </AppConfigProvider>
+        <AppConfigProvider>
+            <ToastProvider>
+                <App />
+            </ToastProvider>
+        </AppConfigProvider>
     </AuthProvider>
-  );
-};
+);
 
 export default Root;
+

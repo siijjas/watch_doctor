@@ -1,0 +1,103 @@
+/*
+ * Watch Doctor v2 design tokens (canvas board S1).
+ * Variables live on :root so any screen can read them; the font and
+ * ground only apply inside `.dw-root` so legacy screens are unaffected
+ * until they move into the new AppShell.
+ */
+:root {
+  --dw-ground: #F6F3EE;
+  --dw-surface: #FFFFFF;
+  --dw-sunken: #ECE8E1;
+  --dw-line: #F1EDE6;
+  --dw-border: #E4DFD6;
+  --dw-border-strong: #DED8CF;
+  --dw-text: #1F2933;
+  --dw-body: #4B4B4B;
+  --dw-caption: #6F685E;
+  --dw-accent: #456FBF;
+  --dw-accent-hover: #3A60A8;
+  --dw-accent-soft: #DCE8FB;
+  --dw-success: #1E7B46;
+  --dw-success-soft: #D7F0DF;
+  --dw-warning: #8A3F00;
+  --dw-warning-soft: #FDE4CC;
+  --dw-danger: #8E1B1B;
+  --dw-danger-soft: #FBDADA;
+  --dw-focus: rgba(69, 111, 191, 0.35);
+  --dw-shadow-pop: 0 12px 32px rgba(31, 41, 51, 0.16);
+  --dw-radius-control: 12px;
+  --dw-radius-card: 16px;
+  --dw-tap-desk: 42px;
+  --dw-tap-phone: 44px;
+  --dw-font: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Chart palette, validated with the dataviz checker (light surface). */
+  --dw-chart-1: #456FBF;
+  --dw-chart-2: #E8963E;
+  --dw-chart-3: #7A5BC7;
+  --dw-chart-4: #D9A83A;
+  --dw-chart-5: #2E8B57;
+}
+
+.dw-root {
+  font-family: var(--dw-font);
+  color: var(--dw-text);
+  background: var(--dw-ground);
+  -webkit-font-smoothing: antialiased;
+}
+.dw-root button,
+.dw-root input,
+.dw-root select,
+.dw-root textarea {
+  font-family: inherit;
+}
+.dw-root :focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+
+/* Stage badges: 9 tones, each pair checked at >= 4.5:1. */
+.dw-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  line-height: 1;
+}
+.dw-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.75;
+}
+.dw-badge--plain::before { display: none; }
+.dw-tone-received   { background: #ECE8E1; color: #5B544A; }
+.dw-tone-diagnosing { background: #DCE8FB; color: #1F4B9B; }
+.dw-tone-repair     { background: #DCE8FB; color: #1F4B9B; }
+.dw-tone-estimate   { background: #FDE4CC; color: #8A3F00; }
+.dw-tone-customer   { background: #E7E0F8; color: #4A2E8E; }
+.dw-tone-parts      { background: #FBEBC2; color: #6B4B00; }
+.dw-tone-ready      { background: #D7F0DF; color: #0F5B33; }
+.dw-tone-return     { background: #FBDADA; color: #8E1B1B; }
+.dw-tone-overdue    { background: #FBDADA; color: #8E1B1B; }
+.dw-tone-collected  { background: #E2E0DC; color: #3F3F3F; }
+
+@keyframes dw-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes dw-pop-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes dw-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.dw-anim-sheet { animation: dw-sheet-up .22s ease-out; }
+.dw-anim-pop { animation: dw-pop-in .16s ease-out; }
+.dw-anim-fade { animation: dw-fade-in .16s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .dw-anim-sheet, .dw-anim-pop, .dw-anim-fade { animation: none; }
+}
+
+/* Larger text (Phase 5): scales the page content, not the navigation. */
+.dw-large { zoom: 1.15; }

@@ -3,6 +3,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { registerPwa } from './design/pwa';
 
 declare global {
     interface Window {
@@ -21,6 +22,8 @@ root.render(
     <App />
   </React.StrictMode>
 );
+
+registerPwa();
 
 // Assign the unmount function to the window object for Frappe's cleanup script
 window.unmountMyWebApp = () => {

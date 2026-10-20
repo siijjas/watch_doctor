@@ -246,12 +246,16 @@ def _outstanding_snapshot(company):
 
 @frappe.whitelist()
 def get_monthly_sales_purchase_summary(from_date, to_date):
+	require_roles(ROLE_EXECUTIVE)
+	return build_sales_purchase_summary(from_date, to_date)
+
+
+def build_sales_purchase_summary(from_date, to_date):
 	"""Executive-only sales/purchase operational summary for [from_date, to_date]
 	plus month-over-month comparison against the immediately preceding period of
 	equal length. Companion to monthly_executive_report.get_monthly_executive_summary
 	(the accrual P&L) — this covers volume, mix, conversion, top performers, and
 	procurement rather than the financial statement itself."""
-	require_roles(ROLE_EXECUTIVE)
 
 	from_date = getdate(from_date)
 	to_date = getdate(to_date)

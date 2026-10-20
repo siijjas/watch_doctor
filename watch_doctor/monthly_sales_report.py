@@ -40,9 +40,13 @@ def _invoice_status(grand_total, outstanding):
 
 @frappe.whitelist()
 def get_monthly_sales_report(from_date, to_date):
+	require_roles(ROLE_EXECUTIVE)
+	return build_sales_report(from_date, to_date)
+
+
+def build_sales_report(from_date, to_date):
 	"""Aggregate the daily Sales & Purchase report's sales/purchase mix across
 	[from_date, to_date]."""
-	require_roles(ROLE_EXECUTIVE)
 
 	default_company = frappe.defaults.get_defaults().get("company")
 

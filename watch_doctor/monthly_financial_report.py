@@ -33,9 +33,13 @@ def _mode_breakdown_dicts(rows):
 
 @frappe.whitelist()
 def get_monthly_financial_report(from_date, to_date):
+	require_roles(ROLE_EXECUTIVE)
+	return build_financial_report(from_date, to_date)
+
+
+def build_financial_report(from_date, to_date):
 	"""Aggregate the daily Financial Summary's cash-position reconstruction across
 	[from_date, to_date]."""
-	require_roles(ROLE_EXECUTIVE)
 
 	default_company = frappe.defaults.get_defaults().get("company")
 

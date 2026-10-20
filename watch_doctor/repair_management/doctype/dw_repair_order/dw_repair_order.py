@@ -115,6 +115,11 @@ def resolve_repair_item_status(current_status=None, diagnosis_status=None, techn
 	if status == WATCH_STATUS_DELIVERED:
 		return WATCH_STATUS_DELIVERED
 
+	# A watch going back to the customer unrepaired stays that way until the
+	# desk moves it on; ticked tasks must not drag it back into repair.
+	if status in {WATCH_STATUS_NOT_REPAIRABLE, WATCH_STATUS_DECLINED}:
+		return status
+
 	if task_statuses:
 		if all(task_status == "Completed" for task_status in task_statuses):
 			return WATCH_STATUS_COMPLETED
@@ -243,8 +248,10 @@ def resolve_task_template_name(task_value, create_missing=False, description=Non
 	return None
 
 
-def get_auto_task_services_for_item(item):
+def get_auto_task_services_for_item(item, issues=None):
 	recommended_work = normalize_string_list(item.get("recommended_work"))
+	if issues is None:
+		issues = item.get("issues") or []
 	resolved_services = []
 	seen = set()
 	recommended_descriptions = {}
@@ -269,7 +276,7 @@ def get_auto_task_services_for_item(item):
 		candidates = recommended_work
 	else:
 		candidates = []
-		for issue in item.get("issues") or []:
+		for issue in issues:
 			issue_name = issue.get("issue") if hasattr(issue, "get") else None
 			if not issue_name:
 				continue
@@ -294,10 +301,28 @@ def get_auto_task_services_for_item(item):
 	return resolved_services
 
 
+def _saved_row_name(row):
+	"""Name of a child row already in the database, else None.
+
+	Re-appending a stored task under its own name keeps links to it
+	(DW Repair Part Used.task) valid. A row added in this save has a name
+	too but is not stored yet; it must stay new so it gets inserted.
+	"""
+	if row is None or row.is_new():
+		return None
+	return row.name
+
+
 def sync_item_tasks_with_auto_sources(order_doc, item):
-	service_names = get_auto_task_services_for_item(item)
-	technician = str(item.get("technician") or "").strip()
 	item_key = str(item.idx)
+	# item.issues is a grandchild table that Document.save() never persists,
+	# so on a doc loaded from the database it is empty; the stored copy is
+	# the flat all_issues table.
+	issues = item.get("issues") or [
+		row for row in (order_doc.get("all_issues") or []) if str(row.repair_item_key) == item_key
+	]
+	service_names = get_auto_task_services_for_item(item, issues)
+	technician = str(item.get("technician") or "").strip()
 
 	existing_tasks_by_service = {}
 	manual_tasks_for_item = []
@@ -315,6 +340,7 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 	order_doc.set("all_tasks", [])
 	for task in remaining_tasks:
 		order_doc.append("all_tasks", {
+			"name": _saved_row_name(task),
 			"repair_item_key": task.repair_item_key,
 			"service": task.service,
 			"technician": task.technician,
@@ -329,6 +355,7 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 	# Re-add manual tasks first (they are always preserved unchanged)
 	for task in manual_tasks_for_item:
 		order_doc.append("all_tasks", {
+			"name": _saved_row_name(task),
 			"repair_item_key": item_key,
 			"service": task.service,
 			"technician": task.technician,
@@ -343,6 +370,7 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 	for service_name in service_names:
 		existing_task = existing_tasks_by_service.get(service_name)
 		order_doc.append("all_tasks", {
+			"name": _saved_row_name(existing_task),
 			"repair_item_key": item_key,
 			"service": service_name,
 			"technician": technician or (existing_task.technician if existing_task else ""),
@@ -373,6 +401,7 @@ def sync_item_tasks_with_auto_sources(order_doc, item):
 		)
 		if has_progress:
 			order_doc.append("all_tasks", {
+				"name": _saved_row_name(task),
 				"repair_item_key": item_key,
 				"service": task.service,
 				"technician": task.technician,
@@ -915,18 +944,32 @@ class DWRepairOrder(Document):
 		parts_by_task = {}
 		for part in self.all_parts or []:
 			task_name = part.task
-			if task_name:
+			# Only a part attached in this save moves its task on; task rows
+			# keep their names across saves now, so older parts would
+			# otherwise re-start a task the desk deliberately moved back.
+			if task_name and part.is_new():
 				parts_by_task.setdefault(task_name, []).append(part)
 
+		# Before the customer approves, a part only records what the estimate
+		# needs; it must not start the repair.
+		started = {WATCH_STATUS_APPROVED, WATCH_STATUS_IN_REPAIR}
+		started_keys = {
+			str(item.idx) for item in self.items or [] if normalize_repair_item_status(item.status) in started
+		}
 		for task in self.all_tasks or []:
-			if task.name and task.name in parts_by_task and task.status == "Pending":
+			if (
+				task.name
+				and task.name in parts_by_task
+				and task.status == "Pending"
+				and str(task.repair_item_key) in started_keys
+			):
 				task.status = "In Progress"
 
 
 # Quotation Generation Methods
 
 @frappe.whitelist()
-def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices=None):
+def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices=None, item_names=None, valid_till=None, note=None):
 	"""
 	Create a quotation from a repair order.
 	
@@ -934,11 +977,18 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 		repair_order_name: Name of the repair order
 		quotation_type: "Estimate" or "Final"
 		watch_indices: JSON string of watch indices to include (e.g., "[0, 1]"), or None for all watches
-	
+		item_names: JSON list of DW Repair Item names to include; takes precedence over watch_indices
+		valid_till: Expiry date; defaults to 30 days from today
+		note: Terms printed on the quotation (e.g. "price may change if more damage is found")
+
 	Returns:
 		Name of the created quotation
 	"""
 	import json
+
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
+	if isinstance(item_names, str):
+		item_names = json.loads(item_names) if item_names else None
 	
 	# Parse watch indices if provided
 	if watch_indices:
@@ -950,7 +1000,9 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	
 	# Determine which watches to include
 	selected_items = []
-	if watch_indices is not None:
+	if item_names:
+		selected_items = [item for item in repair_order.items if item.name in item_names]
+	elif watch_indices is not None:
 		for idx in watch_indices:
 			if idx < len(repair_order.items):
 				selected_items.append(repair_order.items[idx])
@@ -1049,8 +1101,9 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 			part_item.uom = part_uom
 			part_item.dw_is_internal_line = 1
 	
-	# Set expiry 30 days from today
-	quotation.valid_till = add_days(frappe.utils.nowdate(), 30)
+	quotation.valid_till = getdate(valid_till) if valid_till else add_days(frappe.utils.nowdate(), 30)
+	if note and str(note).strip():
+		quotation.terms = frappe.utils.escape_html(str(note).strip())
 
 	# Track which repair items this quotation covers so partial-delivery invoicing works correctly.
 	_q_covered = [i.name for i in selected_items]
@@ -1191,6 +1244,8 @@ def create_sales_invoice(repair_order_name, source_type="quotation", payment_typ
 		Dict with invoice_name, invoice_amount, print_format
 	"""
 	import json
+
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 
 	# Convert amount to float if it's a string
 	if amount:

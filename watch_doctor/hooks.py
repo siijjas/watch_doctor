@@ -67,6 +67,12 @@ doctype_js = {
 # 	"Role": "home_page"
 # }
 
+# SPA deep links: /repair/desk, /repair/orders/<name>, ... all serve the
+# same www/repair page; the React router reads the rest of the path.
+website_route_rules = [
+	{"from_route": "/repair/<path:app_path>", "to_route": "repair"},
+]
+
 # Generators
 # ----------
 
@@ -81,6 +87,12 @@ doctype_js = {
 # 	"methods": "watch_doctor.utils.jinja_methods",
 # 	"filters": "watch_doctor.utils.jinja_filters"
 # }
+jinja = {
+	"methods": [
+		"watch_doctor.print_helpers.order_qr_svg",
+		"watch_doctor.print_helpers.order_url",
+	],
+}
 
 # Installation
 # ------------

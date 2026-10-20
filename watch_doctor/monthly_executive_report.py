@@ -213,9 +213,13 @@ def _build_comparison(current, previous):
 
 @frappe.whitelist()
 def get_monthly_executive_summary(from_date, to_date):
+	require_roles(ROLE_EXECUTIVE)
+	return build_executive_summary(from_date, to_date)
+
+
+def build_executive_summary(from_date, to_date):
 	"""Executive-only accrual P&L for [from_date, to_date] plus month-over-month comparison
 	against the immediately preceding period of equal length."""
-	require_roles(ROLE_EXECUTIVE)
 
 	from_date = getdate(from_date)
 	to_date = getdate(to_date)
