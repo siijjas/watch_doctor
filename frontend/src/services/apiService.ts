@@ -800,6 +800,20 @@ export const getMovementTypeTemplates = async (): Promise<MovementTypeTemplate[]
     return res.message || [];
 };
 
+/** Times each movement, finding and work item was picked on past watches. */
+export interface DiagnosisUsage {
+    movement_type: Record<string, number>;
+    diagnosis_summary: Record<string, number>;
+    recommended_work: Record<string, number>;
+}
+
+export const getDiagnosisUsage = async (): Promise<DiagnosisUsage> => {
+    const res = await apiFetch('/api/method/watch_doctor.api.get_diagnosis_usage', {
+        method: 'POST',
+    });
+    return res.message || { movement_type: {}, diagnosis_summary: {}, recommended_work: {} };
+};
+
 export const getMovementCaliberTemplates = async (): Promise<MovementCaliberTemplate[]> => {
     const res = await apiFetch('/api/method/watch_doctor.api.get_movement_caliber_templates', {
         method: 'POST',

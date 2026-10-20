@@ -42,6 +42,7 @@ from watch_doctor.api.catalog import (  # noqa: F401
     get_movement_info_templates,
     get_movement_type_templates,
     get_movement_caliber_templates,
+    get_diagnosis_usage,
     get_country_codes,
     search_items,
     get_item_stock,

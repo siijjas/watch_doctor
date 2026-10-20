@@ -223,6 +223,39 @@ def get_movement_type_templates():
 	)
 
 
+DIAGNOSIS_USAGE_FIELDS = ("movement_type", "diagnosis_summary", "recommended_work")
+DIAGNOSIS_USAGE_CACHE_KEY = "dw_diagnosis_usage"
+
+
+@frappe.whitelist()
+def get_diagnosis_usage():
+	"""How many watches each movement, finding and work item was picked on, so the
+	diagnosis picker can list the most used first. Cached for an hour."""
+	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY, ROLE_TECHNICIAN)
+	cached = frappe.cache.get_value(DIAGNOSIS_USAGE_CACHE_KEY)
+	if cached:
+		return cached
+	counts = {f: {} for f in DIAGNOSIS_USAGE_FIELDS}
+	rows = frappe.get_all(
+		"DW Repair Item",
+		fields=list(DIAGNOSIS_USAGE_FIELDS),
+		order_by="creation desc",
+		limit_page_length=5000,
+	)
+	for row in rows:
+		for field in DIAGNOSIS_USAGE_FIELDS:
+			try:
+				values = frappe.parse_json(row.get(field) or "[]")
+			except ValueError:
+				continue
+			if not isinstance(values, list):
+				continue
+			for v in {str(v).strip() for v in values if v}:
+				counts[field][v] = counts[field].get(v, 0) + 1
+	frappe.cache.set_value(DIAGNOSIS_USAGE_CACHE_KEY, counts, expires_in_sec=3600)
+	return counts
+
+
 @frappe.whitelist()
 def get_movement_caliber_templates():
 	"""Get all active movement caliber templates."""

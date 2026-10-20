@@ -42,7 +42,12 @@ interface Templates {
     calibers: string[];
     findings: string[];
     work: string[];
+    usage: apiService.DiagnosisUsage;
 }
+
+const NO_USAGE: apiService.DiagnosisUsage = { movement_type: {}, diagnosis_summary: {}, recommended_work: {} };
+/** How many "most used" chips lead the picker. */
+const TOP = 8;
 
 let templatesPromise: Promise<Templates> | null = null;
 const loadTemplates = () => {
@@ -51,11 +56,14 @@ const loadTemplates = () => {
         apiService.getMovementCaliberTemplates(),
         apiService.getDiagnosisSummaryTemplates(),
         apiService.getRecommendedWorkTemplates(),
-    ]).then(([m, c, f, w]) => ({
+        // Ordering only: the picker still works A–Z if this fails.
+        apiService.getDiagnosisUsage().catch(() => NO_USAGE),
+    ]).then(([m, c, f, w, usage]) => ({
         movements: m.map(x => x.movement_type),
         calibers: c.map(x => x.caliber_code),
         findings: f.map(x => x.summary_name),
         work: w.map(x => x.work_name),
+        usage,
     })).catch(err => {
         templatesPromise = null;
         throw err;
@@ -68,28 +76,40 @@ const loadTemplates = () => {
  * list opens in a sheet with a search box, so the page stays short.
  * Typing a value that is not a template adds it.
  */
-const PickerField: React.FC<{ label: string; templates: string[]; value: string[]; onChange: (v: string[]) => void; addLabel: string; noun: string }> = ({
-    label, templates, value, onChange, addLabel, noun,
+const PickerField: React.FC<{ label: string; templates: string[]; usage: Record<string, number>; value: string[]; onChange: (v: string[]) => void; addLabel: string; noun: string }> = ({
+    label, templates, usage, value, onChange, addLabel, noun,
 }) => {
     const [open, setOpen] = useState(false);
     const [q, setQ] = useState('');
-    // Fixed while the sheet is open so chips do not jump as they are tapped: chosen first, then the rest.
-    const [order, setOrder] = useState<string[]>([]);
+    // Fixed while the sheet is open so chips do not jump as they are tapped.
+    const [own, setOwn] = useState<string[]>([]);
     const phone = useIsPhone();
     const show = () => {
-        setOrder([...value, ...templates.filter(v => !value.includes(v))]);
+        setOwn(value.filter(v => !templates.includes(v)));
         setQ('');
         setOpen(true);
     };
+    const used = (v: string) => usage[v] ?? 0;
+    // Picked on at least two watches; a single use is not a habit yet.
+    const top = templates.filter(v => used(v) >= 2).sort((a, b) => used(b) - used(a) || a.localeCompare(b)).slice(0, TOP);
+    const rest = [...own, ...value.filter(v => !own.includes(v) && !templates.includes(v)), ...templates.filter(v => !top.includes(v))];
+    const all = [...top, ...rest];
+    const toOptions = (vs: string[]) => vs.map(v => ({ value: v, label: v }));
     const needle = q.trim().toLowerCase();
-    const options = [...order, ...value.filter(v => !order.includes(v))].map(v => ({ value: v, label: v }));
-    const shown = needle ? options.filter(o => o.value.toLowerCase().includes(needle)) : options;
-    const exact = options.some(o => o.value.toLowerCase() === needle);
+    const matches = needle
+        ? all.filter(v => v.toLowerCase().includes(needle)).sort((a, b) => used(b) - used(a) || a.localeCompare(b))
+        : all;
+    const exact = all.some(v => v.toLowerCase() === needle);
+    const pick = (shown: string[]) => (v: string[]) => {
+        // Chips only reports its own subset; keep chosen values that are not in it.
+        const hidden = value.filter(x => !shown.includes(x));
+        onChange([...hidden, ...v.filter(x => !hidden.includes(x))]);
+    };
     const add = () => {
         const t = q.trim();
         if (!t) return;
-        const hit = options.find(o => o.value.toLowerCase() === t.toLowerCase());
-        const v = hit ? hit.value : t;
+        const hit = all.find(x => x.toLowerCase() === t.toLowerCase());
+        const v = hit ?? t;
         if (!value.includes(v)) onChange([...value, v]);
         setQ('');
     };
@@ -124,12 +144,17 @@ const PickerField: React.FC<{ label: string; templates: string[]; value: string[
                 </div>
                 {/* On phones, land on the list so the keyboard does not cover it. */}
                 <div tabIndex={-1} data-autofocus={phone ? '' : undefined} className="focus:outline-none">
-                    <Chips multiple label={label} options={shown} value={value} onChange={v => {
-                        // Chips only reports the shown subset; keep chosen values that are filtered out.
-                        const hidden = value.filter(x => !shown.some(o => o.value === x));
-                        onChange([...hidden, ...v.filter(x => !hidden.includes(x))]);
-                    }} />
-                    {needle && shown.length === 0 && <p className="m-0 text-[13px] text-dw-caption">Nothing matches. Press Add to use “{q.trim()}”.</p>}
+                    {needle || !top.length ? (
+                        <Chips multiple label={label} options={toOptions(matches)} value={value} onChange={pick(matches)} />
+                    ) : (
+                        <>
+                            <SectionLabel className="mb-2">Most used</SectionLabel>
+                            <Chips multiple label={`Most used ${noun}`} options={toOptions(top)} value={value} onChange={pick(top)} />
+                            <SectionLabel className="mt-4 mb-2">All A–Z</SectionLabel>
+                            <Chips multiple label={label} options={toOptions(rest)} value={value} onChange={pick(rest)} />
+                        </>
+                    )}
+                    {needle && matches.length === 0 && <p className="m-0 text-[13px] text-dw-caption">Nothing matches. Press Add to use “{q.trim()}”.</p>}
                 </div>
             </Sheet>
         </>
@@ -167,7 +192,7 @@ export const DiagnosisEditor: React.FC<DiagnosisEditorProps> = ({ value, onChang
         <div className="flex flex-col gap-4">
             <div>
                 <SectionLabel className="mb-2">Movement</SectionLabel>
-                <PickerField label="Movement" templates={t.movements} value={value.movement_type} onChange={v => set({ movement_type: v })} addLabel="Choose movement" noun="a movement" />
+                <PickerField label="Movement" templates={t.movements} usage={t.usage.movement_type} value={value.movement_type} onChange={v => set({ movement_type: v })} addLabel="Choose movement" noun="a movement" />
                 <label htmlFor={caliberId} className="block mt-3 text-[13px] font-bold">Caliber</label>
                 <TextInput
                     id={caliberId}
@@ -181,12 +206,12 @@ export const DiagnosisEditor: React.FC<DiagnosisEditorProps> = ({ value, onChang
             </div>
             <div>
                 <SectionLabel className="mb-2">What I found</SectionLabel>
-                <PickerField label="What I found" templates={t.findings} value={value.diagnosis_summary} onChange={v => set({ diagnosis_summary: v })} addLabel="Add finding" noun="a finding" />
+                <PickerField label="What I found" templates={t.findings} usage={t.usage.diagnosis_summary} value={value.diagnosis_summary} onChange={v => set({ diagnosis_summary: v })} addLabel="Add finding" noun="a finding" />
             </div>
             <div>
                 <SectionLabel className="mb-1">Work needed</SectionLabel>
                 <p className="m-0 mb-2 text-[12px] text-dw-caption">Each one becomes a task with its price.</p>
-                <PickerField label="Work needed" templates={t.work} value={value.recommended_work} onChange={v => set({ recommended_work: v })} addLabel="Add work" noun="work" />
+                <PickerField label="Work needed" templates={t.work} usage={t.usage.recommended_work} value={value.recommended_work} onChange={v => set({ recommended_work: v })} addLabel="Add work" noun="work" />
             </div>
             {canMarkNotRepairable && <div className={cx('rounded-dw-control p-3', value.notRepairable ? 'bg-dw-danger-soft' : 'bg-dw-ground')}>
                 <Toggle
