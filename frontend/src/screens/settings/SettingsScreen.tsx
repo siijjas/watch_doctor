@@ -99,7 +99,7 @@ const Company: React.FC = () => {
     return (
         <>
             <Section title="Shop details" note="Printed on receipts, invoices and labels.">
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                     {text('company_name', 'Company name', { required: true })}
                     {text('company_phone', 'Phone')}
                     {text('company_email', 'Email')}
@@ -153,7 +153,7 @@ const Workflows: React.FC = () => {
             <Section title="Invoice series and print formats" note="One row per kind of invoice.">
                 <div className="flex flex-col gap-4">
                     {rows.map(([label, when, series, format]) => (
-                        <div key={label} className="grid gap-3 md:grid-cols-[1fr_1fr_1fr] items-end pb-4 border-b border-dw-line last:border-b-0 last:pb-0">
+                        <div key={label} className="grid gap-3 grid-cols-1 md:grid-cols-[1fr_1fr_1fr] items-end pb-4 border-b border-dw-line last:border-b-0 last:pb-0">
                             <div><p className="m-0 text-[14px] font-extrabold">{label}</p><p className="m-0 text-[12px] text-dw-caption">{when}</p></div>
                             <Field label="Naming series">{select(series, options.naming_series, 'ERPNext default')}</Field>
                             <Field label="Print format">{select(format, ['Standard', ...options.print_formats.filter(p => p !== 'Standard')], 'Choose…')}</Field>
@@ -162,7 +162,7 @@ const Workflows: React.FC = () => {
                 </div>
             </Section>
             <Section title="Repair order prints" note="The bag label prints on the Zebra at 1.5 × 1 in with a QR code to the order.">
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-3 grid-cols-1 md:grid-cols-2">
                     <Field label="Bag label format">{select('ro_label_print_format', options.repair_order_print_formats, 'Choose…')}</Field>
                     <div className="text-[12px] text-dw-caption self-end">Drop-off receipt prints with “DW RO Repair Order”; the condition report with “DW Product Visible Condition Report”.</div>
                 </div>

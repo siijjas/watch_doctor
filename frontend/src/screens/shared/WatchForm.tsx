@@ -282,7 +282,7 @@ export const WatchForm: React.FC<WatchFormProps> = ({ w, onChange, full = true }
 
     return (
         <div className="flex flex-col gap-5">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
                 <BrandModel w={w} onChange={onChange} />
                 <Field label="Serial no." optional htmlFor={serialId}>
                     <TextInput id={serialId} value={w.serial} onChange={e => onChange({ serial: e.target.value })} autoComplete="off" />

@@ -262,7 +262,7 @@ const EstimateScreen: React.FC<{ name: string }> = ({ name }) => {
                                     <WatchPrices key={i.name} item={i} ctx={ctx} run={run} money={formatCurrency}
                                         included={!!included[i.name!]} onInclude={v => setIncluded(cur => ({ ...cur, [i.name!]: v }))} />
                                 ))}
-                                <Card className="grid gap-4 sm:grid-cols-3">
+                                <Card className="grid gap-4 grid-cols-1 sm:grid-cols-3">
                                     <Field label="Type">
                                         <Segmented<'Estimate' | 'Final'> label="Estimate type" size="sm" value={type} onChange={setType}
                                             options={[{ value: 'Estimate', label: 'Before repair' }, { value: 'Final', label: 'Final' }]} />
@@ -340,7 +340,7 @@ const EstimateScreen: React.FC<{ name: string }> = ({ name }) => {
                                     <StageBadge stage="customer" />
                                 </div>
                                 <p className="m-0 mt-4 mb-2 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">What did the customer say?</p>
-                                <div className="grid gap-2 sm:grid-cols-3">
+                                <div className="grid gap-2 grid-cols-1 sm:grid-cols-3">
                                     <Button variant="success" size="lg" icon="check" busy={busy === `answer:${i.name}`} onClick={() => void answer(i, 'approved').catch(() => undefined)}>Approved, start</Button>
                                     <Button variant="danger" size="lg" icon="x" disabled={!!busy} onClick={() => void answer(i, 'declined').catch(() => undefined)}>Declined, return</Button>
                                     <Button size="lg" icon="edit" disabled={!!busy} onClick={() => void answer(i, 'changes').catch(() => undefined)}>Wants changes</Button>

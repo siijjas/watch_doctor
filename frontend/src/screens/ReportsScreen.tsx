@@ -393,7 +393,7 @@ const ReportsScreen: React.FC<{ report: ReportId }> = ({ report }) => {
                                 </Card>
                             ))}
                         </div>
-                        <div className="grid gap-4 lg:grid-cols-2 items-start">
+                        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2 items-start">
                             {view.blocks.map(b => <BlockView key={b.title} b={b} money={money} />)}
                         </div>
                     </div>

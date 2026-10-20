@@ -63,7 +63,7 @@ const Templates: React.FC = () => {
     if (!list) return <Spinner />;
     if (!list.length) return <EmptyState icon="whatsapp" title="No templates" body="Templates are created when the app is installed. Run bench migrate." />;
     return (
-        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] items-start">
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] items-start">
             <Card pad={false} className="overflow-hidden">
                 {list.map(t => (
                     <button key={t.notification_key} type="button" onClick={() => pick(t)} aria-current={t.notification_key === key ? 'true' : undefined}
@@ -173,7 +173,7 @@ const Summary: React.FC = () => {
         try { const r = await apiService.sendDailySummaryNow(); toast.success(`Sent to ${r.sent_to}`); } catch (e) { toast.error(e instanceof Error ? e.message : 'Not sent.'); } finally { setBusy(null); }
     };
     return (
-        <div className="grid gap-4 lg:grid-cols-2 items-start">
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2 items-start">
             <Card className="flex flex-col gap-4">
                 <Toggle checked={!!v.daily_summary_enabled} onChange={c => setV({ ...v, daily_summary_enabled: c ? 1 : 0 })} label="Daily summary to the owner" description="Sent every morning at 08:00." />
                 <Field label="Send to" hint="WhatsApp number with country code, e.g. +973 3xxx xxxx.">

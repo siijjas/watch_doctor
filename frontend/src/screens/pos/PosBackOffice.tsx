@@ -107,7 +107,7 @@ const Collect: React.FC = () => {
     };
 
     return (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
+        <div className="grid gap-5 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
             <section className="min-w-0">
                 <SearchField value={text} onChange={setText} onSearch={q => void load(q)} placeholder="Invoice no., customer or mobile" label="Find unpaid invoice" />
                 {!rows ? <div className="flex justify-center py-10"><Spinner /></div> : rows.length === 0 ? (
@@ -200,7 +200,7 @@ const Returns: React.FC = () => {
     };
 
     return (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
+        <div className="grid gap-5 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
             <section className="min-w-0">
                 {done && (
                     <div className="mb-3 p-4 rounded-dw-control bg-dw-success-soft text-dw-success">

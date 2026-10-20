@@ -97,7 +97,7 @@ const NewCustomer: React.FC<{ seed: string; onCreated: (c: CustomerHit) => void;
 
     return (
         <div className="mt-3 p-4 rounded-dw-control bg-dw-ground border border-dw-border flex flex-col gap-3 dw-anim-pop">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                 <Field label="Full name"><TextInput value={name} onChange={e => setName(e.target.value)} autoFocus={!name} placeholder="As on the ID" /></Field>
                 <Field label="Mobile">
                     <div className="flex gap-2">
@@ -370,7 +370,7 @@ const Intake: React.FC = () => {
                                 <CustomerStep value={d.customer} onChange={c => set({ customer: c })} />
                                 {triedNext && !d.customer && <p className="m-0 mt-2 text-[13px] font-semibold text-dw-danger" role="alert">Choose or add the customer.</p>}
                             </Card>
-                            <Card className="grid gap-4 sm:grid-cols-2">
+                            <Card className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                                 <Field label="Priority" className="sm:col-span-2">
                                     <Segmented label="Priority" value={d.priority} onChange={v => set({ priority: v })}
                                         options={[{ value: 'Normal', label: 'Normal' }, { value: 'Urgent', label: 'Urgent' }, { value: 'VIP', label: 'VIP' }]} />
