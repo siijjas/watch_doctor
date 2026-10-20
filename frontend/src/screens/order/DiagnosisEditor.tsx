@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useState } from 'react';
 import type { RepairItem } from '../../types';
 import * as apiService from '../../services/apiService';
-import { Button, Chips, SectionLabel, TextInput, Toggle, cx } from '../../design/kit';
+import { Button, Chips, Icon, SectionLabel, Sheet, TextInput, Toggle, cx, useIsPhone } from '../../design/kit';
 
 export interface DiagnosisValue {
     movement_type: string[];
@@ -63,35 +63,27 @@ const loadTemplates = () => {
     return templatesPromise;
 };
 
-/** Template chips plus anything already on the watch that is not a template. */
-const optionsFor = (templates: string[], current: string[]) =>
-    [...templates, ...current.filter(v => !templates.includes(v))].map(v => ({ value: v, label: v }));
-
-const AddOwn: React.FC<{ label: string; onAdd: (v: string) => void }> = ({ label, onAdd }) => {
-    const [v, setV] = useState('');
-    const add = () => { const t = v.trim(); if (t) { onAdd(t); setV(''); } };
-    return (
-        <div className="flex gap-2 mt-2">
-            <TextInput value={v} onChange={e => setV(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} placeholder={label} aria-label={label} className="h-10" />
-            <Button size="sm" className="h-10" disabled={!v.trim()} onClick={add}>Add</Button>
-        </div>
-    );
-};
-
 /**
- * Multi-select chips for long template lists: the chosen ones, a few more,
- * a filter box, and "Show all". Typing a value that is not a template adds it.
+ * The chosen values as removable chips plus an Add button; the full template
+ * list opens in a sheet with a search box, so the page stays short.
+ * Typing a value that is not a template adds it.
  */
-const ChipPicker: React.FC<{ label: string; templates: string[]; value: string[]; onChange: (v: string[]) => void; collapsed: boolean; addLabel: string }> = ({
-    label, templates, value, onChange, collapsed, addLabel,
+const PickerField: React.FC<{ label: string; templates: string[]; value: string[]; onChange: (v: string[]) => void; addLabel: string; noun: string }> = ({
+    label, templates, value, onChange, addLabel, noun,
 }) => {
+    const [open, setOpen] = useState(false);
     const [q, setQ] = useState('');
-    const [all, setAll] = useState(!collapsed);
-    const options = optionsFor(templates, value);
+    // Fixed while the sheet is open so chips do not jump as they are tapped: chosen first, then the rest.
+    const [order, setOrder] = useState<string[]>([]);
+    const phone = useIsPhone();
+    const show = () => {
+        setOrder([...value, ...templates.filter(v => !value.includes(v))]);
+        setQ('');
+        setOpen(true);
+    };
     const needle = q.trim().toLowerCase();
-    const shown = needle
-        ? options.filter(o => o.value.toLowerCase().includes(needle))
-        : all ? options : options.filter((o, i) => i < 10 || value.includes(o.value));
+    const options = [...order, ...value.filter(v => !order.includes(v))].map(v => ({ value: v, label: v }));
+    const shown = needle ? options.filter(o => o.value.toLowerCase().includes(needle)) : options;
     const exact = options.some(o => o.value.toLowerCase() === needle);
     const add = () => {
         const t = q.trim();
@@ -102,38 +94,57 @@ const ChipPicker: React.FC<{ label: string; templates: string[]; value: string[]
         setQ('');
     };
     return (
-        <div>
-            {options.length > 12 && (
-                <div className="flex gap-2 mb-2">
-                    <TextInput value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} placeholder={`Filter or ${addLabel.toLowerCase()}`} aria-label={`Filter ${label}`} className="h-10" />
+        <>
+            <div className="flex flex-wrap gap-2">
+                {value.map(v => (
+                    <span key={v} className="inline-flex items-center gap-1 h-9 pl-3.5 pr-1 rounded-full bg-dw-text text-white text-[13px] font-bold max-w-full">
+                        <span className="truncate">{v}</span>
+                        <button type="button" onClick={() => onChange(value.filter(x => x !== v))} aria-label={`Remove ${v}`} className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center hover:bg-white/15">
+                            <Icon name="x" size={14} strokeWidth={2.4} />
+                        </button>
+                    </span>
+                ))}
+                <button type="button" onClick={show} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full border border-dashed border-dw-border-strong text-[13px] font-bold text-dw-text hover:bg-dw-ground">
+                    <Icon name="plus" size={14} strokeWidth={2.4} />{value.length ? 'Add' : addLabel}
+                </button>
+            </div>
+            <Sheet
+                open={open}
+                onClose={() => setOpen(false)}
+                title={label}
+                width={620}
+                footer={<>
+                    <span className="mr-auto self-center text-[13px] font-bold text-dw-caption">{value.length ? `${value.length} chosen` : 'Tap to choose'}</span>
+                    <Button variant="primary" onClick={() => setOpen(false)}>Done</Button>
+                </>}
+            >
+                <div className="sticky top-0 z-[1] -mx-5 px-5 pb-3 bg-dw-surface flex gap-2">
+                    <TextInput value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} placeholder={`Search or add ${noun}`} aria-label={`Search ${label}`} className="h-10" />
                     {needle && !exact && <Button size="sm" className="h-10" onClick={add}>Add</Button>}
                 </div>
-            )}
-            <Chips multiple label={label} options={shown} value={value} onChange={v => {
-                // Chips only reports the shown subset; keep chosen values that are filtered out.
-                const hidden = value.filter(x => !shown.some(o => o.value === x));
-                onChange([...hidden, ...v.filter(x => !hidden.includes(x))]);
-            }} />
-            {!needle && options.length > shown.length && (
-                <button type="button" onClick={() => setAll(true)} className="mt-2 text-[13px] font-bold text-dw-accent">Show all {options.length}</button>
-            )}
-            {needle && shown.length === 0 && <p className="m-0 text-[13px] text-dw-caption">Nothing matches. Press Add to use “{q.trim()}”.</p>}
-            {options.length <= 12 && <AddOwn label={addLabel} onAdd={v => onChange(value.includes(v) ? value : [...value, v])} />}
-        </div>
+                {/* On phones, land on the list so the keyboard does not cover it. */}
+                <div tabIndex={-1} data-autofocus={phone ? '' : undefined} className="focus:outline-none">
+                    <Chips multiple label={label} options={shown} value={value} onChange={v => {
+                        // Chips only reports the shown subset; keep chosen values that are filtered out.
+                        const hidden = value.filter(x => !shown.some(o => o.value === x));
+                        onChange([...hidden, ...v.filter(x => !hidden.includes(x))]);
+                    }} />
+                    {needle && shown.length === 0 && <p className="m-0 text-[13px] text-dw-caption">Nothing matches. Press Add to use “{q.trim()}”.</p>}
+                </div>
+            </Sheet>
+        </>
     );
 };
 
 interface DiagnosisEditorProps {
     value: DiagnosisValue;
     onChange: (v: DiagnosisValue) => void;
-    /** Hide the long finding list behind "Show all" on phones. */
-    compact?: boolean;
     /** False once the watch is already going back; only the desk moves it on from there. */
     canMarkNotRepairable?: boolean;
 }
 
 /** Movement, findings and work needed as chips (canvas M3). Work needed becomes tasks on save. */
-export const DiagnosisEditor: React.FC<DiagnosisEditorProps> = ({ value, onChange, compact, canMarkNotRepairable = true }) => {
+export const DiagnosisEditor: React.FC<DiagnosisEditorProps> = ({ value, onChange, canMarkNotRepairable = true }) => {
     const [t, setT] = useState<Templates | null>(null);
     const [failed, setFailed] = useState(false);
     // Typed as text so "4R35, NH" can be entered; the list is derived from it.
@@ -156,7 +167,7 @@ export const DiagnosisEditor: React.FC<DiagnosisEditorProps> = ({ value, onChang
         <div className="flex flex-col gap-4">
             <div>
                 <SectionLabel className="mb-2">Movement</SectionLabel>
-                <Chips multiple label="Movement" options={optionsFor(t.movements, value.movement_type)} value={value.movement_type} onChange={v => set({ movement_type: v })} />
+                <PickerField label="Movement" templates={t.movements} value={value.movement_type} onChange={v => set({ movement_type: v })} addLabel="Choose movement" noun="a movement" />
                 <label htmlFor={caliberId} className="block mt-3 text-[13px] font-bold">Caliber</label>
                 <TextInput
                     id={caliberId}
@@ -170,12 +181,12 @@ export const DiagnosisEditor: React.FC<DiagnosisEditorProps> = ({ value, onChang
             </div>
             <div>
                 <SectionLabel className="mb-2">What I found</SectionLabel>
-                <ChipPicker label="Findings" templates={t.findings} value={value.diagnosis_summary} onChange={v => set({ diagnosis_summary: v })} collapsed={!!compact} addLabel="Add something else" />
+                <PickerField label="What I found" templates={t.findings} value={value.diagnosis_summary} onChange={v => set({ diagnosis_summary: v })} addLabel="Add finding" noun="a finding" />
             </div>
             <div>
                 <SectionLabel className="mb-1">Work needed</SectionLabel>
                 <p className="m-0 mb-2 text-[12px] text-dw-caption">Each one becomes a task with its price.</p>
-                <ChipPicker label="Work needed" templates={t.work} value={value.recommended_work} onChange={v => set({ recommended_work: v })} collapsed addLabel="Add other work" />
+                <PickerField label="Work needed" templates={t.work} value={value.recommended_work} onChange={v => set({ recommended_work: v })} addLabel="Add work" noun="work" />
             </div>
             {canMarkNotRepairable && <div className={cx('rounded-dw-control p-3', value.notRepairable ? 'bg-dw-danger-soft' : 'bg-dw-ground')}>
                 <Toggle

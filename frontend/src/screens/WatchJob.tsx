@@ -126,7 +126,7 @@ const WatchJob: React.FC<{ orderName: string; itemName: string }> = ({ orderName
                 />
                 <Card>
                     {editable
-                        ? <DiagnosisEditor value={diag} onChange={changeDiag} compact canMarkNotRepairable={stage !== 'return'} />
+                        ? <DiagnosisEditor value={diag} onChange={changeDiag} canMarkNotRepairable={stage !== 'return'} />
                         : <p className="m-0 text-[13px] text-dw-caption">This order is closed.</p>}
                 </Card>
             </section>

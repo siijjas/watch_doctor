@@ -45,10 +45,10 @@ export const Sheet: React.FC<SheetProps> = ({ open, onClose, title, description,
         document.body.style.overflow = 'hidden';
         const t = window.setTimeout(() => {
             // Prefer the first control in the body over the header's close button.
-            const el = panel.current?.querySelector<HTMLElement>('[autofocus]')
+            const el = panel.current?.querySelector<HTMLElement>('[autofocus],[data-autofocus]')
                 ?? panel.current?.querySelector<HTMLElement>(`[data-sheet-body] :is(${FOCUSABLE})`)
                 ?? panel.current?.querySelector<HTMLElement>(FOCUSABLE);
-            (el ?? panel.current)?.focus();
+            (el ?? panel.current)?.focus({ preventScroll: true });
         }, 0);
         return () => {
             window.clearTimeout(t);
