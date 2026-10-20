@@ -1,8 +1,9 @@
 /**
  * New repair order (canvas D7 / M6). One intake for every new order:
- * customer and order details, the watches, then review and print. Prints
- * the bag label (with QR) and drop-off receipt on create. Editing an
- * existing order happens on the order page.
+ * customer and order details, the watches, then review. Once the order is
+ * created, the bag label (with QR), drop-off receipt and WhatsApp "order
+ * received" are offered there. Editing an existing order happens on the
+ * order page.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { RepairOrder } from '../types';
@@ -14,7 +15,7 @@ import {
 } from '../services/deskApi';
 import {
     Button, Card, DatePicker, Field, Icon, IconButton, SearchField, Segmented, SelectInput, Spinner,
-    TextInput, Toggle, addDays, cx, formatDay, toISODate, useToast,
+    TextInput, addDays, cx, formatDay, toISODate, useToast,
 } from '../design/kit';
 import { WatchForm, emptyWatch, watchReady, type WatchDraft } from './shared/WatchForm';
 import { summariseOrder } from '../design/stages';
@@ -191,8 +192,6 @@ const CustomerStep: React.FC<{ value: CustomerHit | null; onChange: (c: Customer
 
 // ---------------------------------------------------------------- Screen
 
-const PRINT = { label: 'Print bag label with QR', receipt: 'Print drop-off receipt to sign' } as const;
-
 const Intake: React.FC = () => {
     const toast = useToast();
     const { userInfo } = useAuth();
@@ -201,8 +200,7 @@ const Intake: React.FC = () => {
     const [showRestored, setShowRestored] = useState(!!restored.current && !isBlank(restored.current));
     const [saving, setSaving] = useState(false);
     const [created, setCreated] = useState<{ name: string; watches: number } | null>(null);
-    const [prints, setPrints] = useState({ label: true, receipt: true });
-    const [whatsapp, setWhatsapp] = useState(false);
+    const [whatsapp, setWhatsapp] = useState<'idle' | 'sending' | 'sent'>('idle');
     const [whatsappOn, setWhatsappOn] = useState(false);
     const [history, setHistory] = useState<HistoryOrder[] | null>(null);
     const [triedNext, setTriedNext] = useState(false);
@@ -232,27 +230,30 @@ const Intake: React.FC = () => {
         window.scrollTo({ top: 0 });
     };
 
-    const openPrints = useCallback((orderName: string, wins: Array<Window | null>) => {
-        const urls: string[] = [];
-        if (prints.label) urls.push('label');
-        if (prints.receipt) urls.push('receipt');
+    const print = useCallback((orderName: string, kind: 'label' | 'receipt') => {
+        // Open the window inside the click so pop-up blockers allow it.
+        const w = window.open('about:blank', '_blank');
         void (async () => {
-            let labelFormat = 'DW RO Bag Label';
-            try { labelFormat = (await apiService.getRepairOrderLabelPrintFormat()).print_format || labelFormat; } catch { /* default */ }
-            urls.forEach((kind, i) => {
-                const format = kind === 'label' ? labelFormat : 'DW RO Repair Order';
-                const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(orderName)}&format=${encodeURIComponent(format)}&no_letterhead=1&trigger_print=1`;
-                const w = wins[i];
-                if (w && !w.closed) w.location.href = url;
-                else if (!window.open(url, '_blank')) toast.error('The browser blocked the print window. Use Reprint below.');
-            });
+            let format = 'DW RO Repair Order';
+            if (kind === 'label') {
+                format = 'DW RO Bag Label';
+                try { format = (await apiService.getRepairOrderLabelPrintFormat()).print_format || format; } catch { /* default */ }
+            }
+            const url = `/printview?doctype=DW%20Repair%20Order&name=${encodeURIComponent(orderName)}&format=${encodeURIComponent(format)}&no_letterhead=1&trigger_print=1`;
+            if (w && !w.closed) w.location.href = url;
+            else if (!window.open(url, '_blank')) toast.error('The browser blocked the print window. Allow pop-ups for this site.');
         })();
-    }, [prints, toast]);
+    }, [toast]);
+
+    const sendWhatsapp = (orderName: string) => {
+        setWhatsapp('sending');
+        apiService.notifyCustomer(orderName)
+            .then(() => { setWhatsapp('sent'); toast.success('“Order received” sent on WhatsApp'); })
+            .catch(e => { setWhatsapp('idle'); toast.error(e instanceof Error ? `WhatsApp not sent: ${e.message}` : 'WhatsApp not sent.'); });
+    };
 
     const create = async () => {
         if (step1Error || step2Error) { go(step1Error ? 1 : 2); return; }
-        // Open print windows now, inside the click, so pop-up blockers allow them.
-        const wins = [prints.label, prints.receipt].filter(Boolean).map(() => window.open('about:blank', '_blank'));
         setSaving(true);
         try {
             const order = {
@@ -285,15 +286,10 @@ const Intake: React.FC = () => {
             } as unknown as RepairOrder;
             const saved = await apiService.saveRepairOrder(order);
             writeDraft(null);
+            setWhatsapp('idle');
             setCreated({ name: saved.name, watches: d.watches.length });
-            openPrints(saved.name, wins);
-            if (whatsapp) {
-                apiService.notifyCustomer(saved.name)
-                    .then(() => toast.success('“Order received” sent on WhatsApp'))
-                    .catch(e => toast.error(e instanceof Error ? `WhatsApp not sent: ${e.message}` : 'WhatsApp not sent.'));
-            }
+            window.scrollTo({ top: 0 });
         } catch (e) {
-            wins.forEach(w => w?.close());
             toast.error(e instanceof Error ? e.message : 'The order was not saved. Check the details and try again.');
         } finally {
             setSaving(false);
@@ -310,22 +306,26 @@ const Intake: React.FC = () => {
                     <h1 className="m-0 mt-5 text-[22px] font-extrabold">Order {created.name} created</h1>
                     <p className="m-0 mt-1 text-[14px] font-semibold text-dw-caption">
                         {created.watches} {created.watches === 1 ? 'watch is' : 'watches are'} in the Received queue, no technician yet.
-                        {(prints.label || prints.receipt) && ' Printing now.'}
                     </p>
-                    <div className="mt-7 flex flex-col sm:flex-row gap-2 justify-center">
+                    <div className="mt-6 grid gap-2 sm:grid-cols-2 text-left">
+                        <Button size="lg" icon="print" onClick={() => print(created.name, 'label')}>Print bag label</Button>
+                        <Button size="lg" icon="print" onClick={() => print(created.name, 'receipt')}>Print drop-off receipt</Button>
+                        {whatsappOn && (
+                            <Button size="lg" icon={whatsapp === 'sent' ? 'check' : 'whatsapp'} busy={whatsapp === 'sending'} disabled={whatsapp === 'sent'} onClick={() => sendWhatsapp(created.name)} className="sm:col-span-2">
+                                {whatsapp === 'sent' ? 'WhatsApp “order received” sent' : 'Send WhatsApp “order received”'}
+                            </Button>
+                        )}
+                    </div>
+                    <div className="mt-6 pt-6 border-t border-dw-line flex flex-col sm:flex-row gap-2 justify-center">
                         <Button variant="primary" size="lg" onClick={() => navigate(buildPath('orders', created.name), { replace: true })}>Open order · assign technician</Button>
                         <Button size="lg" onClick={restart}>Next customer</Button>
-                    </div>
-                    <div className="mt-3 flex gap-2 justify-center">
-                        <Button size="sm" variant="ghost" icon="print" onClick={() => { setPrints({ label: true, receipt: false }); openPrints(created.name, []); }}>Reprint label</Button>
-                        <Button size="sm" variant="ghost" icon="print" onClick={() => { setPrints({ label: false, receipt: true }); openPrints(created.name, []); }}>Reprint receipt</Button>
                     </div>
                 </Card>
             </div>
         );
     }
 
-    const steps: Array<{ n: Step; label: string }> = [{ n: 1, label: 'Customer & order' }, { n: 2, label: 'Watches' }, { n: 3, label: 'Review & print' }];
+    const steps: Array<{ n: Step; label: string }> = [{ n: 1, label: 'Customer & order' }, { n: 2, label: 'Watches' }, { n: 3, label: 'Review' }];
 
     return (
         <div className="max-w-[1180px] mx-auto pb-24 lg:pb-0">
@@ -431,12 +431,6 @@ const Intake: React.FC = () => {
                                     </Card>
                                 );
                             })}
-                            <Card className="flex flex-col gap-3">
-                                <h2 className="m-0 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">On create</h2>
-                                <Toggle checked={prints.label} onChange={v => setPrints(p => ({ ...p, label: v }))} label={PRINT.label} description="1.5 × 1 in, for the Zebra label printer" />
-                                <Toggle checked={prints.receipt} onChange={v => setPrints(p => ({ ...p, receipt: v }))} label={PRINT.receipt} description="Lists the watches and their condition on arrival" />
-                                {whatsappOn && <Toggle checked={whatsapp} onChange={setWhatsapp} label="WhatsApp “order received”" description="Uses the order-received template" />}
-                            </Card>
                         </>
                     )}
 
@@ -445,7 +439,7 @@ const Intake: React.FC = () => {
                         {d.step > 1 && <Button size="lg" onClick={() => go((d.step - 1) as Step)} className="flex-1 lg:flex-none">Back</Button>}
                         {d.step < 3
                             ? <Button size="lg" variant="primary" onClick={() => go((d.step + 1) as Step)} className="flex-[2] lg:flex-none">Continue</Button>
-                            : <Button size="lg" variant="primary" icon="print" busy={saving} onClick={() => void create()} className="flex-[2] lg:flex-none">Create order{prints.label || prints.receipt ? ' & print' : ''}</Button>}
+                            : <Button size="lg" variant="primary" busy={saving} onClick={() => void create()} className="flex-[2] lg:flex-none">Create order</Button>}
                     </div>
                     {triedNext && (step1Error || step2Error) && <p className="m-0 text-[13px] font-semibold text-dw-danger text-right" role="alert">{d.step === 1 ? step1Error : step2Error}</p>}
                 </section>
