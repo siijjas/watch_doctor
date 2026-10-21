@@ -23,6 +23,39 @@ type Run = (key: string, fn: () => Promise<unknown>, success?: string) => Promis
 
 const NOTES = ['Price may change if more damage is found', 'Parts to be ordered, 5–7 days', 'Original parts only'];
 
+type Preview = apiService.EstimateNotificationPreview;
+
+/** The WhatsApp message each watch would get, rebuilt whenever `version` changes. */
+function useMessagePreviews(order: string, items: string[], enabled: boolean, version: unknown): Preview[] | null {
+    const [previews, setPreviews] = useState<Preview[] | null>(null);
+    const key = items.join(',');
+    useEffect(() => {
+        if (!enabled || !key) { setPreviews(null); return; }
+        let live = true;
+        Promise.all(key.split(',').map(it => apiService.previewEstimateNotification(order, it)))
+            .then(r => { if (live) setPreviews(r); })
+            .catch(() => { if (live) setPreviews([]); });
+        return () => { live = false; };
+    }, [order, key, enabled, version]);
+    return previews;
+}
+
+const MessagePreviews: React.FC<{ previews: Preview[] | null }> = ({ previews }) => {
+    if (!previews) return <Spinner />;
+    if (!previews.length) return <p className="m-0 text-[13px] font-semibold text-dw-danger">The message could not be built. Check the WhatsApp template in Settings.</p>;
+    return (
+        <div className="flex flex-col gap-3">
+            {previews.map((p, i) => (
+                <div key={i}>
+                    {previews.length > 1 && <p className="m-0 mb-1 text-[12px] font-bold text-dw-caption">{p.watch_label}</p>}
+                    <div className="rounded-2xl rounded-tl-none px-4 py-3 text-[14px] leading-relaxed whitespace-pre-wrap bg-[#DCF8C6] text-[#111B21]">{p.message_body}</div>
+                </div>
+            ))}
+            <p className="m-0 text-[12px] font-semibold text-dw-caption">To {previews[0].phone_display || 'no mobile on file'}{previews.length > 1 ? ` · one message per watch, ${previews.length} in all` : ''}</p>
+        </div>
+    );
+};
+
 const WatchPrices: React.FC<{ item: RepairItem; ctx: OrderContext; run: Run; included: boolean; onInclude: (v: boolean) => void; money: (n: number) => string }> = ({ item, ctx, run, included, onInclude, money }) => {
     const [taskOpen, setTaskOpen] = useState(false);
     const [partOpen, setPartOpen] = useState(false);
@@ -129,7 +162,6 @@ const EstimateScreen: React.FC<{ name: string }> = ({ name }) => {
     const [note, setNote] = useState('');
     const [creating, setCreating] = useState(false);
     const [made, setMade] = useState<{ quotation: string; total: number; items: string[] } | null>(null);
-    const [preview, setPreview] = useState<apiService.EstimateNotificationPreview | null>(null);
     const [sending, setSending] = useState<'wa' | 'told' | null>(null);
     const [outcome, setOutcome] = useState<'approved' | 'declined' | 'changes' | null>(null);
 
@@ -147,10 +179,9 @@ const EstimateScreen: React.FC<{ name: string }> = ({ name }) => {
         setPhase(toQuote.length === 0 && waiting.length > 0 ? 'answer' : 'review');
     }, [order, phase, quotable, waiting]);
 
-    useEffect(() => {
-        if (phase !== 'send' || !made || !ctx?.whatsapp_enabled) return;
-        apiService.previewEstimateNotification(name, made.items[0]).then(setPreview).catch(() => setPreview(null));
-    }, [phase, made, ctx?.whatsapp_enabled, name]);
+    const chosenNames = useMemo(() => quotable.filter(i => included[i.name!]).map(i => i.name!), [quotable, included]);
+    const previewItems = phase === 'send' && made ? made.items : phase === 'review' ? chosenNames : [];
+    const previews = useMessagePreviews(name, previewItems, !!ctx?.whatsapp_enabled, order);
 
     if (error && !data) return <Card className="max-w-md mx-auto mt-10"><EmptyState icon="alert" title="Could not open this order" body={error} /></Card>;
     if (!order || !ctx || !phase) return <div className="flex justify-center py-16"><Spinner size={28} /></div>;
@@ -259,6 +290,12 @@ const EstimateScreen: React.FC<{ name: string }> = ({ name }) => {
                                         <Chips label="Common notes" options={NOTES.map(n => ({ value: n, label: n }))} value={NOTES.includes(note) ? note : null} onChange={v => setNote(v || '')} allowNone className="mt-2" />
                                     </Field>
                                 </Card>
+                                {ctx.whatsapp_enabled && chosen.length > 0 && (
+                                    <Card>
+                                        <h2 className="m-0 mb-3 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">WhatsApp message the customer will get</h2>
+                                        <MessagePreviews previews={previews} />
+                                    </Card>
+                                )}
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <p className="m-0 text-[13px] font-semibold text-dw-caption max-w-[460px]">Making the estimate does not message the customer. You choose how to send it next.</p>
                                     <div className="flex gap-2">
@@ -290,19 +327,12 @@ const EstimateScreen: React.FC<{ name: string }> = ({ name }) => {
                                 <h2 className="m-0 mb-3 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">Tell the customer</h2>
                                 <div className="flex flex-col md:flex-row gap-4 items-start">
                                     {ctx.whatsapp_enabled ? (
-                                        <div className="flex-1 min-w-0">
-                                            {preview ? (
-                                                <>
-                                                    <div className="rounded-2xl rounded-tl-none px-4 py-3 text-[14px] leading-relaxed whitespace-pre-wrap bg-[#DCF8C6]">{preview.message_body}</div>
-                                                    <p className="m-0 mt-1.5 text-[12px] font-semibold text-dw-caption">To {preview.phone_display}{made.items.length > 1 ? ` · one message per watch, ${made.items.length} in all` : ''}</p>
-                                                </>
-                                            ) : <Spinner />}
-                                        </div>
+                                        <div className="flex-1 min-w-0"><MessagePreviews previews={previews} /></div>
                                     ) : (
                                         <p className="flex-1 m-0 text-[14px] text-dw-body">WhatsApp is not switched on. Call or message the customer, then mark it as told.</p>
                                     )}
                                     <div className="flex flex-col gap-2 w-full md:w-[220px]">
-                                        {ctx.whatsapp_enabled && <Button variant="primary" icon="whatsapp" busy={sending === 'wa'} disabled={!!sending || !preview} onClick={() => void markSent('wa')}>Send on WhatsApp</Button>}
+                                        {ctx.whatsapp_enabled && <Button variant="primary" icon="whatsapp" busy={sending === 'wa'} disabled={!!sending || !previews?.length} onClick={() => void markSent('wa')}>Send on WhatsApp</Button>}
                                         {ctx.customer?.mobile && <a href={`tel:${ctx.customer.mobile.replace(/\s/g, '')}`} className="inline-flex items-center justify-center gap-2 h-[42px] rounded-dw-control border border-dw-border-strong text-[14px] font-bold text-dw-text no-underline hover:bg-dw-ground"><Icon name="phone" size={18} />Call {ctx.customer.mobile}</a>}
                                         <Button busy={sending === 'told'} disabled={!!sending} onClick={() => void markSent('told')}>Told them, mark as sent</Button>
                                         <Button variant="ghost" disabled={!!sending} onClick={() => navigate(buildPath('orders', order.name))}>Send later</Button>
