@@ -177,8 +177,8 @@ export const WatchCard: React.FC<WatchCardProps> = ({ item, index, count, order,
                                 <DiagnosisRead item={item} ctx={ctx} onEdit={editable ? () => setDiagOpen(true) : undefined} />
                             </div>
                             <div className="flex flex-col gap-5">
-                                <TasksSection item={item} ctx={ctx} run={run} busy={busy} desk />
-                                <PartsSection item={item} ctx={ctx} run={run} busy={busy} />
+                                <TasksSection item={item} ctx={ctx} run={run} busy={busy} desk canEditPrice={editable} />
+                                <PartsSection item={item} ctx={ctx} run={run} busy={busy} canEditPrice={editable} />
                                 {editable && !finished && <PartsHold item={item} run={run} busy={busy} desk />}
                                 <NoteSection item={item} run={run} busy={busy} />
                             </div>

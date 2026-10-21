@@ -8,8 +8,8 @@ import type { OrderContext } from '../../services/deskApi';
 import * as deskApi from '../../services/deskApi';
 import * as apiService from '../../services/apiService';
 import {
-    Button, Chips, DatePicker, Icon, IconButton, PhotoRow, SearchField, SelectInput, Sheet,
-    Spinner, TextArea, TextInput, Toggle, addDays, cx, formatDay, toISODate, useToast, type Photo,
+    Button, Chips, DatePicker, Icon, IconButton, MoneyInput, PhotoRow, SearchField, SelectInput, Sheet,
+    Spinner, TextArea, TextInput, Toggle, addDays, cx, formatDay, roundMoney, toISODate, useToast, type Photo,
 } from '../../design/kit';
 import { partPrice, taskName, taskPrice } from './useOrder';
 
@@ -26,6 +26,20 @@ export const LinkButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>>
     <button type="button" className={cx('inline-flex items-center gap-1 h-8 px-1 text-[13px] font-bold text-dw-accent hover:underline disabled:opacity-50', className)} {...rest} />
 );
 
+/** A price that saves when the field is left, not on every key. */
+export const PriceCell: React.FC<{ value: number; label: string; onCommit: (v: number | null) => Promise<void> }> = ({ value, label, onCommit }) => {
+    const [v, setV] = useState<number | null>(value);
+    useEffect(() => { setV(value); }, [value]);
+    return (
+        <div
+            className="w-[120px] ml-auto shrink-0"
+            onBlur={() => { if (v !== null && roundMoney(v) !== roundMoney(value)) void onCommit(v).catch(() => setV(value)); }}
+        >
+            <MoneyInput value={v} onChange={setV} currency="" aria-label={label} className="[&_input]:h-9" />
+        </div>
+    );
+};
+
 // ---------------------------------------------------------------- Tasks
 
 interface TasksProps {
@@ -38,10 +52,12 @@ interface TasksProps {
     /** Why ticking is not allowed yet, e.g. waiting for approval. */
     lockedReason?: string;
     showPrices?: boolean;
+    /** Front desk on an open watch: prices are typed in place. */
+    canEditPrice?: boolean;
     large?: boolean;
 }
 
-export const TasksSection: React.FC<TasksProps> = ({ item, ctx, run, busy, desk, lockedReason, showPrices = true, large }) => {
+export const TasksSection: React.FC<TasksProps> = ({ item, ctx, run, busy, desk, lockedReason, showPrices = true, canEditPrice, large }) => {
     const [adding, setAdding] = useState(false);
     const tasks = item.tasks || [];
     const done = tasks.filter(t => t.status === 'Completed').length;
@@ -84,7 +100,9 @@ export const TasksSection: React.FC<TasksProps> = ({ item, ctx, run, busy, desk,
                                         {t.status === 'In Progress' && <span className="ml-2 text-[11px] font-bold text-dw-accent no-underline">started</span>}
                                     </span>
                                 </button>
-                                {showPrices && <span className="text-[14px] font-bold tabular-nums">{taskPrice(t, ctx).toFixed(3)}</span>}
+                                {showPrices && (canEditPrice
+                                    ? <PriceCell value={taskPrice(t, ctx)} label={`Price of ${taskName(t.service, ctx)}`} onCommit={v => run(`rate:${name}:${t.service}`, () => deskApi.setTaskRate(name, t.service, v), 'Price saved')} />
+                                    : <span className="text-[14px] font-bold tabular-nums">{taskPrice(t, ctx).toFixed(3)}</span>)}
                                 {desk && (t as { is_manual?: number }).is_manual === 1 && t.status === 'Pending' && (
                                     <IconButton size="sm" variant="ghost" icon="x" label={`Remove ${taskName(t.service, ctx)}`} onClick={() => void run(`rmtask:${t.service}`, () => deskApi.removeTask(name, t.service), 'Task removed').catch(() => undefined)} />
                                 )}
@@ -138,7 +156,7 @@ export const TaskPicker: React.FC<{ open: boolean; onClose: () => void; ctx: Ord
 
 // ---------------------------------------------------------------- Parts
 
-export const PartsSection: React.FC<{ item: RepairItem; ctx: OrderContext; run: Run; busy: string | null; showPrices?: boolean }> = ({ item, ctx, run, busy, showPrices = true }) => {
+export const PartsSection: React.FC<{ item: RepairItem; ctx: OrderContext; run: Run; busy: string | null; showPrices?: boolean; canEditPrice?: boolean }> = ({ item, ctx, run, busy, showPrices = true, canEditPrice }) => {
     const [open, setOpen] = useState(false);
     const parts = item.parts_used || [];
     const name = item.name!;
@@ -153,7 +171,10 @@ export const PartsSection: React.FC<{ item: RepairItem; ctx: OrderContext; run: 
                             {ctx.parts[p.part]?.item_name || p.part_name || p.part}
                             <span className="text-dw-caption font-semibold"> × {p.quantity}</span>
                         </span>
-                        {showPrices && <span className="text-[14px] font-bold tabular-nums">{partPrice(p, ctx).toFixed(3)}</span>}
+                        {showPrices && (canEditPrice && p.name
+                            ? <PriceCell value={partPrice(p, ctx)} label={`Price of ${ctx.parts[p.part]?.item_name || p.part}`}
+                                onCommit={v => run(`prate:${p.name}`, () => deskApi.setPartLine(name, p.name!, { rate: v == null ? null : roundMoney(v / (p.quantity || 1)) }), 'Price saved')} />
+                            : <span className="text-[14px] font-bold tabular-nums">{partPrice(p, ctx).toFixed(3)}</span>)}
                         {p.name && (
                             <IconButton size="sm" variant="ghost" icon="x" label="Remove part" disabled={busy === `rmpart:${p.name}`} onClick={() => void run(`rmpart:${p.name}`, () => deskApi.removePart(name, p.name!), 'Part removed').catch(() => undefined)} />
                         )}

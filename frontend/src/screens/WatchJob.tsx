@@ -132,8 +132,8 @@ const WatchJob: React.FC<{ orderName: string; itemName: string }> = ({ orderName
             </section>
 
             <Card className="mt-5 flex flex-col gap-5">
-                <TasksSection item={item} ctx={ctx} run={run} busy={busy} desk={desk} lockedReason={editable ? lock : LOCK.collected} large />
-                <PartsSection item={item} ctx={ctx} run={run} busy={busy} />
+                <TasksSection item={item} ctx={ctx} run={run} busy={busy} desk={desk} lockedReason={editable ? lock : LOCK.collected} canEditPrice={desk && editable} large />
+                <PartsSection item={item} ctx={ctx} run={run} busy={busy} canEditPrice={desk && editable} />
                 {editable && stage !== 'ready' && stage !== 'return' && <PartsHold item={item} run={run} busy={busy} desk={desk} />}
                 <NoteSection item={item} run={run} busy={busy} title="Note for the desk · staff only" />
             </Card>

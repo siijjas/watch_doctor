@@ -8,34 +8,20 @@ import type { RepairItem } from '../types';
 import { goBack, navigate, path as buildPath } from '../router';
 import { useAppConfig } from '../context/AppConfigContext';
 import {
-    Button, Card, Chips, DatePicker, EmptyState, Field, Icon, IconButton, MoneyInput, Segmented, Spinner, StageBadge,
+    Button, Card, Chips, DatePicker, EmptyState, Field, Icon, IconButton, Segmented, Spinner, StageBadge,
     TextInput, Toggle, addDays, cx, formatDay, roundMoney, toISODate, useToast,
 } from '../design/kit';
 import * as apiService from '../services/apiService';
 import * as deskApi from '../services/deskApi';
 import type { OrderContext } from '../services/deskApi';
 import { useOrder, partPrice, taskName, taskPrice, watchPrice, watchStage, watchTitle } from './order/useOrder';
-import { PartPicker, TaskPicker } from './order/sections';
+import { PartPicker, PriceCell, TaskPicker } from './order/sections';
 import { stageOfWatch } from '../design/stages';
 
 type Phase = 'review' | 'send' | 'answer' | 'done';
 type Run = (key: string, fn: () => Promise<unknown>, success?: string) => Promise<void>;
 
 const NOTES = ['Price may change if more damage is found', 'Parts to be ordered, 5–7 days', 'Original parts only'];
-
-/** A price that saves when the field is left, not on every key. */
-const PriceCell: React.FC<{ value: number; label: string; onCommit: (v: number | null) => Promise<void> }> = ({ value, label, onCommit }) => {
-    const [v, setV] = useState<number | null>(value);
-    useEffect(() => { setV(value); }, [value]);
-    return (
-        <div
-            className="w-[120px] ml-auto"
-            onBlur={() => { if (v !== null && roundMoney(v) !== roundMoney(value)) void onCommit(v).catch(() => setV(value)); }}
-        >
-            <MoneyInput value={v} onChange={setV} currency="" aria-label={label} className="[&_input]:h-9" />
-        </div>
-    );
-};
 
 const WatchPrices: React.FC<{ item: RepairItem; ctx: OrderContext; run: Run; included: boolean; onInclude: (v: boolean) => void; money: (n: number) => string }> = ({ item, ctx, run, included, onInclude, money }) => {
     const [taskOpen, setTaskOpen] = useState(false);
