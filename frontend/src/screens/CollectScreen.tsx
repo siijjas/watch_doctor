@@ -17,7 +17,7 @@ import * as apiService from '../services/apiService';
 import * as deskApi from '../services/deskApi';
 import { useOrder, watchPrice, watchStage, watchTitle } from './order/useOrder';
 
-const NOTES = ['6 months warranty', '1 year warranty', 'No water-resistance guarantee'];
+const NOTES = ['6 months warranty', '1 year warranty', 'No water-resistance guarantee', 'Warranty recheck, no charge'];
 
 const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ name, preselect }) => {
     const { formatCurrency } = useAppConfig();
@@ -84,7 +84,9 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
 
     const total = preview ? preview.grand_total : roundMoney(subtotal - discount);
     const custName = ctx.customer?.customer_name || order.customer;
-    const payErr = chosen.length ? paymentError(pay, total) : null;
+    // Warranty rechecks (or a full discount) cost nothing: no payment to take.
+    const noCharge = !!preview && !previewing && total === 0;
+    const payErr = chosen.length && !noCharge ? paymentError(pay, total) : null;
     const canFinish = chosen.length > 0 && !payErr && !previewing && !!preview && order.docstatus === 0;
     const invFormat = ctx.invoice_print_format || 'Standard';
 
@@ -97,15 +99,15 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
             const r = await deskApi.collectWatches(order.name, {
                 itemNames: chosen.map(i => i.name!),
                 discount,
-                mode: pay.kind === 'single' ? pay.mode : undefined,
-                payments: pay.kind === 'split' ? pay.parts.map(p => ({ mode_of_payment: p.mode, amount: p.amount || 0 })) : undefined,
-                credit: pay.kind === 'credit' ? { dueDate: pay.dueDate || addDays(toISODate(new Date()), 15) } : null,
+                mode: pay.kind === 'single' && !noCharge ? pay.mode : undefined,
+                payments: pay.kind === 'split' && !noCharge ? pay.parts.map(p => ({ mode_of_payment: p.mode, amount: p.amount || 0 })) : undefined,
+                credit: pay.kind === 'credit' && !noCharge ? { dueDate: pay.dueDate || addDays(toISODate(new Date()), 15) } : null,
                 note,
             });
             setDone({
                 ...r,
-                mode: pay.kind === 'single' ? pay.mode : pay.kind === 'split' ? 'split' : 'credit',
-                tendered: pay.kind === 'single' ? pay.tendered : null,
+                mode: noCharge ? 'none' : pay.kind === 'single' ? pay.mode : pay.kind === 'split' ? 'split' : 'credit',
+                tendered: pay.kind === 'single' && !noCharge ? pay.tendered : null,
                 labels: chosen.map(i => watchTitle(i, ctx.models)),
                 left: others.length + returning.length + ready.length - chosen.length,
             });
@@ -131,7 +133,7 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
                     <div className="flex items-center gap-4">
                         <span className="w-12 h-12 rounded-full bg-dw-success-soft text-dw-success flex items-center justify-center shrink-0"><Icon name="check" size={26} strokeWidth={2.4} /></span>
                         <div>
-                            <h1 className="m-0 text-[20px] font-extrabold">Invoice {done.invoice_name} · {formatCurrency(done.invoice_total)} {done.is_credit_sale ? 'on credit' : done.mode === 'split' ? 'paid, split' : `paid by ${done.mode}`}</h1>
+                            <h1 className="m-0 text-[20px] font-extrabold">Invoice {done.invoice_name} · {formatCurrency(done.invoice_total)} {done.is_credit_sale ? 'on credit' : done.mode === 'none' ? 'no charge' : done.mode === 'split' ? 'paid, split' : `paid by ${done.mode}`}</h1>
                             <p className="m-0 text-[13px] font-semibold text-dw-caption">
                                 {done.labels.join(', ')} collected · {done.order_closed ? 'order closed' : `order ${order.name} stays open for the other ${done.left === 1 ? 'watch' : `${done.left} watches`}`}
                             </p>
@@ -239,7 +241,7 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
 
                         <Card>
                             <h2 className="m-0 mb-3 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">3 · Payment</h2>
-                            {modes.length === 0 ? <p className="m-0 text-[13px] text-dw-danger font-semibold">No payment modes are set up. Add them under Settings.</p> : (
+                            {noCharge ? <p className="m-0 text-[14px] font-semibold text-dw-success">Nothing to pay. The invoice is made for {formatCurrency(0)} and marked paid.</p> : modes.length === 0 ? <p className="m-0 text-[13px] text-dw-danger font-semibold">No payment modes are set up. Add them under Settings.</p> : (
                                 <PaymentModes modes={modes} total={total} value={pay} onChange={setPay} creditPaidNow={false} />
                             )}
                         </Card>
@@ -257,7 +259,7 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
                             <div className="flex gap-2">
                                 <Button onClick={() => goBack(buildPath('orders', order.name))}>Cancel</Button>
                                 <Button variant="success" size="lg" busy={busy} disabled={!canFinish} onClick={() => void finish()}>
-                                    {pay.kind === 'credit' ? 'Hand over on credit' : `Take ${formatCurrency(total)} & hand over`}
+                                    {noCharge ? 'Hand over, no charge' : pay.kind === 'credit' ? 'Hand over on credit' : `Take ${formatCurrency(total)} & hand over`}
                                 </Button>
                             </div>
                         </div>

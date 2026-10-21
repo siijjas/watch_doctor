@@ -1672,7 +1672,18 @@ def finalize_invoice(
 	
 	# Record payment: either a credit sale (bill now, collect later) or an
 	# immediate payment (single mode or split across multiple modes).
-	if is_credit_sale:
+	# A no-charge job (warranty recheck, or discounted to nothing) has no payment
+	# to record, so it becomes a plain invoice with nothing outstanding.
+	precision = _get_currency_precision(invoice.company)
+	if flt(invoice.grand_total, precision) == 0:
+		is_credit_sale = 0
+		invoice.is_pos = 0
+		invoice.dw_is_credit_sale = 0
+		invoice.payments = []
+		invoice.due_date = invoice.posting_date
+		invoice.save(ignore_permissions=True)
+		invoice.reload()
+	elif is_credit_sale:
 		invoice.is_pos = 0
 		invoice.dw_is_credit_sale = 1
 		invoice.payments = []
@@ -1683,7 +1694,6 @@ def finalize_invoice(
 		invoice.is_pos = 1
 		invoice.dw_is_credit_sale = 0
 		payments = _parse_pos_payments(payments_json, payment_mode)
-		precision = _get_currency_precision(invoice.company)
 		_set_invoice_payments(invoice, payments, precision)
 		invoice.save(ignore_permissions=True)
 		invoice.reload()
