@@ -1032,7 +1032,7 @@ class DWRepairOrder(Document):
 # Quotation Generation Methods
 
 @frappe.whitelist()
-def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices=None, item_names=None, valid_till=None, note=None):
+def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices=None, item_names=None, valid_till=None, note=None, discount=0):
 	"""
 	Create a quotation from a repair order.
 	
@@ -1043,6 +1043,7 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 		item_names: JSON list of DW Repair Item names to include; takes precedence over watch_indices
 		valid_till: Expiry date; defaults to 30 days from today
 		note: Terms printed on the quotation (e.g. "price may change if more damage is found")
+		discount: Amount off the grand total, so a bill sent before collection matches the invoice
 
 	Returns:
 		Name of the created quotation
@@ -1167,6 +1168,11 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	quotation.valid_till = getdate(valid_till) if valid_till else add_days(frappe.utils.nowdate(), 30)
 	if note and str(note).strip():
 		quotation.terms = frappe.utils.escape_html(str(note).strip())
+	if flt(discount) < 0:
+		frappe.throw(_("The discount cannot be negative."))
+	if flt(discount) > 0:
+		quotation.apply_discount_on = "Grand Total"
+		quotation.discount_amount = flt(discount)
 
 	# Track which repair items this quotation covers so partial-delivery invoicing works correctly.
 	_q_covered = [i.name for i in selected_items]
@@ -1178,6 +1184,8 @@ def create_quotation(repair_order_name, quotation_type="Estimate", watch_indices
 	# ERPNext's insert() fetches price_list_rate from the selling price list
 	# and overwrites our rate=0 on internal part lines. Force them back to zero.
 	_zero_internal_lines(quotation)
+	if flt(quotation.grand_total) < 0:
+		frappe.throw(_("The discount is more than the total."))
 
 	# Submit the quotation
 	quotation.submit()

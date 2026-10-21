@@ -539,12 +539,13 @@ def set_part_line(item_name: str, part_row: str, rate: float | None = None, quan
 
 
 @frappe.whitelist()
-def create_estimate(name: str, item_names: str | list, quotation_type: str = "Estimate", valid_till: str = "", note: str = ""):
+def create_estimate(name: str, item_names: str | list, quotation_type: str = "Estimate", valid_till: str = "", note: str = "", discount: float = 0):
 	"""Make the quotation for the chosen watches (spec B5.2, D5).
 
 	The watch moves to "Waiting customer" when the desk sends it or says it
 	was told another way, not here, so an estimate made but never sent still
-	shows as "Estimate to send".
+	shows as "Estimate to send". A "Final" one for ready watches, with the
+	discount, is the bill sent ahead of collection.
 	"""
 	require_roles(ROLE_EXECUTIVE, ROLE_DATA_ENTRY)
 	from watch_doctor.repair_management.doctype.dw_repair_order.dw_repair_order import create_quotation
@@ -561,7 +562,7 @@ def create_estimate(name: str, item_names: str | list, quotation_type: str = "Es
 	if quotation_type not in ("Estimate", "Final"):
 		frappe.throw(_("Unknown estimate type"))
 
-	quotation = create_quotation(order.name, quotation_type, item_names=names, valid_till=valid_till or None, note=note)
+	quotation = create_quotation(order.name, quotation_type, item_names=names, valid_till=valid_till or None, note=note, discount=flt(discount))
 	total = frappe.db.get_value("Quotation", quotation, "grand_total")
 	labels = ", ".join(_watch_label(i) for i in order.items if i.name in names)
 	order.add_comment("Info", _("Estimate {0} made for {1}: {2}").format(

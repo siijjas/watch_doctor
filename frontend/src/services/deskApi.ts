@@ -159,9 +159,9 @@ export const setPartLine = (itemName: string, partRow: string, change: { rate?: 
         quantity: change.quantity,
     });
 
-export const createEstimate = (name: string, itemNames: string[], type: 'Estimate' | 'Final', validTill: string, note: string) =>
+export const createEstimate = (name: string, itemNames: string[], type: 'Estimate' | 'Final', validTill: string, note: string, discount = 0) =>
     call<{ quotation: string; grand_total: number }>('create_estimate', {
-        name, item_names: JSON.stringify(itemNames), quotation_type: type, valid_till: validTill, note,
+        name, item_names: JSON.stringify(itemNames), quotation_type: type, valid_till: validTill, note, discount,
     });
 
 export interface CollectInput {

@@ -19,6 +19,16 @@ import { useOrder, watchPrice, watchStage, watchTitle } from './order/useOrder';
 
 const NOTES = ['6 months warranty', '1 year warranty', 'No water-resistance guarantee', 'Warranty recheck, no charge'];
 
+const canShareFiles = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function';
+
+/** Hands the PDF to the phone's share sheet (WhatsApp etc.); elsewhere opens it to download. */
+async function sharePdf(url: string, fileName: string, text: string) {
+    const blob = await fetch(url, { credentials: 'include' }).then(r => { if (!r.ok) throw new Error('The PDF could not be made.'); return r.blob(); });
+    const file = new File([blob], fileName, { type: 'application/pdf' });
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], text });
+    else window.open(url, '_blank');
+}
+
 const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ name, preselect }) => {
     const { formatCurrency } = useAppConfig();
     const toast = useToast();
@@ -36,6 +46,8 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState<(deskApi.CollectResult & { mode: string; tendered: number | null; labels: string[]; left: number }) | null>(null);
     const [closeOpen, setCloseOpen] = useState(false);
+    const [bill, setBill] = useState<{ quotation: string; total: number; key: string } | null>(null);
+    const [billing, setBilling] = useState(false);
     const req = useRef(0);
     const printWin = useRef<Window | null>(null);
 
@@ -89,6 +101,33 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
     const payErr = chosen.length && !noCharge ? paymentError(pay, total) : null;
     const canFinish = chosen.length > 0 && !payErr && !previewing && !!preview && order.docstatus === 0;
     const invFormat = ctx.invoice_print_format || 'Standard';
+
+    const qFormat = ctx.quotation_print_format || 'Standard';
+    // A bill is only offered while the watches, discount and note it was made for are unchanged.
+    const billKey = `${chosen.map(i => i.name).join(',')}|${discount}|${note}`;
+    const currentBill = bill && bill.key === billKey ? bill : null;
+
+    const makeBill = async () => {
+        setBilling(true);
+        try {
+            const r = await deskApi.createEstimate(order.name, chosen.map(i => i.name!), 'Final', '', note, discount);
+            setBill({ quotation: r.quotation, total: r.grand_total, key: billKey });
+            toast.success('Bill made');
+            void refresh();
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'The bill was not made.');
+        } finally {
+            setBilling(false);
+        }
+    };
+
+    const shareBill = async (q: string) => {
+        try {
+            await sharePdf(deskApi.printUrl('Quotation', q, qFormat, true), `${q}.pdf`, `${custName}, your watch is ready. Bill ${q}.`);
+        } catch (e) {
+            if (!(e instanceof DOMException && e.name === 'AbortError')) toast.error(e instanceof Error ? e.message : 'Not shared.');
+        }
+    };
 
     const toggle = (item: RepairItem) => setPicked(cur => (cur!.includes(item.name!) ? cur!.filter(n => n !== item.name) : [...cur!, item.name!]));
 
@@ -238,6 +277,23 @@ const CollectScreen: React.FC<{ name: string; preselect?: string | null }> = ({ 
                                 <TextInput className="mt-2" value={note} onChange={e => setNote(e.target.value)} placeholder="Or type a note, e.g. strap replaced at customer's request" maxLength={240} />
                             </div>
                         </Card>
+
+                        {chosen.length > 0 && (
+                            <Card>
+                                <h2 className="m-0 mb-1 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">Bill before collection <span className="normal-case tracking-normal font-semibold">· optional</span></h2>
+                                <p className="m-0 mb-3 text-[13px] text-dw-body">Not collecting yet? Make a bill with the amount, discount and note above, and send it to the customer before they come. Nothing is charged.</p>
+                                {currentBill ? (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="flex-1 min-w-[160px] text-[14px] font-bold">{currentBill.quotation} · {formatCurrency(currentBill.total)}</span>
+                                        <a className="inline-flex items-center gap-2 h-9 px-3 rounded-[10px] border border-dw-border-strong text-[13px] font-bold text-dw-text no-underline hover:bg-dw-ground" href={deskApi.printUrl('Quotation', currentBill.quotation, qFormat)} target="_blank" rel="noreferrer"><Icon name="print" size={16} />Print</a>
+                                        <a className="inline-flex items-center gap-2 h-9 px-3 rounded-[10px] border border-dw-border-strong text-[13px] font-bold text-dw-text no-underline hover:bg-dw-ground" href={deskApi.printUrl('Quotation', currentBill.quotation, qFormat, true)} target="_blank" rel="noreferrer"><Icon name="download" size={16} />PDF</a>
+                                        {canShareFiles && <Button size="sm" icon="whatsapp" onClick={() => void shareBill(currentBill.quotation)}>Share</Button>}
+                                    </div>
+                                ) : (
+                                    <Button icon="print" busy={billing} disabled={previewing || !preview || order.docstatus !== 0} onClick={() => void makeBill()}>Make bill · {formatCurrency(total)}</Button>
+                                )}
+                            </Card>
+                        )}
 
                         <Card>
                             <h2 className="m-0 mb-3 text-[12px] font-extrabold tracking-[.06em] uppercase text-dw-caption">3 · Payment</h2>
