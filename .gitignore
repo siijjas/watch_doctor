@@ -86,7 +86,9 @@ npm-debug.log*
 # ====================
 # Test & Debug Files
 # ====================
-test_*.py
+# One-off scripts live in dev_scripts/; real tests (watch_doctor/**/test_*.py) are tracked.
+/test_*.py
+dev_scripts/
 sql_test.py
 debug_*.py
 check_*.py
