@@ -27,6 +27,7 @@ import { InvoiceSheet, OrderDetailsSheet, WatchDetailsSheet } from './order/Edit
 const PRINTS = [
     { id: 'label', label: 'Bag label', hint: 'For the Zebra label printer', format: '', size: { w: 400, h: 320 }, auto: true },
     { id: 'receipt', label: 'Drop-off receipt', hint: 'Customer copy', format: 'DW RO Repair Order' },
+    { id: 'jobcard', label: 'Job card', hint: 'Workshop copy for the technician', format: 'DW RO Job Card' },
     { id: 'condition', label: 'Condition report with photos', hint: 'What the watch looked like on arrival', format: 'DW Product Visible Condition Report' },
 ] as const;
 
